@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check_commit_msg:
+    uses: yjoer/camp/.github/workflows/check_commit_msg.yml@6f4a9779c3fe7801a057263c4c81e200357516e8
+
+  check_rs:
+    uses: yjoer/camp/.github/workflows/check_rs.yml@6f4a9779c3fe7801a057263c4c81e200357516e8
+
+  check_misc:
+    uses: yjoer/camp/.github/workflows/check_misc.yml@6f4a9779c3fe7801a057263c4c81e200357516e8

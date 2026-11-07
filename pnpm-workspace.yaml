@@ -1,0 +1,6 @@
+minimumReleaseAge: 4320
+nodeLinker: hoisted
+autoInstallPeers: false
+
+minimumReleaseAgeExclude:
+  - '@camp-org/config@0.3.0'

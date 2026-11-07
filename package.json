@@ -1,0 +1,8 @@
+{
+	"name": "outpost",
+	"type": "module",
+	"devDependencies": {
+		"@camp-org/config": "0.3.0"
+	},
+	"packageManager": "pnpm@12.18.0"
+}
