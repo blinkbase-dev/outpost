@@ -1,0 +1,18 @@
+[tool.tombi.files]
+include = ["**/*.toml", "Cargo.lock"]
+
+[[tool.tombi.overrides]]
+[tool.tombi.overrides.files]
+include = ["**/*.toml"]
+
+[tool.tombi.overrides.format.rules]
+indent-style = "tab"
+
+[[tool.tombi.overrides]]
+[tool.tombi.overrides.files]
+include = ["Cargo.lock"]
+
+[tool.tombi.overrides.format]
+[tool.tombi.overrides.format.rules]
+indent-style = "space"
+indent-width = 1
