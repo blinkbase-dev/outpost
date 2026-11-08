@@ -18,3 +18,52 @@ jobs:
 
   check_misc:
     uses: yjoer/camp/.github/workflows/check_misc.yml@6f4a9779c3fe7801a057263c4c81e200357516e8
+
+  sonarqube:
+    uses: yjoer/camp/.github/workflows/sonarqube.yml@6f4a9779c3fe7801a057263c4c81e200357516e8
+    secrets:
+      sonar_token: ${{ secrets.sonar_token }}
+
+  cargo_clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: setup_rust
+        run: rustup toolchain install && rustup component add clippy
+      - name: setup_kache
+        uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
+        with:
+          cache-dir: ${{ runner.temp }}/kache
+          pr-comment: false
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  cargo_test:
+    name: cargo_test_${{ matrix.os }}
+    runs-on: ${{ matrix.os }}-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos, windows]
+    steps:
+      - name: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: setup_rust
+        run: rustup toolchain install
+      - name: setup_nextest
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: nextest
+      - name: setup_kache
+        uses: kunobi-ninja/kache-action@ad7317540dcdd71c904f7a60a87b620a0c0e67ed # v1
+        with:
+          cache-dir: ${{ runner.temp }}/kache
+          pr-comment: false
+      - name: test
+        run: cargo nextest run --workspace --locked --profile ci
+
+  cargo_coverage:
+    uses: ./.github/workflows/coverage.yml
+    secrets:
+      codecov_token: ${{ secrets.codecov_token }}

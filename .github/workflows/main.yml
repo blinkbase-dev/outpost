@@ -1,0 +1,17 @@
+name: main
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  sonarqube:
+    uses: yjoer/camp/.github/workflows/sonarqube.yml@6f4a9779c3fe7801a057263c4c81e200357516e8
+    secrets:
+      sonar_token: ${{ secrets.sonar_token }}
+
+  cargo_coverage:
+    uses: ./.github/workflows/coverage.yml
+    secrets:
+      codecov_token: ${{ secrets.codecov_token }}
