@@ -9,3 +9,18 @@ path = "main.rs"
 
 [dependencies]
 clap.workspace = true
+flate2.workspace = true
+liblzma.workspace = true
+rayon.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tar.workspace = true
+tokio.workspace = true
+toml.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock.workspace = true
