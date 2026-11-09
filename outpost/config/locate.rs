@@ -207,7 +207,6 @@ mod tests {
 			home_config_dir: Some(home_config_dir),
 			config_dir: Some(config_dir.clone()),
 			envs: Some("dev".to_owned()),
-			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
