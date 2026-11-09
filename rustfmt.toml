@@ -3,6 +3,7 @@ format_macro_matchers = true
 format_strings = false
 hard_tabs = true
 imports_layout = "HorizontalVertical"
+max_width = 160
 imports_granularity = "Module"
 newline_style = "Unix"
 normalize_comments = true
