@@ -29,10 +29,8 @@ pub async fn download_parallel(http: Client, resolved: Vec<Resolved>, downloads_
 				resolved.full_name.replace(['.', '/', '-'], "_"),
 				regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_")
 			);
-			let path = downloads_dir.join(&name);
-			let part = downloads_dir.join(format!("{name}.part"));
 			let result = match semaphore.acquire_owned().await {
-				Ok(_permit) => download(&http, &resolved.url, &path, &part, resolved.size).await.map(|()| path),
+				Ok(_permit) => download(&http, &resolved.url, &downloads_dir, &name, resolved.size).await,
 				Err(error) => Err(error.into()),
 			};
 			(resolved, result)
@@ -58,9 +56,11 @@ pub async fn download_parallel(http: Client, resolved: Vec<Resolved>, downloads_
 	Ok((downloaded, failed))
 }
 
-async fn download(http: &Client, url: &str, path: &Path, part: &Path, size: u64) -> Result<(), Error> {
+async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -> Result<PathBuf, Error> {
+	let path = dir.join(name);
+	let part = dir.join(format!("{name}.part"));
 	let mut response = http.get(url).send().await?.error_for_status()?;
-	let mut file = tokio::fs::File::create(part).await?;
+	let mut file = tokio::fs::File::create(&part).await?;
 	let mut written = 0u64;
 	while let Some(chunk) = response.chunk().await? {
 		written += chunk.len() as u64;
@@ -71,8 +71,8 @@ async fn download(http: &Client, url: &str, path: &Path, part: &Path, size: u64)
 	if written != size {
 		return Err(format!("size mismatch for {}: expected {size}, got {written}", path.display()).into());
 	}
-	tokio::fs::rename(part, path).await?;
-	Ok(())
+	tokio::fs::rename(&part, &path).await?;
+	Ok(path)
 }
 
 pub fn extract_all(downloaded: Vec<Downloaded>, tools_dir: PathBuf) -> Result<usize, Error> {
@@ -151,4 +151,198 @@ pub struct Downloaded {
 	tag_name: String,
 	path: PathBuf,
 	format: ArchiveFormat,
+}
+
+#[cfg(test)]
+mod download_tests {
+	use wiremock::matchers::{method, path};
+	use wiremock::{Mock, MockServer, ResponseTemplate};
+
+	use super::*;
+
+	fn http() -> Client {
+		Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build().unwrap()
+	}
+
+	async fn serve(body: Vec<u8>, status: u16) -> MockServer {
+		let server = MockServer::start().await;
+		Mock::given(method("GET"))
+			.and(path("/asset.tar.gz"))
+			.respond_with(ResponseTemplate::new(status).set_body_bytes(body))
+			.mount(&server)
+			.await;
+		server
+	}
+
+	#[tokio::test]
+	async fn downloads_and_renames_part_file() {
+		let server = serve(b"payload".to_vec(), 200).await;
+		let dir = tempfile::tempdir().unwrap();
+		let path = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 7)
+			.await
+			.unwrap();
+		assert_eq!(std::fs::read(&path).unwrap(), b"payload");
+		assert!(!dir.path().join("asset.tar.gz.part").exists());
+	}
+
+	#[tokio::test]
+	async fn streams_large_body() {
+		let body = vec![b'x'; 1024 * 1024];
+		let size = body.len() as u64;
+		let server = serve(body, 200).await;
+		let dir = tempfile::tempdir().unwrap();
+		let path = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", size)
+			.await
+			.unwrap();
+		assert_eq!(std::fs::read(&path).unwrap().len() as u64, size);
+	}
+
+	#[tokio::test]
+	async fn rejects_size_mismatch() {
+		let server = serve(b"payload".to_vec(), 200).await;
+		let dir = tempfile::tempdir().unwrap();
+		let error = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 1)
+			.await
+			.unwrap_err();
+		assert!(error.to_string().contains("size mismatch"), "{error}");
+		assert!(!dir.path().join("asset.tar.gz").exists());
+		assert!(dir.path().join("asset.tar.gz.part").exists());
+	}
+
+	#[tokio::test]
+	async fn propagates_http_status() {
+		let server = serve(Vec::new(), 404).await;
+		let dir = tempfile::tempdir().unwrap();
+		let error = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 7)
+			.await
+			.is_err();
+		assert!(error);
+		assert!(!dir.path().join("asset.tar.gz").exists());
+		assert!(!dir.path().join("asset.tar.gz.part").exists());
+	}
+}
+
+#[cfg(test)]
+mod download_parallel_tests {
+	use std::sync::Mutex;
+	use std::time::{Duration, Instant};
+
+	use wiremock::matchers::{method, path};
+	use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+	use super::*;
+
+	fn http() -> Client {
+		Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build().unwrap()
+	}
+
+	struct Recorder {
+		started: Arc<Mutex<Vec<Instant>>>,
+		size: u64,
+	}
+
+	impl Respond for Recorder {
+		fn respond(&self, _request: &Request) -> ResponseTemplate {
+			self.started.lock().unwrap().push(Instant::now());
+			ResponseTemplate::new(200)
+				.set_body_bytes(vec![0u8; self.size as usize])
+				.set_delay(Duration::from_millis(200))
+		}
+	}
+
+	#[tokio::test]
+	async fn limits_downloads_to_eight_in_flight() {
+		let started = Arc::new(Mutex::new(Vec::new()));
+		let server = MockServer::start().await;
+		Mock::given(method("GET"))
+			.respond_with(Recorder {
+				started: Arc::clone(&started),
+				size: 4,
+			})
+			.mount(&server)
+			.await;
+		let dir = tempfile::tempdir().unwrap();
+		let resolved = (0..16)
+			.map(|index| Resolved {
+				full_name: "owner/repo".to_owned(),
+				tag_name: format!("v1.0.{index}"),
+				url: format!("{}/asset{index}", server.uri()),
+				size: 4,
+				format: ArchiveFormat::TarGz,
+			})
+			.collect();
+		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
+		assert_eq!(downloaded.len(), 16);
+		assert_eq!(failed, 0);
+		let started = started.lock().unwrap();
+		assert_eq!(started.len(), 16);
+		assert!(started[7] - started[0] < Duration::from_millis(100));
+		assert!(started[8] - started[0] >= Duration::from_millis(150));
+	}
+
+	#[tokio::test]
+	async fn downloads_all_items() {
+		let server = MockServer::start().await;
+		for index in 0..10 {
+			Mock::given(method("GET"))
+				.and(path(format!("/asset{index}")))
+				.respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 4]))
+				.mount(&server)
+				.await;
+		}
+		let dir = tempfile::tempdir().unwrap();
+		let resolved = (0..10)
+			.map(|index| Resolved {
+				full_name: "owner/repo".to_owned(),
+				tag_name: format!("1.0.{index}"),
+				url: format!("{}/asset{index}", server.uri()),
+				size: 4,
+				format: ArchiveFormat::TarGz,
+			})
+			.collect();
+		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
+		assert_eq!(downloaded.len(), 10);
+		assert_eq!(failed, 0);
+		for item in &downloaded {
+			assert!(item.path.exists(), "{}", item.path.display());
+		}
+	}
+
+	#[tokio::test]
+	async fn continues_after_failed_item() {
+		let server = MockServer::start().await;
+		Mock::given(method("GET"))
+			.and(path("/good"))
+			.respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 4]))
+			.mount(&server)
+			.await;
+		Mock::given(method("GET"))
+			.and(path("/missing"))
+			.respond_with(ResponseTemplate::new(404))
+			.mount(&server)
+			.await;
+		let dir = tempfile::tempdir().unwrap();
+		let resolved = vec![
+			Resolved {
+				full_name: "owner/repo".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				url: format!("{}/good", server.uri()),
+				size: 4,
+				format: ArchiveFormat::TarGz,
+			},
+			Resolved {
+				full_name: "owner/repo".to_owned(),
+				tag_name: "v1.1.0".to_owned(),
+				url: format!("{}/missing", server.uri()),
+				size: 4,
+				format: ArchiveFormat::TarGz,
+			},
+		];
+		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
+		assert_eq!(failed, 1);
+		assert_eq!(downloaded.len(), 1);
+		assert!(downloaded[0].path.exists());
+		assert!(!dir.path().join("owner_repo_1.1.0").exists());
+		assert!(!dir.path().join("owner_repo_1.1.0.part").exists());
+	}
 }
