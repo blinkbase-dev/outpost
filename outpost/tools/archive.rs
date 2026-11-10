@@ -154,7 +154,7 @@ pub struct Downloaded {
 }
 
 #[cfg(test)]
-mod tests {
+mod download_tests {
 	use wiremock::matchers::{method, path};
 	use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -219,5 +219,130 @@ mod tests {
 		assert!(error);
 		assert!(!dir.path().join("asset.tar.gz").exists());
 		assert!(!dir.path().join("asset.tar.gz.part").exists());
+	}
+}
+
+#[cfg(test)]
+mod download_parallel_tests {
+	use std::sync::Mutex;
+	use std::time::{Duration, Instant};
+
+	use wiremock::matchers::{method, path};
+	use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+	use super::*;
+
+	fn http() -> Client {
+		Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build().unwrap()
+	}
+
+	struct Recorder {
+		started: Arc<Mutex<Vec<Instant>>>,
+		size: u64,
+	}
+
+	impl Respond for Recorder {
+		fn respond(&self, _request: &Request) -> ResponseTemplate {
+			self.started.lock().unwrap().push(Instant::now());
+			ResponseTemplate::new(200)
+				.set_body_bytes(vec![0u8; self.size as usize])
+				.set_delay(Duration::from_millis(200))
+		}
+	}
+
+	#[tokio::test]
+	async fn limits_downloads_to_eight_in_flight() {
+		let started = Arc::new(Mutex::new(Vec::new()));
+		let server = MockServer::start().await;
+		Mock::given(method("GET"))
+			.respond_with(Recorder {
+				started: Arc::clone(&started),
+				size: 4,
+			})
+			.mount(&server)
+			.await;
+		let dir = tempfile::tempdir().unwrap();
+		let resolved = (0..16)
+			.map(|index| Resolved {
+				full_name: "owner/repo".to_owned(),
+				tag_name: format!("v1.0.{index}"),
+				url: format!("{}/asset{index}", server.uri()),
+				size: 4,
+				format: ArchiveFormat::TarGz,
+			})
+			.collect();
+		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
+		assert_eq!(downloaded.len(), 16);
+		assert_eq!(failed, 0);
+		let started = started.lock().unwrap();
+		assert_eq!(started.len(), 16);
+		assert!(started[7] - started[0] < Duration::from_millis(100));
+		assert!(started[8] - started[0] >= Duration::from_millis(150));
+	}
+
+	#[tokio::test]
+	async fn downloads_all_items() {
+		let server = MockServer::start().await;
+		for index in 0..10 {
+			Mock::given(method("GET"))
+				.and(path(format!("/asset{index}")))
+				.respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 4]))
+				.mount(&server)
+				.await;
+		}
+		let dir = tempfile::tempdir().unwrap();
+		let resolved = (0..10)
+			.map(|index| Resolved {
+				full_name: "owner/repo".to_owned(),
+				tag_name: format!("1.0.{index}"),
+				url: format!("{}/asset{index}", server.uri()),
+				size: 4,
+				format: ArchiveFormat::TarGz,
+			})
+			.collect();
+		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
+		assert_eq!(downloaded.len(), 10);
+		assert_eq!(failed, 0);
+		for item in &downloaded {
+			assert!(item.path.exists(), "{}", item.path.display());
+		}
+	}
+
+	#[tokio::test]
+	async fn continues_after_failed_item() {
+		let server = MockServer::start().await;
+		Mock::given(method("GET"))
+			.and(path("/good"))
+			.respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 4]))
+			.mount(&server)
+			.await;
+		Mock::given(method("GET"))
+			.and(path("/missing"))
+			.respond_with(ResponseTemplate::new(404))
+			.mount(&server)
+			.await;
+		let dir = tempfile::tempdir().unwrap();
+		let resolved = vec![
+			Resolved {
+				full_name: "owner/repo".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				url: format!("{}/good", server.uri()),
+				size: 4,
+				format: ArchiveFormat::TarGz,
+			},
+			Resolved {
+				full_name: "owner/repo".to_owned(),
+				tag_name: "v1.1.0".to_owned(),
+				url: format!("{}/missing", server.uri()),
+				size: 4,
+				format: ArchiveFormat::TarGz,
+			},
+		];
+		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
+		assert_eq!(failed, 1);
+		assert_eq!(downloaded.len(), 1);
+		assert!(downloaded[0].path.exists());
+		assert!(!dir.path().join("owner_repo_1.1.0").exists());
+		assert!(!dir.path().join("owner_repo_1.1.0.part").exists());
 	}
 }
