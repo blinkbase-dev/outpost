@@ -2,6 +2,7 @@ use std::fmt;
 
 use regex::regex;
 
+use super::version::{Version, split_lane};
 use crate::config::loader::{Config, ToolOptions};
 
 pub fn requests(config: &Config) -> Result<Vec<ToolRequest>, ToolRequestError> {
@@ -9,46 +10,31 @@ pub fn requests(config: &Config) -> Result<Vec<ToolRequest>, ToolRequestError> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ToolRequest {
-	pub backend: Backend,
-	pub full_name: String,
-	pub version: Version,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Backend {
-	Github,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Version {
-	Latest,
-	Exact(String),
+pub enum ToolRequest {
+	Github { full_name: String, lane: String, version: Version },
 }
 
 impl ToolRequest {
 	fn parse(key: &str, options: &ToolOptions) -> Result<Self, ToolRequestError> {
 		let (backend, full_name) = key.split_once(':').ok_or_else(|| ToolRequestError::UnsupportedBackend(key.to_owned()))?;
-		let backend = match backend {
-			"github" => Backend::Github,
-			_ => return Err(ToolRequestError::UnsupportedBackend(key.to_owned())),
-		};
-		if regex!(r"^(?:\.{1,2})?$|[^a-zA-Z0-9_./-]").is_match(full_name) {
-			return Err(ToolRequestError::InvalidFullName(key.to_owned()));
+		match backend {
+			"github" => {
+				if regex!(r"^(?:\.{1,2})?$|[^a-zA-Z0-9_./-]").is_match(full_name) {
+					return Err(ToolRequestError::InvalidFullName(key.to_owned()));
+				}
+				let version = options.version().trim();
+				if version.is_empty() {
+					return Err(ToolRequestError::EmptyVersion(key.to_owned()));
+				}
+				let (lane, value) = split_lane(version);
+				Ok(Self::Github {
+					full_name: full_name.to_owned(),
+					lane: lane.to_owned(),
+					version: Version::parse(value),
+				})
+			}
+			_ => Err(ToolRequestError::UnsupportedBackend(key.to_owned())),
 		}
-		let version = options.version().trim();
-		if version.is_empty() {
-			return Err(ToolRequestError::EmptyVersion(key.to_owned()));
-		}
-		Ok(Self {
-			backend,
-			full_name: full_name.to_owned(),
-			version: if version == "latest" {
-				Version::Latest
-			} else {
-				Version::Exact(version.to_owned())
-			},
-		})
 	}
 }
 
@@ -87,9 +73,9 @@ mod tests {
 			"github:owner/repo" = "latest"
 			"#,
 		);
-		assert_eq!(requests(&config).unwrap(), vec![ToolRequest {
-			backend: Backend::Github,
+		assert_eq!(requests(&config).unwrap(), vec![ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
 			version: Version::Latest,
 		}]);
 	}
@@ -102,11 +88,40 @@ mod tests {
 			"github:owner/repo" = "0.26.0"
 			"#,
 		);
-		assert_eq!(requests(&config).unwrap(), vec![ToolRequest {
-			backend: Backend::Github,
+		assert_eq!(requests(&config).unwrap(), vec![ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
-			version: Version::Exact("0.26.0".to_owned()),
+			lane: String::new(),
+			version: Version::parse("0.26.0"),
 		}]);
+	}
+
+	#[test]
+	fn parses_lanes() {
+		let configs = [
+			r#"
+			[tools]
+			"github:owner/repo" = "cli/1.2.3"
+			"#,
+			r#"
+			[tools]
+			"github:owner/repo" = "tool-10"
+			"#,
+		];
+		let expected = [
+			ToolRequest::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: "cli/".to_owned(),
+				version: Version::Exact("1.2.3".to_owned()),
+			},
+			ToolRequest::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: "tool-".to_owned(),
+				version: Version::parse("10"),
+			},
+		];
+		for (toml, expected) in configs.into_iter().zip(expected) {
+			assert_eq!(requests(&config(toml)).unwrap(), vec![expected], "{toml}");
+		}
 	}
 
 	#[test]
@@ -117,9 +132,9 @@ mod tests {
 			"github:owner/repo.js" = "latest"
 			"#,
 		);
-		assert_eq!(requests(&config).unwrap(), vec![ToolRequest {
-			backend: Backend::Github,
+		assert_eq!(requests(&config).unwrap(), vec![ToolRequest::Github {
 			full_name: "owner/repo.js".to_owned(),
+			lane: String::new(),
 			version: Version::Latest,
 		}]);
 	}
@@ -132,10 +147,10 @@ mod tests {
 			"github:owner/repo" = { version = "0.26.0" }
 			"#,
 		);
-		assert_eq!(requests(&config).unwrap(), vec![ToolRequest {
-			backend: Backend::Github,
+		assert_eq!(requests(&config).unwrap(), vec![ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
-			version: Version::Exact("0.26.0".to_owned()),
+			lane: String::new(),
+			version: Version::parse("0.26.0"),
 		}]);
 	}
 
