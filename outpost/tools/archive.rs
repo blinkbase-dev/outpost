@@ -346,3 +346,99 @@ mod download_parallel_tests {
 		assert!(!dir.path().join("owner_repo_1.1.0.part").exists());
 	}
 }
+
+#[cfg(test)]
+mod extract_tests {
+	use std::io::{Cursor, Write};
+
+	use flate2::Compression;
+	use flate2::write::GzEncoder;
+	use liblzma::write::XzEncoder;
+	use tar::{Builder, Header};
+	use zip::ZipWriter;
+	use zip::write::SimpleFileOptions;
+
+	use super::*;
+
+	fn tar<W: Write>(writer: W, files: &[(&str, &[u8])]) -> W {
+		let mut builder = Builder::new(writer);
+		for (path, data) in files {
+			let mut header = Header::new_gnu();
+			header.set_size(data.len() as u64);
+			header.set_mode(0o644);
+			builder.append_data(&mut header, path, *data).unwrap();
+		}
+		builder.into_inner().unwrap()
+	}
+
+	fn tar_gz(files: &[(&str, &[u8])]) -> Vec<u8> {
+		tar(GzEncoder::new(Vec::new(), Compression::default()), files).finish().unwrap()
+	}
+
+	fn tar_xz(files: &[(&str, &[u8])]) -> Vec<u8> {
+		tar(XzEncoder::new(Vec::new(), 6), files).finish().unwrap()
+	}
+
+	fn zip_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {
+		let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+		for (path, data) in files {
+			writer.start_file(*path, SimpleFileOptions::default()).unwrap();
+			writer.write_all(data).unwrap();
+		}
+		writer.finish().unwrap().into_inner()
+	}
+
+	#[test]
+	fn extracts_tar_gz() {
+		let dir = tempfile::tempdir().unwrap();
+		let archive = dir.path().join("tool.tar.gz");
+		std::fs::write(&archive, tar_gz(&[("bin/tool", b"binary")])).unwrap();
+		let dest = dir.path().join("tools/owner_repo/1.0.0");
+		extract(&archive, &dest, &ArchiveFormat::TarGz).unwrap();
+		assert_eq!(std::fs::read(dest.join("bin/tool")).unwrap(), b"binary");
+		assert!(!dir.path().join("tools/owner_repo/1.0.0.tmp").exists());
+	}
+
+	#[test]
+	fn extracts_tar_xz() {
+		let dir = tempfile::tempdir().unwrap();
+		let archive = dir.path().join("tool.tar.xz");
+		std::fs::write(&archive, tar_xz(&[("bin/tool", b"binary")])).unwrap();
+		let dest = dir.path().join("tools/owner_repo/1.0.0");
+		extract(&archive, &dest, &ArchiveFormat::TarXz).unwrap();
+		assert_eq!(std::fs::read(dest.join("bin/tool")).unwrap(), b"binary");
+		assert!(!dir.path().join("tools/owner_repo/1.0.0.tmp").exists());
+	}
+
+	#[test]
+	fn extracts_zip() {
+		let dir = tempfile::tempdir().unwrap();
+		let archive = dir.path().join("tool.zip");
+		std::fs::write(&archive, zip_bytes(&[("tool.exe", b"binary")])).unwrap();
+		let dest = dir.path().join("tools/owner_repo/1.0.0");
+		extract(&archive, &dest, &ArchiveFormat::Zip).unwrap();
+		assert_eq!(std::fs::read(dest.join("tool.exe")).unwrap(), b"binary");
+		assert!(!dir.path().join("tools/owner_repo/1.0.0.tmp").exists());
+	}
+
+	#[test]
+	fn replaces_existing_destination() {
+		let dest = tempfile::tempdir().unwrap();
+		std::fs::write(dest.path().join("stale"), b"old").unwrap();
+		let archive = dest.path().join("tool.tar.gz");
+		std::fs::write(&archive, tar_gz(&[("fresh", b"new")])).unwrap();
+		extract(&archive, dest.path(), &ArchiveFormat::TarGz).unwrap();
+		assert!(!dest.path().join("stale").exists());
+		assert_eq!(std::fs::read(dest.path().join("fresh")).unwrap(), b"new");
+	}
+
+	#[test]
+	fn keeps_destination_on_corrupt_archive() {
+		let dest = tempfile::tempdir().unwrap();
+		std::fs::write(dest.path().join("keep"), b"old").unwrap();
+		let archive = dest.path().join("corrupt.tar.gz");
+		std::fs::write(&archive, b"not an archive").unwrap();
+		assert!(extract(&archive, dest.path(), &ArchiveFormat::TarGz).is_err());
+		assert_eq!(std::fs::read(dest.path().join("keep")).unwrap(), b"old");
+	}
+}
