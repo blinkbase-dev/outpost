@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rayon::prelude::*;
+use regex::regex;
 use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
@@ -9,7 +10,7 @@ use tokio::sync::Semaphore;
 use crate::backend::ArchiveFormat;
 use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate};
-use crate::tools::tool_request::{self, Backend, ToolRequest, Version};
+use crate::tools::tool_request::{self, ToolRequest};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -61,7 +62,9 @@ async fn resolve_parallel(http: Client, requests: Vec<ToolRequest>) -> Result<(V
 		match result {
 			Ok(item) => resolved.push(item),
 			Err(error) => {
-				eprintln!("{}: {error}", request.full_name);
+				match &request {
+					ToolRequest::Github { full_name, .. } => eprintln!("{full_name}: {error}"),
+				}
 				failed += 1;
 			}
 		}
@@ -70,16 +73,13 @@ async fn resolve_parallel(http: Client, requests: Vec<ToolRequest>) -> Result<(V
 }
 
 async fn resolve(http: Client, request: &ToolRequest) -> Result<Resolved, Error> {
-	match request.backend {
-		Backend::Github => {
+	match request {
+		ToolRequest::Github { full_name, lane, version } => {
 			let backend = GithubBackend::new(http, GithubOptions::from_process());
-			let release = match &request.version {
-				Version::Latest => backend.latest_release(&request.full_name).await?,
-				Version::Exact(version) => backend.release_by_tag(&request.full_name, version).await?,
-			};
-			let (url, size, format) = backend.select_asset(&request.full_name, &release)?;
+			let release = backend.select_release(full_name, lane, version).await?;
+			let (url, size, format) = backend.select_asset(full_name, &release)?;
 			Ok(Resolved {
-				full_name: request.full_name.clone(),
+				full_name: full_name.clone(),
 				tag_name: release.tag_name,
 				url,
 				size,
@@ -97,7 +97,16 @@ async fn download_parallel(http: Client, resolved: Vec<Resolved>, downloads_dir:
 		let downloads_dir = downloads_dir.clone();
 		let http = http.clone();
 		handles.push(tokio::spawn(async move {
-			let name = format!("{}_{}", resolved.full_name.replace(['/', '-'], "_"), resolved.tag_name.replace('/', "_"));
+			let tag = resolved
+				.tag_name
+				.strip_prefix('v')
+				.filter(|rest| !rest.is_empty())
+				.unwrap_or(&resolved.tag_name);
+			let name = format!(
+				"{}_{}",
+				resolved.full_name.replace(['.', '/', '-'], "_"),
+				regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_")
+			);
 			let path = downloads_dir.join(&name);
 			let part = downloads_dir.join(format!("{name}.part"));
 			let result = match semaphore.acquire_owned().await {
@@ -150,9 +159,10 @@ fn extract_all(downloaded: Vec<Downloaded>, tools_dir: PathBuf) -> Result<usize,
 		downloaded
 			.into_par_iter()
 			.map(|item| {
+				let tag = item.tag_name.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(&item.tag_name);
 				let dir = tools_dir
-					.join(item.full_name.replace(['/', '-'], "_"))
-					.join(item.tag_name.replace(['/', '\\'], "_"));
+					.join(item.full_name.replace(['.', '/', '-'], "_"))
+					.join(regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_").into_owned());
 				let result = extract(&item.path, &dir, &item.format).map(|()| dir);
 				(item, result)
 			})
