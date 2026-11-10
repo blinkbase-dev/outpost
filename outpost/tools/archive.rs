@@ -1,0 +1,154 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use rayon::prelude::*;
+use regex::regex;
+use reqwest::Client;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Semaphore;
+
+use crate::backend::ArchiveFormat;
+
+type Error = Box<dyn std::error::Error + Send + Sync>;
+
+pub async fn download_parallel(http: Client, resolved: Vec<Resolved>, downloads_dir: PathBuf) -> Result<(Vec<Downloaded>, usize), Error> {
+	let semaphore = Arc::new(Semaphore::new(8));
+	let mut handles = Vec::with_capacity(resolved.len());
+	for resolved in resolved {
+		let semaphore = Arc::clone(&semaphore);
+		let downloads_dir = downloads_dir.clone();
+		let http = http.clone();
+		handles.push(tokio::spawn(async move {
+			let tag = resolved
+				.tag_name
+				.strip_prefix('v')
+				.filter(|rest| !rest.is_empty())
+				.unwrap_or(&resolved.tag_name);
+			let name = format!(
+				"{}_{}",
+				resolved.full_name.replace(['.', '/', '-'], "_"),
+				regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_")
+			);
+			let path = downloads_dir.join(&name);
+			let part = downloads_dir.join(format!("{name}.part"));
+			let result = match semaphore.acquire_owned().await {
+				Ok(_permit) => download(&http, &resolved.url, &path, &part, resolved.size).await.map(|()| path),
+				Err(error) => Err(error.into()),
+			};
+			(resolved, result)
+		}));
+	}
+	let mut downloaded = Vec::with_capacity(handles.len());
+	let mut failed = 0;
+	for handle in handles {
+		let (resolved, result) = handle.await?;
+		match result {
+			Ok(path) => downloaded.push(Downloaded {
+				full_name: resolved.full_name,
+				tag_name: resolved.tag_name,
+				path,
+				format: resolved.format,
+			}),
+			Err(error) => {
+				eprintln!("{}: {error}", resolved.full_name);
+				failed += 1;
+			}
+		}
+	}
+	Ok((downloaded, failed))
+}
+
+async fn download(http: &Client, url: &str, path: &Path, part: &Path, size: u64) -> Result<(), Error> {
+	let mut response = http.get(url).send().await?.error_for_status()?;
+	let mut file = tokio::fs::File::create(part).await?;
+	let mut written = 0u64;
+	while let Some(chunk) = response.chunk().await? {
+		written += chunk.len() as u64;
+		file.write_all(&chunk).await?;
+	}
+	file.flush().await?;
+	drop(file);
+	if written != size {
+		return Err(format!("size mismatch for {}: expected {size}, got {written}", path.display()).into());
+	}
+	tokio::fs::rename(part, path).await?;
+	Ok(())
+}
+
+pub fn extract_all(downloaded: Vec<Downloaded>, tools_dir: PathBuf) -> Result<usize, Error> {
+	let pool = rayon::ThreadPoolBuilder::new().build()?;
+	let results: Vec<(Downloaded, Result<PathBuf, Error>)> = pool.install(|| {
+		downloaded
+			.into_par_iter()
+			.map(|item| {
+				let tag = item.tag_name.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(&item.tag_name);
+				let dir = tools_dir
+					.join(item.full_name.replace(['.', '/', '-'], "_"))
+					.join(regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_").into_owned());
+				let result = extract(&item.path, &dir, &item.format).map(|()| dir);
+				(item, result)
+			})
+			.collect()
+	});
+	let mut failed = 0;
+	for (item, result) in results {
+		match result {
+			Ok(dir) => println!("{} {} {}", item.full_name, item.tag_name, dir.display()),
+			Err(error) => {
+				eprintln!("{}: {error}", item.full_name);
+				failed += 1;
+			}
+		}
+	}
+	Ok(failed)
+}
+
+fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Error> {
+	let name = dest.file_name().and_then(|name| name.to_str()).ok_or("invalid install path")?;
+	let parent = dest.parent().ok_or("invalid install path")?;
+	std::fs::create_dir_all(parent)?;
+	let temp = parent.join(format!("{name}.tmp"));
+	let _ = std::fs::remove_dir_all(&temp);
+	std::fs::create_dir_all(&temp)?;
+	let file = std::fs::File::open(archive)?;
+	match format {
+		ArchiveFormat::TarGz => {
+			let decoder = flate2::read::GzDecoder::new(file);
+			let mut archive = tar::Archive::new(decoder);
+			for entry in archive.entries()? {
+				entry?.unpack_in(&temp)?;
+			}
+		}
+		ArchiveFormat::TarXz => {
+			let decoder = liblzma::read::XzDecoder::new(file);
+			let mut archive = tar::Archive::new(decoder);
+			for entry in archive.entries()? {
+				entry?.unpack_in(&temp)?;
+			}
+		}
+		ArchiveFormat::Zip => {
+			let mut archive = zip::ZipArchive::new(file)?;
+			archive.extract(&temp)?;
+		}
+	}
+	if dest.exists() {
+		std::fs::remove_dir_all(dest)?;
+	}
+	std::fs::rename(&temp, dest)?;
+	Ok(())
+}
+
+pub struct Resolved {
+	pub full_name: String,
+	pub tag_name: String,
+	pub url: String,
+	pub size: u64,
+	pub format: ArchiveFormat,
+}
+
+pub struct Downloaded {
+	full_name: String,
+	tag_name: String,
+	path: PathBuf,
+	format: ArchiveFormat,
+}
