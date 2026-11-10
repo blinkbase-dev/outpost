@@ -388,7 +388,7 @@ mod tests {
 	async fn resolves_literal_latest_release_from_snapshot() {
 		let body = read_or_record("github_google_magika_cli_latest.json", || async {
 			let client = GithubClient::new(http(), GithubOptions::from_process());
-			Ok(client.release_by_tag("google/magika", "cli-latest").await?)
+			client.release_by_tag("google/magika", "cli-latest").await
 		})
 		.await;
 		let server = MockServer::start().await;
@@ -560,7 +560,7 @@ mod tests {
 	async fn resolves_lane_exact_version_from_snapshot() {
 		let body = read_or_record("github_google_magika_v1.0.2.json", || async {
 			let client = GithubClient::new(http(), GithubOptions::from_process());
-			Ok(client.release_by_tag("google/magika", "cli/v1.0.2").await?)
+			client.release_by_tag("google/magika", "cli/v1.0.2").await
 		})
 		.await;
 		let server = MockServer::start().await;
