@@ -56,7 +56,7 @@ fn project_configs(cwd: &Path, config_dir: Option<&Path>) -> Vec<PathBuf> {
 	configs
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct ConfigEnv {
 	home_config_dir: Option<PathBuf>,
 	config_dir: Option<PathBuf>,
@@ -73,7 +73,7 @@ impl ConfigEnv {
 	}
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Default)]
 pub struct ConfigPaths {
 	pub system_dir: Option<PathBuf>,
 	pub system: Vec<PathBuf>,

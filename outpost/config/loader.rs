@@ -19,14 +19,14 @@ pub fn load(paths: &ConfigPaths) -> Result<Config, LoadError> {
 	Ok(config)
 }
 
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
 	#[serde(default)]
 	pub tools: BTreeMap<String, ToolOptions>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ToolOptions {
 	Version(String),
@@ -42,7 +42,7 @@ impl ToolOptions {
 	}
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolTable {
 	version: String,

@@ -4,7 +4,7 @@ use regex::regex;
 use semver::Version as Semver;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Version {
 	Latest,
 	Prefix(Prefix),
@@ -52,7 +52,7 @@ impl<'de> Deserialize<'de> for Version {
 	}
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Prefix {
 	parts: Vec<u64>,
 }

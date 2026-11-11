@@ -50,7 +50,7 @@ pub fn acquire(config_dir: &Path) -> Result<File, LockError> {
 	}
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Lock {
 	pub version: u32,
 	#[serde(default, rename = "tool")]
@@ -63,7 +63,7 @@ impl Default for Lock {
 	}
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub enum LockedTool {
 	Github {
@@ -76,11 +76,11 @@ pub enum LockedTool {
 }
 
 impl LockedTool {
-	fn key(&self) -> (&str, &str, &str, String) {
+	fn key(&self) -> (&str, &str, &str, &Version) {
 		match self {
 			Self::Github {
 				full_name, lane, requested, ..
-			} => ("github", full_name, lane, requested.to_string()),
+			} => ("github", full_name, lane, requested),
 		}
 	}
 }
@@ -208,11 +208,13 @@ mod tests {
 		};
 		write(dir.path(), &lock).unwrap();
 		let lock = read(dir.path()).unwrap();
+		let one = Version::parse("1");
+		let two = Version::parse("2");
 		let order: Vec<_> = lock.tools.iter().map(|tool| tool.key()).collect();
 		assert_eq!(order, vec![
-			("github", "a/repo", "", "2".to_owned()),
-			("github", "a/repo", "cli/", "1".to_owned()),
-			("github", "z/repo", "", "1".to_owned()),
+			("github", "a/repo", "", &two),
+			("github", "a/repo", "cli/", &one),
+			("github", "z/repo", "", &one),
 		]);
 	}
 
