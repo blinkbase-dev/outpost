@@ -10,9 +10,10 @@ use crate::config::{loader, locate};
 use crate::tools::archive::{self, ToolDownloaded, ToolResolved};
 use crate::tools::lock::{self, Lock, LockedTool};
 use crate::tools::tool_request::{self, ToolRequest};
+use crate::tools::version::Version;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
-type Identity = (&'static str, String, String, String);
+type Identity = (&'static str, String, String, Version);
 
 pub fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
@@ -96,7 +97,7 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolved, Er
 			Ok(ToolResolved::Github {
 				full_name: full_name.clone(),
 				lane: lane.clone(),
-				requested: version.to_string(),
+				requested: version.clone(),
 				tag_name: release.tag_name,
 				url,
 				size,
@@ -129,7 +130,7 @@ fn missing_from_lock(lock: &Lock, requests: Vec<ToolRequest>, tools_dir: &Path) 
 	requests
 		.into_iter()
 		.filter(|request| match request {
-			ToolRequest::Github { full_name, lane, version } => !installed.contains(&("github", full_name.clone(), lane.clone(), version.to_string())),
+			ToolRequest::Github { full_name, lane, version } => !installed.contains(&("github", full_name.clone(), lane.clone(), version.clone())),
 		})
 		.collect()
 }
@@ -187,7 +188,7 @@ mod tests {
 			tools: vec![LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.2.3".to_owned(),
+				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
@@ -209,7 +210,7 @@ mod tests {
 			tools: vec![LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.2.3".to_owned(),
+				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
@@ -232,7 +233,7 @@ mod tests {
 			tools: vec![LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.2.3".to_owned(),
+				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
@@ -260,7 +261,7 @@ mod tests {
 			tools: vec![LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.2.3".to_owned(),
+				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
@@ -287,7 +288,7 @@ mod tests {
 			ToolDownloaded::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.2.3".to_owned(),
 				path: PathBuf::from("tool.tar.gz"),
 				format: ArchiveFormat::TarGz,
@@ -299,7 +300,7 @@ mod tests {
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
-			requested: "1.0.0".to_owned(),
+			requested: Version::parse("1.0.0"),
 			tag_name: "v1.2.3".to_owned(),
 			install_path: "github_owner_repo/1.2.3".to_owned(),
 		}]);
@@ -312,7 +313,7 @@ mod tests {
 		lock.tools.push(LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
-			requested: "latest".to_owned(),
+			requested: Version::parse("latest"),
 			tag_name: "v1.0.0".to_owned(),
 			install_path: "github_owner_repo/1.0.0".to_owned(),
 		});
@@ -320,7 +321,7 @@ mod tests {
 			ToolDownloaded::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "latest".to_owned(),
+				requested: Version::parse("latest"),
 				tag_name: "v2.0.0".to_owned(),
 				path: PathBuf::from("tool.tar.gz"),
 				format: ArchiveFormat::TarGz,
@@ -331,7 +332,7 @@ mod tests {
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
-			requested: "latest".to_owned(),
+			requested: Version::parse("latest"),
 			tag_name: "v2.0.0".to_owned(),
 			install_path: "github_owner_repo/2.0.0".to_owned(),
 		}]);
@@ -344,7 +345,7 @@ mod tests {
 		lock.tools.push(LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
-			requested: "1".to_owned(),
+			requested: Version::parse("1"),
 			tag_name: "cli/v1.0.0".to_owned(),
 			install_path: "github_owner_repo/cli_v1.0.0".to_owned(),
 		});
@@ -352,7 +353,7 @@ mod tests {
 			ToolDownloaded::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				path: PathBuf::from("tool.tar.gz"),
 				format: ArchiveFormat::TarGz,
@@ -364,14 +365,14 @@ mod tests {
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: "cli/".to_owned(),
-				requested: "1".to_owned(),
+				requested: Version::parse("1"),
 				tag_name: "cli/v1.0.0".to_owned(),
 				install_path: "github_owner_repo/cli_v1.0.0".to_owned(),
 			},
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				install_path: "github_owner_repo/1.0.0".to_owned(),
 			}
@@ -384,7 +385,7 @@ mod tests {
 		let other = LockedTool::Github {
 			full_name: "other/repo".to_owned(),
 			lane: String::new(),
-			requested: "1.0.0".to_owned(),
+			requested: Version::parse("1.0.0"),
 			tag_name: "v1.0.0".to_owned(),
 			install_path: "github_other_repo/1.0.0".to_owned(),
 		};
@@ -396,7 +397,7 @@ mod tests {
 			ToolDownloaded::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				path: PathBuf::from("tool.tar.gz"),
 				format: ArchiveFormat::TarGz,
@@ -407,7 +408,7 @@ mod tests {
 		assert_eq!(lock.tools, vec![other, LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
-			requested: "1.0.0".to_owned(),
+			requested: Version::parse("1.0.0"),
 			tag_name: "v1.0.0".to_owned(),
 			install_path: "github_owner_repo/1.0.0".to_owned(),
 		}]);
@@ -419,7 +420,7 @@ mod tests {
 			ToolDownloaded::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				path: PathBuf::from("tool.tar.gz"),
 				format: ArchiveFormat::TarGz,

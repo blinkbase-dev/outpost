@@ -5,6 +5,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::tools::version::Version;
+
 pub fn read(config_dir: &Path) -> Result<Lock, LockError> {
 	match std::fs::read_to_string(config_dir.join("outpost.lock")) {
 		Ok(text) if text.trim().is_empty() => Ok(Lock::default()),
@@ -67,18 +69,18 @@ pub enum LockedTool {
 	Github {
 		full_name: String,
 		lane: String,
-		requested: String,
+		requested: Version,
 		tag_name: String,
 		install_path: String,
 	},
 }
 
 impl LockedTool {
-	fn key(&self) -> (&str, &str, &str, &str) {
+	fn key(&self) -> (&str, &str, &str, String) {
 		match self {
 			Self::Github {
 				full_name, lane, requested, ..
-			} => ("github", full_name, lane, requested),
+			} => ("github", full_name, lane, requested.to_string()),
 		}
 	}
 }
@@ -166,7 +168,7 @@ mod tests {
 			tools: vec![LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "2.20".to_owned(),
+				requested: Version::parse("2.20"),
 				tag_name: "2.20".to_owned(),
 				install_path: "github_owner_repo/2.20".to_owned(),
 			}],
@@ -184,21 +186,21 @@ mod tests {
 				LockedTool::Github {
 					full_name: "z/repo".to_owned(),
 					lane: String::new(),
-					requested: "1".to_owned(),
+					requested: Version::parse("1"),
 					tag_name: "1".to_owned(),
 					install_path: "github_z_repo/1".to_owned(),
 				},
 				LockedTool::Github {
 					full_name: "a/repo".to_owned(),
 					lane: "cli/".to_owned(),
-					requested: "1".to_owned(),
+					requested: Version::parse("1"),
 					tag_name: "1".to_owned(),
 					install_path: "github_a_repo/1".to_owned(),
 				},
 				LockedTool::Github {
 					full_name: "a/repo".to_owned(),
 					lane: String::new(),
-					requested: "2".to_owned(),
+					requested: Version::parse("2"),
 					tag_name: "2".to_owned(),
 					install_path: "github_a_repo/2".to_owned(),
 				},
@@ -208,9 +210,9 @@ mod tests {
 		let lock = read(dir.path()).unwrap();
 		let order: Vec<_> = lock.tools.iter().map(|tool| tool.key()).collect();
 		assert_eq!(order, vec![
-			("github", "a/repo", "", "2"),
-			("github", "a/repo", "cli/", "1"),
-			("github", "z/repo", "", "1"),
+			("github", "a/repo", "", "2".to_owned()),
+			("github", "a/repo", "cli/", "1".to_owned()),
+			("github", "z/repo", "", "1".to_owned()),
 		]);
 	}
 
@@ -222,7 +224,7 @@ mod tests {
 			tools: vec![LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "2.20".to_owned(),
+				requested: Version::parse("2.20"),
 				tag_name: "2.20".to_owned(),
 				install_path: "github_owner_repo/2.20".to_owned(),
 			}],

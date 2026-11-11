@@ -8,6 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::backend::ArchiveFormat;
+use crate::tools::version::Version;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -191,7 +192,7 @@ pub enum ToolResolved {
 	Github {
 		full_name: String,
 		lane: String,
-		requested: String,
+		requested: Version,
 		tag_name: String,
 		url: String,
 		size: u64,
@@ -203,7 +204,7 @@ pub enum ToolDownloaded {
 	Github {
 		full_name: String,
 		lane: String,
-		requested: String,
+		requested: Version,
 		tag_name: String,
 		path: PathBuf,
 		format: ArchiveFormat,
@@ -323,7 +324,7 @@ mod download_parallel_tests {
 			.map(|index| ToolResolved::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: format!("1.0.{index}"),
+				requested: Version::parse(&format!("1.0.{index}")),
 				tag_name: format!("v1.0.{index}"),
 				url: format!("{}/asset{index}", server.uri()),
 				size: 4,
@@ -354,7 +355,7 @@ mod download_parallel_tests {
 			.map(|index| ToolResolved::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: format!("1.0.{index}"),
+				requested: Version::parse(&format!("1.0.{index}")),
 				tag_name: format!("1.0.{index}"),
 				url: format!("{}/asset{index}", server.uri()),
 				size: 4,
@@ -388,7 +389,7 @@ mod download_parallel_tests {
 			ToolResolved::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				url: format!("{}/good", server.uri()),
 				size: 4,
@@ -397,7 +398,7 @@ mod download_parallel_tests {
 			ToolResolved::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				requested: "1.1.0".to_owned(),
+				requested: Version::parse("1.1.0"),
 				tag_name: "v1.1.0".to_owned(),
 				url: format!("{}/missing", server.uri()),
 				size: 4,
@@ -576,7 +577,7 @@ mod extract_all_tests {
 		let downloaded = vec![ToolDownloaded::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
-			requested: "1.0.0".to_owned(),
+			requested: Version::parse("1.0.0"),
 			tag_name: "v1.2.3".to_owned(),
 			path: archive,
 			format: ArchiveFormat::TarGz,
@@ -592,7 +593,7 @@ mod extract_all_tests {
 		let downloaded = vec![ToolDownloaded::Github {
 			full_name: "google/magika".to_owned(),
 			lane: String::new(),
-			requested: "1.0.0".to_owned(),
+			requested: Version::parse("1.0.0"),
 			tag_name: "cli/v1.0.0".to_owned(),
 			path: archive,
 			format: ArchiveFormat::TarGz,
@@ -620,7 +621,7 @@ mod extract_all_tests {
 			ToolDownloaded::Github {
 				full_name: "owner/tar-gz".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				path: gz_archive,
 				format: ArchiveFormat::TarGz,
@@ -628,7 +629,7 @@ mod extract_all_tests {
 			ToolDownloaded::Github {
 				full_name: "owner/tar-xz".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				path: xz_archive,
 				format: ArchiveFormat::TarXz,
@@ -636,7 +637,7 @@ mod extract_all_tests {
 			ToolDownloaded::Github {
 				full_name: "owner/zip".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				path: zip_archive,
 				format: ArchiveFormat::Zip,
@@ -664,7 +665,7 @@ mod extract_all_tests {
 			ToolDownloaded::Github {
 				full_name: "owner/good".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				path: good,
 				format: ArchiveFormat::TarGz,
@@ -672,7 +673,7 @@ mod extract_all_tests {
 			ToolDownloaded::Github {
 				full_name: "owner/bad".to_owned(),
 				lane: String::new(),
-				requested: "1.0.0".to_owned(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				path: bad,
 				format: ArchiveFormat::TarGz,
