@@ -16,12 +16,18 @@ pub fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let config = loader::load(&paths)?;
-	let requests = tool_request::requests(&config)?;
+	let mut requests = tool_request::requests(&config)?;
 	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
 	let downloads_dir = config_dir.join("downloads");
 	let tools_dir = config_dir.join("tools");
 	std::fs::create_dir_all(&downloads_dir)?;
 	std::fs::create_dir_all(&tools_dir)?;
+	// skip tools already recorded in the lock
+	let mut lock = lock::read(config_dir)?;
+	requests.retain(|request| !is_installed_in_lock(&lock, request, &tools_dir));
+	if requests.is_empty() {
+		return Ok(());
+	}
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
 	let (downloaded, failed) = runtime.block_on(resolve_and_download(http, requests, downloads_dir))?;
@@ -31,7 +37,7 @@ pub fn install() -> Result<(), Error> {
 		let ToolDownloaded::Github { full_name, tag_name, .. } = tool;
 		println!("{full_name} {tag_name} {}", dir.display());
 	}
-	let mut lock = lock::read(config_dir)?;
+	// record successful installs in the lock
 	update_lock(&mut lock, &installed, &tools_dir)?;
 	lock::write(config_dir, &lock)?;
 	let failed = failed + extract_failed;
@@ -97,6 +103,23 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolved, Er
 	}
 }
 
+fn is_installed_in_lock(lock: &Lock, request: &ToolRequest, tools_dir: &Path) -> bool {
+	match request {
+		ToolRequest::Github { full_name, lane, version } => {
+			let requested = version.to_string();
+			lock.tools.iter().any(|entry| match entry {
+				LockedTool::Github {
+					full_name: locked_name,
+					lane: locked_lane,
+					requested: locked_requested,
+					install_path,
+					..
+				} => locked_name == full_name && locked_lane == lane && locked_requested == &requested && tools_dir.join(install_path).exists(),
+			})
+		}
+	}
+}
+
 fn update_lock(lock: &mut Lock, installed: &[(ToolDownloaded, PathBuf)], tools_dir: &Path) -> Result<(), Error> {
 	for (tool, dir) in installed {
 		let install_path = dir.strip_prefix(tools_dir)?.to_string_lossy().replace('\\', "/");
@@ -133,6 +156,81 @@ fn update_lock(lock: &mut Lock, installed: &[(ToolDownloaded, PathBuf)], tools_d
 mod tests {
 	use super::*;
 	use crate::backend::ArchiveFormat;
+	use crate::tools::version::Version;
+
+	#[test]
+	fn treats_tool_with_existing_directory_as_installed() {
+		let dir = tempfile::tempdir().unwrap();
+		let tools = dir.path().join("tools");
+		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
+		let lock = Lock {
+			version: 1,
+			tools: vec![LockedTool::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "1.2.3".to_owned(),
+				tag_name: "v1.2.3".to_owned(),
+				install_path: "github_owner_repo/1.2.3".to_owned(),
+			}],
+		};
+		let request = ToolRequest::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			version: Version::parse("1.2.3"),
+		};
+		assert!(is_installed_in_lock(&lock, &request, &tools));
+	}
+
+	#[test]
+	fn treats_tool_with_missing_directory_as_not_installed() {
+		let dir = tempfile::tempdir().unwrap();
+		let tools = dir.path().join("tools");
+		let lock = Lock {
+			version: 1,
+			tools: vec![LockedTool::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "1.2.3".to_owned(),
+				tag_name: "v1.2.3".to_owned(),
+				install_path: "github_owner_repo/1.2.3".to_owned(),
+			}],
+		};
+		let request = ToolRequest::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			version: Version::parse("1.2.3"),
+		};
+		assert!(!is_installed_in_lock(&lock, &request, &tools));
+	}
+
+	#[test]
+	fn treats_different_request_as_not_installed() {
+		let dir = tempfile::tempdir().unwrap();
+		let tools = dir.path().join("tools");
+		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
+		let lock = Lock {
+			version: 1,
+			tools: vec![LockedTool::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "1.2.3".to_owned(),
+				tag_name: "v1.2.3".to_owned(),
+				install_path: "github_owner_repo/1.2.3".to_owned(),
+			}],
+		};
+		let other_lane = ToolRequest::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: "cli/".to_owned(),
+			version: Version::parse("1.2.3"),
+		};
+		let other_version = ToolRequest::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			version: Version::parse("2.0.0"),
+		};
+		assert!(!is_installed_in_lock(&lock, &other_lane, &tools));
+		assert!(!is_installed_in_lock(&lock, &other_version, &tools));
+	}
 
 	#[test]
 	fn locks_installed_tools() {
