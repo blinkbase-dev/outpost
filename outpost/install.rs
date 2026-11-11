@@ -76,6 +76,7 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<Resolved, Error>
 			let release = backend.select_release(full_name, lane, version).await?;
 			let (url, size, format) = backend.select_asset(full_name, &release)?;
 			Ok(Resolved {
+				backend: "github".to_owned(),
 				full_name: full_name.clone(),
 				tag_name: release.tag_name,
 				url,
