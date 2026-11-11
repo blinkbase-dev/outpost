@@ -19,7 +19,7 @@ pub fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let config = loader::load(&paths)?;
-	let mut requests = tool_request::requests(&config)?;
+	let requests = tool_request::requests(&config)?;
 	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
 	let downloads_dir = config_dir.join("downloads");
 	let tools_dir = config_dir.join("tools");
