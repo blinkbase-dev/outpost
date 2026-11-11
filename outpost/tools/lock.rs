@@ -42,7 +42,7 @@ pub enum LockedTool {
 		full_name: String,
 		lane: String,
 		requested: String,
-		installed_tag: String,
+		tag_name: String,
 		install_path: String,
 	},
 }
@@ -121,7 +121,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: "2.20".to_owned(),
-				installed_tag: "2.20".to_owned(),
+				tag_name: "2.20".to_owned(),
 				install_path: "github_owner_repo/2.20".to_owned(),
 			}],
 		};
@@ -139,21 +139,21 @@ mod tests {
 					full_name: "z/repo".to_owned(),
 					lane: String::new(),
 					requested: "1".to_owned(),
-					installed_tag: "1".to_owned(),
+					tag_name: "1".to_owned(),
 					install_path: "github_z_repo/1".to_owned(),
 				},
 				LockedTool::Github {
 					full_name: "a/repo".to_owned(),
 					lane: "cli/".to_owned(),
 					requested: "1".to_owned(),
-					installed_tag: "1".to_owned(),
+					tag_name: "1".to_owned(),
 					install_path: "github_a_repo/1".to_owned(),
 				},
 				LockedTool::Github {
 					full_name: "a/repo".to_owned(),
 					lane: String::new(),
 					requested: "2".to_owned(),
-					installed_tag: "2".to_owned(),
+					tag_name: "2".to_owned(),
 					install_path: "github_a_repo/2".to_owned(),
 				},
 			],
@@ -177,7 +177,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: "2.20".to_owned(),
-				installed_tag: "2.20".to_owned(),
+				tag_name: "2.20".to_owned(),
 				install_path: "github_owner_repo/2.20".to_owned(),
 			}],
 		};
@@ -191,7 +191,7 @@ backend = \"github\"
 full_name = \"owner/repo\"
 lane = \"\"
 requested = \"2.20\"
-installed_tag = \"2.20\"
+tag_name = \"2.20\"
 install_path = \"github_owner_repo/2.20\"
 ";
 		assert_eq!(text, expected);

@@ -23,6 +23,16 @@ impl Version {
 	}
 }
 
+impl fmt::Display for Version {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Latest => f.write_str("latest"),
+			Self::Prefix(prefix) => write!(f, "{prefix}"),
+			Self::Exact(value) => f.write_str(value),
+		}
+	}
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Prefix {
 	parts: Vec<u64>,

@@ -6,7 +6,7 @@ use tokio::sync::Semaphore;
 
 use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate};
-use crate::tools::archive::{self, Downloaded, Resolved};
+use crate::tools::archive::{self, ToolDownloaded, ToolResolved};
 use crate::tools::tool_request::{self, ToolRequest};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -32,13 +32,13 @@ pub fn install() -> Result<(), Error> {
 	Ok(())
 }
 
-async fn resolve_and_download(http: Client, requests: Vec<ToolRequest>, downloads_dir: PathBuf) -> Result<(Vec<Downloaded>, usize), Error> {
+async fn resolve_and_download(http: Client, requests: Vec<ToolRequest>, downloads_dir: PathBuf) -> Result<(Vec<ToolDownloaded>, usize), Error> {
 	let (resolved, resolve_failed) = resolve_parallel(http.clone(), requests).await?;
 	let (downloaded, download_failed) = archive::download_parallel(http, resolved, downloads_dir).await?;
 	Ok((downloaded, resolve_failed + download_failed))
 }
 
-async fn resolve_parallel(http: Client, requests: Vec<ToolRequest>) -> Result<(Vec<Resolved>, usize), Error> {
+async fn resolve_parallel(http: Client, requests: Vec<ToolRequest>) -> Result<(Vec<ToolResolved>, usize), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(requests.len());
 	for request in requests {
@@ -69,15 +69,16 @@ async fn resolve_parallel(http: Client, requests: Vec<ToolRequest>) -> Result<(V
 	Ok((resolved, failed))
 }
 
-async fn resolve(http: Client, request: &ToolRequest) -> Result<Resolved, Error> {
+async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolved, Error> {
 	match request {
 		ToolRequest::Github { full_name, lane, version } => {
 			let backend = GithubBackend::new(http, GithubOptions::from_process());
 			let release = backend.select_release(full_name, lane, version).await?;
 			let (url, size, format) = backend.select_asset(full_name, &release)?;
-			Ok(Resolved {
-				backend: "github".to_owned(),
+			Ok(ToolResolved::Github {
 				full_name: full_name.clone(),
+				lane: lane.clone(),
+				requested: version.to_string(),
 				tag_name: release.tag_name,
 				url,
 				size,
