@@ -86,42 +86,54 @@ async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -
 	Ok(path)
 }
 
-pub fn extract_all(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<usize, Error> {
+pub fn extract_all(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<(Vec<(ToolDownloaded, PathBuf)>, usize), Error> {
 	let pool = rayon::ThreadPoolBuilder::new().build()?;
-	let results: Vec<Result<(String, String, PathBuf), (String, Error)>> = pool.install(|| {
+	let results: Vec<Result<(ToolDownloaded, PathBuf), (String, Error)>> = pool.install(|| {
 		downloaded
 			.into_par_iter()
 			.map(|item| match item {
 				ToolDownloaded::Github {
 					full_name,
+					lane,
+					requested,
 					tag_name,
 					path,
 					format,
-					..
 				} => {
 					let tag = tag_name.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(&tag_name);
 					let dir = tools_dir
 						.join(format!("github_{}", full_name.to_lowercase().replace(['.', '/', '-'], "_")))
 						.join(regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_").into_owned());
 					match extract(&path, &dir, &format) {
-						Ok(()) => Ok((full_name, tag_name, dir)),
+						Ok(()) => Ok((
+							ToolDownloaded::Github {
+								full_name,
+								lane,
+								requested,
+								tag_name,
+								path,
+								format,
+							},
+							dir,
+						)),
 						Err(error) => Err((full_name, error)),
 					}
 				}
 			})
 			.collect()
 	});
+	let mut installed = Vec::with_capacity(results.len());
 	let mut failed = 0;
 	for result in results {
 		match result {
-			Ok((full_name, tag_name, dir)) => println!("{full_name} {tag_name} {}", dir.display()),
+			Ok(item) => installed.push(item),
 			Err((full_name, error)) => {
 				eprintln!("{full_name}: {error}");
 				failed += 1;
 			}
 		}
 	}
-	Ok(failed)
+	Ok((installed, failed))
 }
 
 fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Error> {
@@ -569,9 +581,10 @@ mod extract_all_tests {
 			path: archive,
 			format: ArchiveFormat::TarGz,
 		}];
-		let failed = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
 		let dest = tools.join("github_owner_repo/1.2.3");
 		assert_eq!(failed, 0);
+		assert_eq!(installed.len(), 1);
 		assert_eq!(std::fs::read(dest.join("example-tool")).unwrap(), b"binary");
 
 		let archive = downloads.join("magika.tar.gz");
@@ -584,9 +597,10 @@ mod extract_all_tests {
 			path: archive,
 			format: ArchiveFormat::TarGz,
 		}];
-		let failed = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
 		let dest = tools.join("github_google_magika/cli_v1.0.0");
 		assert_eq!(failed, 0);
+		assert_eq!(installed.len(), 1);
 		assert_eq!(std::fs::read(dest.join("example-tool")).unwrap(), b"binary");
 	}
 
@@ -628,8 +642,9 @@ mod extract_all_tests {
 				format: ArchiveFormat::Zip,
 			},
 		];
-		let failed = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
 		assert_eq!(failed, 0);
+		assert_eq!(installed.len(), 3);
 		assert_eq!(std::fs::read(tools.join("github_owner_tar_gz/1.0.0/example-tool")).unwrap(), b"one");
 		assert_eq!(std::fs::read(tools.join("github_owner_tar_xz/1.0.0/example-tool")).unwrap(), b"two");
 		assert_eq!(std::fs::read(tools.join("github_owner_zip/1.0.0/example-tool")).unwrap(), b"three");
@@ -663,8 +678,9 @@ mod extract_all_tests {
 				format: ArchiveFormat::TarGz,
 			},
 		];
-		let failed = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
 		assert_eq!(failed, 1);
+		assert_eq!(installed.len(), 1);
 		assert_eq!(std::fs::read(tools.join("github_owner_good/1.0.0/example-tool")).unwrap(), b"binary");
 		assert!(!tools.join("github_owner_bad/1.0.0").exists());
 	}

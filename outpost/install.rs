@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -7,6 +7,7 @@ use tokio::sync::Semaphore;
 use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate};
 use crate::tools::archive::{self, ToolDownloaded, ToolResolved};
+use crate::tools::lock::{self, Lock, LockedTool};
 use crate::tools::tool_request::{self, ToolRequest};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -25,7 +26,15 @@ pub fn install() -> Result<(), Error> {
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
 	let (downloaded, failed) = runtime.block_on(resolve_and_download(http, requests, downloads_dir))?;
 	drop(runtime);
-	let failed = failed + archive::extract_all(downloaded, tools_dir)?;
+	let (installed, extract_failed) = archive::extract_all(downloaded, tools_dir.clone())?;
+	for (tool, dir) in &installed {
+		let ToolDownloaded::Github { full_name, tag_name, .. } = tool;
+		println!("{full_name} {tag_name} {}", dir.display());
+	}
+	let mut lock = lock::read(config_dir)?;
+	update_lock(&mut lock, &installed, &tools_dir)?;
+	lock::write(config_dir, &lock)?;
+	let failed = failed + extract_failed;
 	if failed > 0 {
 		return Err(format!("failed to install {failed} tool(s)").into());
 	}
@@ -85,5 +94,192 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolved, Er
 				format,
 			})
 		}
+	}
+}
+
+fn update_lock(lock: &mut Lock, installed: &[(ToolDownloaded, PathBuf)], tools_dir: &Path) -> Result<(), Error> {
+	for (tool, dir) in installed {
+		let install_path = dir.strip_prefix(tools_dir)?.to_string_lossy().replace('\\', "/");
+		match tool {
+			ToolDownloaded::Github {
+				full_name,
+				lane,
+				requested,
+				tag_name,
+				..
+			} => {
+				lock.tools.retain(|existing| match existing {
+					LockedTool::Github {
+						full_name: existing_name,
+						lane: existing_lane,
+						requested: existing_requested,
+						..
+					} => existing_name != full_name || existing_lane != lane || existing_requested != requested,
+				});
+				lock.tools.push(LockedTool::Github {
+					full_name: full_name.clone(),
+					lane: lane.clone(),
+					requested: requested.clone(),
+					tag_name: tag_name.clone(),
+					install_path,
+				});
+			}
+		}
+	}
+	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::backend::ArchiveFormat;
+
+	#[test]
+	fn locks_installed_tools() {
+		let tools = PathBuf::from("tools");
+		let installed = vec![(
+			ToolDownloaded::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "1.0.0".to_owned(),
+				tag_name: "v1.2.3".to_owned(),
+				path: PathBuf::from("tool.tar.gz"),
+				format: ArchiveFormat::TarGz,
+			},
+			tools.join("github_owner_repo").join("1.2.3"),
+		)];
+		let mut lock = Lock::default();
+		update_lock(&mut lock, &installed, &tools).unwrap();
+		assert_eq!(lock.tools, vec![LockedTool::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			requested: "1.0.0".to_owned(),
+			tag_name: "v1.2.3".to_owned(),
+			install_path: "github_owner_repo/1.2.3".to_owned(),
+		}]);
+	}
+
+	#[test]
+	fn locks_newer_tag_replacing_older() {
+		let tools = PathBuf::from("tools");
+		let mut lock = Lock::default();
+		lock.tools.push(LockedTool::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			requested: "latest".to_owned(),
+			tag_name: "v1.0.0".to_owned(),
+			install_path: "github_owner_repo/1.0.0".to_owned(),
+		});
+		let installed = vec![(
+			ToolDownloaded::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "latest".to_owned(),
+				tag_name: "v2.0.0".to_owned(),
+				path: PathBuf::from("tool.tar.gz"),
+				format: ArchiveFormat::TarGz,
+			},
+			tools.join("github_owner_repo/2.0.0"),
+		)];
+		update_lock(&mut lock, &installed, &tools).unwrap();
+		assert_eq!(lock.tools, vec![LockedTool::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			requested: "latest".to_owned(),
+			tag_name: "v2.0.0".to_owned(),
+			install_path: "github_owner_repo/2.0.0".to_owned(),
+		}]);
+	}
+
+	#[test]
+	fn locks_requests_separately() {
+		let tools = PathBuf::from("tools");
+		let mut lock = Lock::default();
+		lock.tools.push(LockedTool::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: "cli/".to_owned(),
+			requested: "1".to_owned(),
+			tag_name: "cli/v1.0.0".to_owned(),
+			install_path: "github_owner_repo/cli_v1.0.0".to_owned(),
+		});
+		let installed = vec![(
+			ToolDownloaded::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "1.0.0".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				path: PathBuf::from("tool.tar.gz"),
+				format: ArchiveFormat::TarGz,
+			},
+			tools.join("github_owner_repo/1.0.0"),
+		)];
+		update_lock(&mut lock, &installed, &tools).unwrap();
+		assert_eq!(lock.tools, vec![
+			LockedTool::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: "cli/".to_owned(),
+				requested: "1".to_owned(),
+				tag_name: "cli/v1.0.0".to_owned(),
+				install_path: "github_owner_repo/cli_v1.0.0".to_owned(),
+			},
+			LockedTool::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "1.0.0".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				install_path: "github_owner_repo/1.0.0".to_owned(),
+			}
+		]);
+	}
+
+	#[test]
+	fn locks_unrelated_tools() {
+		let tools = PathBuf::from("tools");
+		let other = LockedTool::Github {
+			full_name: "other/repo".to_owned(),
+			lane: String::new(),
+			requested: "1.0.0".to_owned(),
+			tag_name: "v1.0.0".to_owned(),
+			install_path: "github_other_repo/1.0.0".to_owned(),
+		};
+		let mut lock = Lock {
+			version: 1,
+			tools: vec![other.clone()],
+		};
+		let installed = vec![(
+			ToolDownloaded::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "1.0.0".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				path: PathBuf::from("tool.tar.gz"),
+				format: ArchiveFormat::TarGz,
+			},
+			tools.join("github_owner_repo/1.0.0"),
+		)];
+		update_lock(&mut lock, &installed, &tools).unwrap();
+		assert_eq!(lock.tools, vec![other, LockedTool::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			requested: "1.0.0".to_owned(),
+			tag_name: "v1.0.0".to_owned(),
+			install_path: "github_owner_repo/1.0.0".to_owned(),
+		}]);
+	}
+
+	#[test]
+	fn rejects_paths_outside_tools() {
+		let installed = vec![(
+			ToolDownloaded::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: "1.0.0".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				path: PathBuf::from("tool.tar.gz"),
+				format: ArchiveFormat::TarGz,
+			},
+			PathBuf::from("elsewhere/owner_repo/1.0.0"),
+		)];
+		assert!(update_lock(&mut Lock::default(), &installed, Path::new("tools")).is_err());
 	}
 }
