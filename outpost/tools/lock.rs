@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fs::{File, OpenOptions, TryLockError};
+use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -25,7 +26,10 @@ pub fn write(config_dir: &Path, lock: &Lock) -> Result<(), LockError> {
 	let text = toml::to_string_pretty(&Lock { version: lock.version, tools })?;
 	let path = config_dir.join("outpost.lock");
 	let temp = path.with_extension("lock.tmp");
-	std::fs::write(&temp, text)?;
+	let mut file = std::fs::File::create(&temp)?;
+	file.write_all(text.as_bytes())?;
+	file.sync_all()?;
+	drop(file);
 	std::fs::rename(&temp, &path)?;
 	Ok(())
 }
