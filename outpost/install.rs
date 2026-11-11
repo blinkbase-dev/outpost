@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -122,6 +123,21 @@ fn is_installed_in_lock(lock: &Lock, request: &ToolRequest, tools_dir: &Path) ->
 }
 
 fn update_lock(lock: &mut Lock, installed: &[(ToolDownloaded, PathBuf)], tools_dir: &Path) -> Result<(), Error> {
+	// identities of the tools being installed
+	let incoming: HashSet<(&'static str, String, String, String)> = installed
+		.iter()
+		.map(|(tool, _)| match tool {
+			ToolDownloaded::Github {
+				full_name, lane, requested, ..
+			} => ("github", full_name.clone(), lane.clone(), requested.clone()),
+		})
+		.collect();
+	// drop entries replaced by a new install before appending
+	lock.tools.retain(|existing| match existing {
+		LockedTool::Github {
+			full_name, lane, requested, ..
+		} => !incoming.contains(&("github", full_name.clone(), lane.clone(), requested.clone())),
+	});
 	for (tool, dir) in installed {
 		let install_path = dir.strip_prefix(tools_dir)?.to_string_lossy().replace('\\', "/");
 		match tool {
@@ -131,23 +147,13 @@ fn update_lock(lock: &mut Lock, installed: &[(ToolDownloaded, PathBuf)], tools_d
 				requested,
 				tag_name,
 				..
-			} => {
-				lock.tools.retain(|existing| match existing {
-					LockedTool::Github {
-						full_name: existing_name,
-						lane: existing_lane,
-						requested: existing_requested,
-						..
-					} => existing_name != full_name || existing_lane != lane || existing_requested != requested,
-				});
-				lock.tools.push(LockedTool::Github {
-					full_name: full_name.clone(),
-					lane: lane.clone(),
-					requested: requested.clone(),
-					tag_name: tag_name.clone(),
-					install_path,
-				});
-			}
+			} => lock.tools.push(LockedTool::Github {
+				full_name: full_name.clone(),
+				lane: lane.clone(),
+				requested: requested.clone(),
+				tag_name: tag_name.clone(),
+				install_path,
+			}),
 		}
 	}
 	Ok(())
