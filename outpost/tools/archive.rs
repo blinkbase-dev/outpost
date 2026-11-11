@@ -42,6 +42,7 @@ pub async fn download_parallel(http: Client, resolved: Vec<Resolved>, downloads_
 		let (resolved, result) = handle.await?;
 		match result {
 			Ok(path) => downloaded.push(Downloaded {
+				backend: resolved.backend,
 				full_name: resolved.full_name,
 				tag_name: resolved.tag_name,
 				path,
@@ -83,7 +84,7 @@ pub fn extract_all(downloaded: Vec<Downloaded>, tools_dir: PathBuf) -> Result<us
 			.map(|item| {
 				let tag = item.tag_name.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(&item.tag_name);
 				let dir = tools_dir
-					.join(item.full_name.replace(['.', '/', '-'], "_"))
+					.join(format!("{}_{}", item.backend, item.full_name.to_lowercase().replace(['.', '/', '-'], "_")))
 					.join(regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_").into_owned());
 				let result = extract(&item.path, &dir, &item.format).map(|()| dir);
 				(item, result)
@@ -155,6 +156,7 @@ fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Er
 }
 
 pub struct Resolved {
+	pub backend: String,
 	pub full_name: String,
 	pub tag_name: String,
 	pub url: String,
@@ -163,6 +165,7 @@ pub struct Resolved {
 }
 
 pub struct Downloaded {
+	backend: String,
 	full_name: String,
 	tag_name: String,
 	path: PathBuf,
@@ -280,6 +283,7 @@ mod download_parallel_tests {
 		let dir = tempfile::tempdir().unwrap();
 		let resolved = (0..16)
 			.map(|index| Resolved {
+				backend: "github".to_owned(),
 				full_name: "owner/repo".to_owned(),
 				tag_name: format!("v1.0.{index}"),
 				url: format!("{}/asset{index}", server.uri()),
@@ -309,6 +313,7 @@ mod download_parallel_tests {
 		let dir = tempfile::tempdir().unwrap();
 		let resolved = (0..10)
 			.map(|index| Resolved {
+				backend: "github".to_owned(),
 				full_name: "owner/repo".to_owned(),
 				tag_name: format!("1.0.{index}"),
 				url: format!("{}/asset{index}", server.uri()),
@@ -325,7 +330,7 @@ mod download_parallel_tests {
 	}
 
 	#[tokio::test]
-	async fn continues_after_failed_item() {
+	async fn counts_download_failures_and_keeps_going() {
 		let server = MockServer::start().await;
 		Mock::given(method("GET"))
 			.and(path("/good"))
@@ -340,6 +345,7 @@ mod download_parallel_tests {
 		let dir = tempfile::tempdir().unwrap();
 		let resolved = vec![
 			Resolved {
+				backend: "github".to_owned(),
 				full_name: "owner/repo".to_owned(),
 				tag_name: "v1.0.0".to_owned(),
 				url: format!("{}/good", server.uri()),
@@ -347,6 +353,7 @@ mod download_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			},
 			Resolved {
+				backend: "github".to_owned(),
 				full_name: "owner/repo".to_owned(),
 				tag_name: "v1.1.0".to_owned(),
 				url: format!("{}/missing", server.uri()),
@@ -387,15 +394,15 @@ mod extract_tests {
 		builder.into_inner().unwrap()
 	}
 
-	fn tar_gz(files: &[(&str, &[u8])]) -> Vec<u8> {
+	pub(super) fn tar_gz(files: &[(&str, &[u8])]) -> Vec<u8> {
 		tar(GzEncoder::new(Vec::new(), Compression::default()), files).finish().unwrap()
 	}
 
-	fn tar_xz(files: &[(&str, &[u8])]) -> Vec<u8> {
+	pub(super) fn tar_xz(files: &[(&str, &[u8])]) -> Vec<u8> {
 		tar(XzEncoder::new(Vec::new(), 6), files).finish().unwrap()
 	}
 
-	fn zip_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {
+	pub(super) fn zip_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {
 		let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
 		for (path, data) in files {
 			writer.start_file(*path, SimpleFileOptions::default()).unwrap();
@@ -506,5 +513,120 @@ mod extract_tests {
 		std::fs::write(&archive, b"not an archive").unwrap();
 		assert!(extract(&archive, &dest, &ArchiveFormat::TarGz).is_err());
 		assert_eq!(std::fs::read(dest.join("keep")).unwrap(), b"old");
+	}
+}
+
+#[cfg(test)]
+mod extract_all_tests {
+	use super::extract_tests::{tar_gz, tar_xz, zip_bytes};
+	use super::*;
+
+	#[test]
+	fn extracts_into_repo_and_tag_directory() {
+		let dir = tempfile::tempdir().unwrap();
+		let downloads = dir.path().join("downloads");
+		std::fs::create_dir_all(&downloads).unwrap();
+		let tools = dir.path().join("tools");
+		let archive = downloads.join("tool.tar.gz");
+		std::fs::write(&archive, tar_gz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
+		let downloaded = vec![Downloaded {
+			backend: "github".to_owned(),
+			full_name: "owner/repo".to_owned(),
+			tag_name: "v1.2.3".to_owned(),
+			path: archive,
+			format: ArchiveFormat::TarGz,
+		}];
+		let failed = extract_all(downloaded, tools.clone()).unwrap();
+		let dest = tools.join("github_owner_repo/1.2.3");
+		assert_eq!(failed, 0);
+		assert_eq!(std::fs::read(dest.join("example-tool")).unwrap(), b"binary");
+
+		let archive = downloads.join("magika.tar.gz");
+		std::fs::write(&archive, tar_gz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
+		let downloaded = vec![Downloaded {
+			backend: "github".to_owned(),
+			full_name: "google/magika".to_owned(),
+			tag_name: "cli/v1.0.0".to_owned(),
+			path: archive,
+			format: ArchiveFormat::TarGz,
+		}];
+		let failed = extract_all(downloaded, tools.clone()).unwrap();
+		let dest = tools.join("github_google_magika/cli_v1.0.0");
+		assert_eq!(failed, 0);
+		assert_eq!(std::fs::read(dest.join("example-tool")).unwrap(), b"binary");
+	}
+
+	#[test]
+	fn extracts_every_format() {
+		let dir = tempfile::tempdir().unwrap();
+		let downloads = dir.path().join("downloads");
+		std::fs::create_dir_all(&downloads).unwrap();
+		let gz_archive = downloads.join("tool.tar.gz");
+		std::fs::write(&gz_archive, tar_gz(&[("tool-1.0.0/example-tool", b"one")])).unwrap();
+		let xz_archive = downloads.join("tool.tar.xz");
+		std::fs::write(&xz_archive, tar_xz(&[("tool-1.0.0/example-tool", b"two")])).unwrap();
+		let zip_archive = downloads.join("tool.zip");
+		std::fs::write(&zip_archive, zip_bytes(&[("tool-1.0.0/example-tool", b"three")])).unwrap();
+		let tools = dir.path().join("tools");
+		let downloaded = vec![
+			Downloaded {
+				backend: "github".to_owned(),
+				full_name: "owner/tar-gz".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				path: gz_archive,
+				format: ArchiveFormat::TarGz,
+			},
+			Downloaded {
+				backend: "github".to_owned(),
+				full_name: "owner/tar-xz".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				path: xz_archive,
+				format: ArchiveFormat::TarXz,
+			},
+			Downloaded {
+				backend: "github".to_owned(),
+				full_name: "owner/zip".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				path: zip_archive,
+				format: ArchiveFormat::Zip,
+			},
+		];
+		let failed = extract_all(downloaded, tools.clone()).unwrap();
+		assert_eq!(failed, 0);
+		assert_eq!(std::fs::read(tools.join("github_owner_tar_gz/1.0.0/example-tool")).unwrap(), b"one");
+		assert_eq!(std::fs::read(tools.join("github_owner_tar_xz/1.0.0/example-tool")).unwrap(), b"two");
+		assert_eq!(std::fs::read(tools.join("github_owner_zip/1.0.0/example-tool")).unwrap(), b"three");
+	}
+
+	#[test]
+	fn counts_extraction_failures_and_keeps_going() {
+		let dir = tempfile::tempdir().unwrap();
+		let downloads = dir.path().join("downloads");
+		std::fs::create_dir_all(&downloads).unwrap();
+		let good = downloads.join("good.tar.gz");
+		std::fs::write(&good, tar_gz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
+		let bad = downloads.join("bad.tar.gz");
+		std::fs::write(&bad, b"not an archive").unwrap();
+		let tools = dir.path().join("tools");
+		let downloaded = vec![
+			Downloaded {
+				backend: "github".to_owned(),
+				full_name: "owner/good".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				path: good,
+				format: ArchiveFormat::TarGz,
+			},
+			Downloaded {
+				backend: "github".to_owned(),
+				full_name: "owner/bad".to_owned(),
+				tag_name: "v1.0.0".to_owned(),
+				path: bad,
+				format: ArchiveFormat::TarGz,
+			},
+		];
+		let failed = extract_all(downloaded, tools.clone()).unwrap();
+		assert_eq!(failed, 1);
+		assert_eq!(std::fs::read(tools.join("github_owner_good/1.0.0/example-tool")).unwrap(), b"binary");
+		assert!(!tools.join("github_owner_bad/1.0.0").exists());
 	}
 }
