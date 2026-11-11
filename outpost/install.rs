@@ -22,6 +22,7 @@ pub fn install() -> Result<(), Error> {
 	let tools_dir = config_dir.join("tools");
 	std::fs::create_dir_all(&downloads_dir)?;
 	std::fs::create_dir_all(&tools_dir)?;
+	let _install_lock = lock::acquire(config_dir)?;
 	// skip tools already recorded in the lock
 	let mut lock = lock::read(config_dir)?;
 	requests.retain(|request| !is_installed_in_lock(&lock, request, &tools_dir));
