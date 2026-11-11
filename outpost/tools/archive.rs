@@ -104,10 +104,9 @@ pub fn extract_all(downloaded: Vec<Downloaded>, tools_dir: PathBuf) -> Result<us
 }
 
 fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Error> {
-	let name = dest.file_name().and_then(|name| name.to_str()).ok_or("invalid install path")?;
-	let parent = dest.parent().ok_or("invalid install path")?;
-	std::fs::create_dir_all(parent)?;
-	let temp = parent.join(format!("{name}.tmp"));
+	std::fs::create_dir_all(dest.parent().ok_or("invalid install path")?)?;
+	let name = archive.file_name().and_then(|name| name.to_str()).ok_or("invalid archive path")?;
+	let temp = archive.with_file_name(format!("{name}.tmp"));
 	let _ = std::fs::remove_dir_all(&temp);
 	std::fs::create_dir_all(&temp)?;
 	let file = std::fs::File::open(archive)?;
@@ -131,10 +130,27 @@ fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Er
 			archive.extract(&temp)?;
 		}
 	}
+	// descends through single-child directories to strip wrapper directories
+	let mut source = temp.clone();
+	loop {
+		let mut entries = std::fs::read_dir(&source)?;
+		let Some(entry) = entries.next() else {
+			break;
+		};
+		let entry = entry?;
+		if !entry.file_type()?.is_dir() || entries.next().is_some() {
+			break;
+		}
+		source = entry.path();
+	}
 	if dest.exists() {
 		std::fs::remove_dir_all(dest)?;
 	}
-	std::fs::rename(&temp, dest)?;
+	std::fs::rename(&source, dest)?;
+	// removes the temporary tree when the source was a nested directory
+	if source != temp {
+		let _ = std::fs::remove_dir_all(&temp);
+	}
 	Ok(())
 }
 
@@ -392,53 +408,103 @@ mod extract_tests {
 	fn extracts_tar_gz() {
 		let dir = tempfile::tempdir().unwrap();
 		let archive = dir.path().join("tool.tar.gz");
-		std::fs::write(&archive, tar_gz(&[("bin/tool", b"binary")])).unwrap();
+		std::fs::write(&archive, tar_gz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
 		let dest = dir.path().join("tools/owner_repo/1.0.0");
 		extract(&archive, &dest, &ArchiveFormat::TarGz).unwrap();
-		assert_eq!(std::fs::read(dest.join("bin/tool")).unwrap(), b"binary");
-		assert!(!dir.path().join("tools/owner_repo/1.0.0.tmp").exists());
+		assert_eq!(std::fs::read(dest.join("example-tool")).unwrap(), b"binary");
+		assert!(!dir.path().join("tool.tar.gz.tmp").exists());
 	}
 
 	#[test]
 	fn extracts_tar_xz() {
 		let dir = tempfile::tempdir().unwrap();
 		let archive = dir.path().join("tool.tar.xz");
-		std::fs::write(&archive, tar_xz(&[("bin/tool", b"binary")])).unwrap();
+		std::fs::write(&archive, tar_xz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
 		let dest = dir.path().join("tools/owner_repo/1.0.0");
 		extract(&archive, &dest, &ArchiveFormat::TarXz).unwrap();
-		assert_eq!(std::fs::read(dest.join("bin/tool")).unwrap(), b"binary");
-		assert!(!dir.path().join("tools/owner_repo/1.0.0.tmp").exists());
+		assert_eq!(std::fs::read(dest.join("example-tool")).unwrap(), b"binary");
+		assert!(!dir.path().join("tool.tar.xz.tmp").exists());
 	}
 
 	#[test]
 	fn extracts_zip() {
 		let dir = tempfile::tempdir().unwrap();
 		let archive = dir.path().join("tool.zip");
-		std::fs::write(&archive, zip_bytes(&[("tool.exe", b"binary")])).unwrap();
+		std::fs::write(&archive, zip_bytes(&[("tool-1.0.0/tool.exe", b"binary")])).unwrap();
 		let dest = dir.path().join("tools/owner_repo/1.0.0");
 		extract(&archive, &dest, &ArchiveFormat::Zip).unwrap();
 		assert_eq!(std::fs::read(dest.join("tool.exe")).unwrap(), b"binary");
-		assert!(!dir.path().join("tools/owner_repo/1.0.0.tmp").exists());
+		assert!(!dir.path().join("tool.zip.tmp").exists());
+	}
+
+	#[test]
+	fn keeps_single_top_level_file() {
+		let dir = tempfile::tempdir().unwrap();
+		let archive = dir.path().join("tool.tar.gz");
+		std::fs::write(&archive, tar_gz(&[("tool", b"binary")])).unwrap();
+		let dest = dir.path().join("tools/owner_repo/1.0.0");
+		extract(&archive, &dest, &ArchiveFormat::TarGz).unwrap();
+		assert_eq!(std::fs::read(dest.join("tool")).unwrap(), b"binary");
+		assert!(!dir.path().join("tool.tar.gz.tmp").exists());
+	}
+
+	#[test]
+	fn keeps_multiple_top_level_entries() {
+		let dir = tempfile::tempdir().unwrap();
+		let archive = dir.path().join("tool.tar.gz");
+		std::fs::write(&archive, tar_gz(&[("bin/tool", b"binary"), ("LICENSE", b"license")])).unwrap();
+		let dest = dir.path().join("tools/owner_repo/1.0.0");
+		extract(&archive, &dest, &ArchiveFormat::TarGz).unwrap();
+		assert_eq!(std::fs::read(dest.join("bin/tool")).unwrap(), b"binary");
+		assert_eq!(std::fs::read(dest.join("LICENSE")).unwrap(), b"license");
+	}
+
+	#[test]
+	fn strips_nested_wrapper_directories() {
+		let dir = tempfile::tempdir().unwrap();
+		let archive = dir.path().join("tool.tar.gz");
+		std::fs::write(&archive, tar_gz(&[("path/to/tool", b"binary")])).unwrap();
+		let dest = dir.path().join("tools/owner_repo/1.0.0");
+		extract(&archive, &dest, &ArchiveFormat::TarGz).unwrap();
+		assert_eq!(std::fs::read(dest.join("tool")).unwrap(), b"binary");
+		assert!(!dir.path().join("tool.tar.gz.tmp").exists());
+	}
+
+	#[test]
+	fn strips_wrapper_with_same_name_as_child() {
+		let dir = tempfile::tempdir().unwrap();
+		let archive = dir.path().join("tool.tar.gz");
+		std::fs::write(&archive, tar_gz(&[("tool/tool", b"binary")])).unwrap();
+		let dest = dir.path().join("tools/owner_repo/1.0.0");
+		extract(&archive, &dest, &ArchiveFormat::TarGz).unwrap();
+		assert_eq!(std::fs::read(dest.join("tool")).unwrap(), b"binary");
 	}
 
 	#[test]
 	fn replaces_existing_destination() {
-		let dest = tempfile::tempdir().unwrap();
-		std::fs::write(dest.path().join("stale"), b"old").unwrap();
-		let archive = dest.path().join("tool.tar.gz");
-		std::fs::write(&archive, tar_gz(&[("fresh", b"new")])).unwrap();
-		extract(&archive, dest.path(), &ArchiveFormat::TarGz).unwrap();
-		assert!(!dest.path().join("stale").exists());
-		assert_eq!(std::fs::read(dest.path().join("fresh")).unwrap(), b"new");
+		let dir = tempfile::tempdir().unwrap();
+		let dest = dir.path().join("tools/tool");
+		std::fs::create_dir_all(&dest).unwrap();
+		std::fs::write(dest.join("stale"), b"old").unwrap();
+		let archive = dir.path().join("downloads/tool.tar.gz");
+		std::fs::create_dir_all(archive.parent().unwrap()).unwrap();
+		std::fs::write(&archive, tar_gz(&[("tool-1.0.0/fresh", b"new")])).unwrap();
+		extract(&archive, &dest, &ArchiveFormat::TarGz).unwrap();
+		assert!(!dest.join("stale").exists());
+		assert_eq!(std::fs::read(dest.join("fresh")).unwrap(), b"new");
+		assert!(!dir.path().join("downloads/tool.tar.gz.tmp").exists());
 	}
 
 	#[test]
 	fn keeps_destination_on_corrupt_archive() {
-		let dest = tempfile::tempdir().unwrap();
-		std::fs::write(dest.path().join("keep"), b"old").unwrap();
-		let archive = dest.path().join("corrupt.tar.gz");
+		let dir = tempfile::tempdir().unwrap();
+		let dest = dir.path().join("tools/tool");
+		std::fs::create_dir_all(&dest).unwrap();
+		std::fs::write(dest.join("keep"), b"old").unwrap();
+		let archive = dir.path().join("downloads/corrupt.tar.gz");
+		std::fs::create_dir_all(archive.parent().unwrap()).unwrap();
 		std::fs::write(&archive, b"not an archive").unwrap();
-		assert!(extract(&archive, dest.path(), &ArchiveFormat::TarGz).is_err());
-		assert_eq!(std::fs::read(dest.path().join("keep")).unwrap(), b"old");
+		assert!(extract(&archive, &dest, &ArchiveFormat::TarGz).is_err());
+		assert_eq!(std::fs::read(dest.join("keep")).unwrap(), b"old");
 	}
 }
