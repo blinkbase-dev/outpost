@@ -12,7 +12,7 @@ pub fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequestEntry>, ToolReque
 		for (key, options) in &file.config.tools {
 			requests.push(ToolRequestEntry {
 				origin: file.path.clone(),
-				request: ToolRequest::parse(key, options)?,
+				tool: ToolRequest::parse(key, options)?,
 			});
 		}
 	}
@@ -22,7 +22,7 @@ pub fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequestEntry>, ToolReque
 #[derive(Debug, PartialEq)]
 pub struct ToolRequestEntry {
 	pub origin: PathBuf,
-	pub request: ToolRequest,
+	pub tool: ToolRequest,
 }
 
 #[derive(Debug, PartialEq)]
@@ -91,7 +91,7 @@ mod tests {
 		};
 		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
 			origin: PathBuf::from("outpost.toml"),
-			request: ToolRequest::Github {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::Latest,
@@ -113,10 +113,10 @@ mod tests {
 		};
 		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
 			origin: PathBuf::from("outpost.toml"),
-			request: ToolRequest::Github {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				version: Version::parse("0.26.0"),
+				version: Version::Exact("0.26.0".to_owned()),
 			},
 		}]);
 	}
@@ -135,7 +135,7 @@ mod tests {
 		};
 		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
 			origin: PathBuf::from("outpost.toml"),
-			request: ToolRequest::Github {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: "cli/".to_owned(),
 				version: Version::Exact("1.2.3".to_owned()),
@@ -154,7 +154,7 @@ mod tests {
 		};
 		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
 			origin: PathBuf::from("outpost.toml"),
-			request: ToolRequest::Github {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: "tool-".to_owned(),
 				version: Version::parse("10"),
@@ -176,7 +176,7 @@ mod tests {
 		};
 		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
 			origin: PathBuf::from("outpost.toml"),
-			request: ToolRequest::Github {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo.js".to_owned(),
 				lane: String::new(),
 				version: Version::Latest,
@@ -198,10 +198,10 @@ mod tests {
 		};
 		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
 			origin: PathBuf::from("outpost.toml"),
-			request: ToolRequest::Github {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
-				version: Version::parse("0.26.0"),
+				version: Version::Exact("0.26.0".to_owned()),
 			},
 		}]);
 	}
@@ -241,7 +241,7 @@ mod tests {
 		assert_eq!(requests(&[system, project, nested]).unwrap(), vec![
 			ToolRequestEntry {
 				origin: PathBuf::from("system/outpost.toml"),
-				request: ToolRequest::Github {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1"),
@@ -249,7 +249,7 @@ mod tests {
 			},
 			ToolRequestEntry {
 				origin: PathBuf::from("project/outpost.toml"),
-				request: ToolRequest::Github {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2"),
@@ -258,7 +258,7 @@ mod tests {
 			// the same request from another file is still a separate entry
 			ToolRequestEntry {
 				origin: PathBuf::from("project/nested/outpost.toml"),
-				request: ToolRequest::Github {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1"),
