@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::version::Version;
 
+pub(crate) type Identity = (&'static str, String, String, Version);
+
 pub(crate) fn read(config_dir: &Path) -> Result<Lock, LockError> {
 	match std::fs::read_to_string(config_dir.join("outpost.lock")) {
 		Ok(text) if text.trim().is_empty() => Ok(Lock::default()),
@@ -91,6 +93,14 @@ impl LockedTool {
 			Self::Github {
 				full_name, lane, requested, ..
 			} => ("github", full_name, lane, requested),
+		}
+	}
+
+	pub(crate) fn identity(&self) -> Identity {
+		match self {
+			Self::Github {
+				full_name, lane, requested, ..
+			} => ("github", full_name.clone(), lane.clone(), requested.clone()),
 		}
 	}
 }

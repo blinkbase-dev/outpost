@@ -80,7 +80,7 @@ async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -
 	Ok(path)
 }
 
-pub(crate) fn extract_all(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<(Vec<(ToolDownloaded, PathBuf)>, usize), Error> {
+pub(crate) fn extract_parallel(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<(Vec<(ToolDownloaded, PathBuf)>, usize), Error> {
 	let pool = rayon::ThreadPoolBuilder::new().build()?;
 	let results: Vec<Result<(ToolDownloaded, PathBuf), (String, Error)>> = pool.install(|| {
 		downloaded
@@ -600,7 +600,7 @@ mod extract_tests {
 }
 
 #[cfg(test)]
-mod extract_all_tests {
+mod extract_parallel_tests {
 	use super::extract_tests::{tar_gz, tar_xz, zip_bytes};
 	use super::*;
 	use crate::tools::version::Version;
@@ -628,7 +628,7 @@ mod extract_all_tests {
 				format: ArchiveFormat::TarGz,
 			}
 		}];
-		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
 		let dest = tools.join("github_owner_repo/1.2.3");
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 1);
@@ -651,7 +651,7 @@ mod extract_all_tests {
 				format: ArchiveFormat::TarGz,
 			}
 		}];
-		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
 		let dest = tools.join("github_google_magika/cli_v1.0.0");
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 1);
@@ -717,7 +717,7 @@ mod extract_all_tests {
 				}
 			},
 		];
-		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 3);
 		assert_eq!(std::fs::read(tools.join("github_owner_tar_gz/1.0.0/example-tool")).unwrap(), b"one");
@@ -767,7 +767,7 @@ mod extract_all_tests {
 				}
 			},
 		];
-		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
 		assert_eq!(failed, 1);
 		assert_eq!(installed.len(), 1);
 		assert_eq!(std::fs::read(tools.join("github_owner_good/1.0.0/example-tool")).unwrap(), b"binary");

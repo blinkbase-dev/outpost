@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use regex::regex;
 
+use super::lock::Identity;
 use super::version::{Version, split_lane};
 use crate::config::loader::{ConfigFile, ToolOptions};
 
@@ -38,6 +39,12 @@ pub(crate) struct GithubRequest {
 }
 
 impl ToolRequest {
+	pub(crate) fn identity(&self) -> Identity {
+		match self {
+			Self::Github(request) => ("github", request.full_name.clone(), request.lane.clone(), request.version.clone()),
+		}
+	}
+
 	fn parse(key: &str, options: &ToolOptions) -> Result<Self, ToolRequestError> {
 		let (backend, full_name) = key.split_once(':').ok_or_else(|| ToolRequestError::UnsupportedBackend(key.to_owned()))?;
 		match backend {
