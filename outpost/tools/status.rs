@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::lock::{Lock, LockedTool};
-use super::tool_request::{ToolRequest, ToolRequestEntry};
+use super::tool_request::{GithubRequest, ToolRequest, ToolRequestEntry};
 use super::version::Version;
 
 pub(crate) type Identity = (&'static str, String, String, Version);
@@ -88,7 +88,7 @@ pub(crate) fn missing_from_lock(requests: Vec<ToolRequest>, lock: &Lock, tools_d
 
 fn _request_identity(request: &ToolRequest) -> Identity {
 	match request {
-		ToolRequest::Github { full_name, lane, version } => ("github", full_name.clone(), lane.clone(), version.clone()),
+		ToolRequest::Github(GithubRequest { full_name, lane, version }) => ("github", full_name.clone(), lane.clone(), version.clone()),
 	}
 }
 
@@ -123,19 +123,19 @@ mod tests {
 		let requests = vec![
 			ToolRequestEntry {
 				origin: PathBuf::from("outpost.toml"),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				},
+				}),
 			},
 			ToolRequestEntry {
 				origin: PathBuf::from("outpost.toml"),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/other".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
-				},
+				}),
 			},
 		];
 		let report = report(requests, &lock, &tools);
@@ -144,21 +144,21 @@ mod tests {
 				origin: PathBuf::from("outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				},
+				}),
 			},
 			ToolStatus {
 				origin: PathBuf::from("outpost.toml"),
 				install_state: InstallState::Missing,
 				installed_version: None,
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/other".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
-				},
+				}),
 			},
 		]);
 		assert!(report.unrequested.is_empty());
@@ -181,22 +181,22 @@ mod tests {
 		};
 		let requests = vec![ToolRequestEntry {
 			origin: PathBuf::from("outpost.toml"),
-			tool: ToolRequest::Github {
+			tool: ToolRequest::Github(GithubRequest {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
-			},
+			}),
 		}];
 		let report = report(requests, &lock, &tools);
 		assert_eq!(report.requested, vec![ToolStatus {
 			origin: PathBuf::from("outpost.toml"),
 			install_state: InstallState::Missing,
 			installed_version: Some("v1.2.3".to_owned()),
-			tool: ToolRequest::Github {
+			tool: ToolRequest::Github(GithubRequest {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
-			},
+			}),
 		}]);
 		assert!(report.unrequested.is_empty());
 	}
@@ -238,19 +238,19 @@ mod tests {
 		let requests = vec![
 			ToolRequestEntry {
 				origin: PathBuf::from("system/outpost.toml"),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				},
+				}),
 			},
 			ToolRequestEntry {
 				origin: PathBuf::from("project/outpost.toml"),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				},
+				}),
 			},
 		];
 		let report = report(requests, &lock, &tools);
@@ -259,21 +259,21 @@ mod tests {
 				origin: PathBuf::from("system/outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				},
+				}),
 			},
 			ToolStatus {
 				origin: PathBuf::from("project/outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				},
+				}),
 			},
 		]);
 	}
@@ -283,40 +283,40 @@ mod tests {
 		let requests = vec![
 			ToolRequestEntry {
 				origin: std::path::PathBuf::from("a.toml"),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				},
+				}),
 			},
 			ToolRequestEntry {
 				origin: std::path::PathBuf::from("b.toml"),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				},
+				}),
 			},
 			ToolRequestEntry {
 				origin: std::path::PathBuf::from("c.toml"),
-				tool: ToolRequest::Github {
+				tool: ToolRequest::Github(GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
-				},
+				}),
 			},
 		];
 		assert_eq!(unique_requests(requests), vec![
-			ToolRequest::Github {
+			ToolRequest::Github(GithubRequest {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
-			},
-			ToolRequest::Github {
+			}),
+			ToolRequest::Github(GithubRequest {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("2.0.0"),
-			},
+			}),
 		]);
 	}
 
@@ -335,11 +335,11 @@ mod tests {
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
 		};
-		let requests = vec![ToolRequest::Github {
+		let requests = vec![ToolRequest::Github(GithubRequest {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
-		}];
+		})];
 		assert!(missing_from_lock(requests, &lock, &tools).is_empty());
 	}
 
@@ -357,11 +357,11 @@ mod tests {
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
 		};
-		let requests = vec![ToolRequest::Github {
+		let requests = vec![ToolRequest::Github(GithubRequest {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
-		}];
+		})];
 		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 1);
 	}
 
@@ -380,16 +380,16 @@ mod tests {
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
 		};
-		let other_lane = ToolRequest::Github {
+		let other_lane = ToolRequest::Github(GithubRequest {
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			version: Version::parse("1.2.3"),
-		};
-		let other_version = ToolRequest::Github {
+		});
+		let other_version = ToolRequest::Github(GithubRequest {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
-		};
+		});
 		let requests = vec![other_lane, other_version];
 		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 2);
 	}
@@ -409,18 +409,18 @@ mod tests {
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
 		};
-		let installed = ToolRequest::Github {
+		let installed = ToolRequest::Github(GithubRequest {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
-		};
-		let missing = ToolRequest::Github {
+		});
+		let missing = ToolRequest::Github(GithubRequest {
 			full_name: "owner/other".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
-		};
+		});
 		let requests = missing_from_lock(vec![installed, missing], &lock, &tools);
 		assert_eq!(requests.len(), 1);
-		assert!(matches!(&requests[0], ToolRequest::Github { full_name, .. } if full_name == "owner/other"));
+		assert!(matches!(&requests[0], ToolRequest::Github(GithubRequest { full_name, .. }) if full_name == "owner/other"));
 	}
 }
