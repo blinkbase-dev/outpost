@@ -72,10 +72,6 @@ fn _print(rows: &[Row]) {
 	if rows.is_empty() {
 		return;
 	}
-	const GAP: usize = 2;
-	const MIN_TOOL: usize = 20;
-	const MAX_REQUESTED: usize = 16;
-	const MAX_VERSION: usize = 24;
 	let mut tool_width = "TOOL".len();
 	let mut requested_width = "REQUESTED".len();
 	let mut version_width = "VERSION".len();
@@ -84,22 +80,14 @@ fn _print(rows: &[Row]) {
 		requested_width = requested_width.max(row.requested.chars().count());
 		version_width = version_width.max(row.version.chars().count());
 	}
-	if let Some(width) = terminal_size::terminal_size().map(|(width, _)| width.0 as usize) {
-		// keep the fixed columns bounded even if a value is unusually long
-		requested_width = requested_width.min(MAX_REQUESTED);
-		version_width = version_width.min(MAX_VERSION);
-		let fixed = requested_width + version_width + GAP * 2;
-		// the table is wider than the terminal
-		if tool_width + fixed > width {
-			// shrink the tool column, but keep it wide enough to be useful
-			if width > fixed + MIN_TOOL {
-				tool_width = width - fixed;
-			} else {
-				_print_stacked(rows);
-				return;
-			}
-		}
-	}
+	let fitted = match terminal_size::terminal_size_of(std::io::stdout()).map(|(width, _)| width.0 as usize) {
+		Some(width) => _fit(tool_width, requested_width, version_width, width),
+		None => Some((tool_width, requested_width, version_width)),
+	};
+	let Some((tool_width, requested_width, version_width)) = fitted else {
+		_print_stacked(rows);
+		return;
+	};
 	println!("{:<tool_width$}  {:<requested_width$}  VERSION", "TOOL", "REQUESTED");
 	for row in rows {
 		let tool = _truncate(&row.tool, tool_width);
@@ -107,6 +95,28 @@ fn _print(rows: &[Row]) {
 		let version = _truncate(&row.version, version_width);
 		println!("{tool:<tool_width$}  {requested:<requested_width$}  {version}");
 	}
+}
+
+fn _fit(tool: usize, requested: usize, version: usize, width: usize) -> Option<(usize, usize, usize)> {
+	const GAP: usize = 2;
+	const MIN_TOOL: usize = 20;
+	const MAX_REQUESTED: usize = 16;
+	const MAX_VERSION: usize = 24;
+	let fixed = requested + version + GAP * 2;
+	let available = width.saturating_sub(fixed);
+	// the tool column fits naturally, or can shrink to its minimum
+	if available >= tool.min(MIN_TOOL) {
+		return Some((tool.min(available), requested, version));
+	}
+	// retry with the fixed columns capped
+	let requested = requested.min(MAX_REQUESTED);
+	let version = version.min(MAX_VERSION);
+	let fixed = requested + version + GAP * 2;
+	let available = width.saturating_sub(fixed);
+	if available >= tool.min(MIN_TOOL) {
+		return Some((tool.min(available), requested, version));
+	}
+	None
 }
 
 fn _print_stacked(rows: &[Row]) {
@@ -137,6 +147,26 @@ fn _truncate(value: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn fits_the_natural_table() {
+		assert_eq!(_fit(10, 5, 6, 80), Some((10, 5, 6)));
+	}
+
+	#[test]
+	fn shrinks_the_tool_column_before_capping() {
+		assert_eq!(_fit(60, 5, 6, 40), Some((25, 5, 6)));
+	}
+
+	#[test]
+	fn caps_fixed_columns_when_the_tool_column_is_too_narrow() {
+		assert_eq!(_fit(10, 30, 30, 60), Some((10, 16, 24)));
+	}
+
+	#[test]
+	fn stacks_when_the_capped_table_still_does_not_fit() {
+		assert_eq!(_fit(30, 30, 30, 40), None);
+	}
 
 	#[test]
 	fn keeps_values_that_fit() {
