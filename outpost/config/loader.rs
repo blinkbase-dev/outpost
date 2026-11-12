@@ -1,22 +1,28 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::{fmt, fs, io};
 
 use serde::Deserialize;
 
 use super::locate::ConfigPaths;
 
-pub fn load(paths: &ConfigPaths) -> Result<Config, LoadError> {
-	let mut config = Config::default();
+pub fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
+	let mut files = Vec::new();
 	for path in paths.system.iter().chain(&paths.project) {
 		let content = match fs::read_to_string(path) {
 			Ok(content) => content,
 			Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
 			Err(source) => return Err(source.into()),
 		};
-		let outpost: Config = toml::from_str(&content)?;
-		config.tools.extend(outpost.tools);
+		let config = toml::from_str(&content)?;
+		files.push(ConfigFile { path: path.clone(), config });
 	}
-	Ok(config)
+	Ok(files)
+}
+
+pub struct ConfigFile {
+	pub path: PathBuf,
+	pub config: Config,
 }
 
 #[derive(Default, Deserialize)]
@@ -102,13 +108,15 @@ mod tests {
 			"#,
 		)
 		.unwrap();
-		let config = load(&ConfigPaths {
-			system: vec![path],
+		let files = load(&ConfigPaths {
+			system: vec![path.clone()],
 			project: vec![],
 			..ConfigPaths::default()
 		})
 		.unwrap();
-		assert_eq!(config.tools["github:owner/repo"], ToolOptions::Version("latest".to_owned()));
+		assert_eq!(files.len(), 1);
+		assert_eq!(files[0].path, path);
+		assert_eq!(files[0].config.tools["github:owner/repo"], ToolOptions::Version("latest".to_owned()));
 	}
 
 	#[test]
@@ -123,93 +131,20 @@ mod tests {
 			"#,
 		)
 		.unwrap();
-		let config = load(&ConfigPaths {
+		let files = load(&ConfigPaths {
 			system: vec![path],
 			project: vec![],
 			..ConfigPaths::default()
 		})
 		.unwrap();
 		assert_eq!(
-			config.tools["github:owner/repo"],
+			files[0].config.tools["github:owner/repo"],
 			ToolOptions::Table(ToolTable { version: "0.26.0".to_owned() })
 		);
 	}
 
 	#[test]
-	fn tools_override() {
-		let tmp = tempfile::tempdir().unwrap();
-		let system = tmp.path().join("config.toml");
-		fs::write(
-			&system,
-			r#"
-			[tools]
-			"github:owner/repo" = "1"
-			"#,
-		)
-		.unwrap();
-		let system_env = tmp.path().join("outpost.dev.toml");
-		fs::write(
-			&system_env,
-			r#"
-			[tools]
-			"github:owner/repo" = "2"
-			"#,
-		)
-		.unwrap();
-		let project_outer = tmp.path().join("outer.toml");
-		fs::write(
-			&project_outer,
-			r#"
-			[tools]
-			"github:owner/repo" = "3"
-			"#,
-		)
-		.unwrap();
-		let project_inner = tmp.path().join("inner.toml");
-		fs::write(
-			&project_inner,
-			r#"
-			[tools]
-			"github:owner/repo" = "4"
-			"#,
-		)
-		.unwrap();
-
-		let config = load(&ConfigPaths {
-			system: vec![system.clone()],
-			project: vec![],
-			..ConfigPaths::default()
-		})
-		.unwrap();
-		assert_eq!(config.tools["github:owner/repo"].version(), "1");
-
-		let config = load(&ConfigPaths {
-			system: vec![system.clone(), system_env.clone()],
-			project: vec![],
-			..ConfigPaths::default()
-		})
-		.unwrap();
-		assert_eq!(config.tools["github:owner/repo"].version(), "2");
-
-		let config = load(&ConfigPaths {
-			system: vec![system.clone(), system_env.clone()],
-			project: vec![project_outer.clone()],
-			..ConfigPaths::default()
-		})
-		.unwrap();
-		assert_eq!(config.tools["github:owner/repo"].version(), "3");
-
-		let config = load(&ConfigPaths {
-			system: vec![system, system_env],
-			project: vec![project_outer, project_inner],
-			..ConfigPaths::default()
-		})
-		.unwrap();
-		assert_eq!(config.tools["github:owner/repo"].version(), "4");
-	}
-
-	#[test]
-	fn tools_merge() {
+	fn keeps_files_separate() {
 		let tmp = tempfile::tempdir().unwrap();
 		let system = tmp.path().join("config.toml");
 		fs::write(
@@ -221,26 +156,49 @@ mod tests {
 			"#,
 		)
 		.unwrap();
-		let project = tmp.path().join("outpost.toml");
+		let system_env = tmp.path().join("outpost.dev.toml");
 		fs::write(
-			&project,
+			&system_env,
 			r#"
 			[tools]
 			"github:a/one" = "2"
+			"#,
+		)
+		.unwrap();
+		let project_outer = tmp.path().join("outer.toml");
+		fs::write(
+			&project_outer,
+			r#"
+			[tools]
+			"github:a/one" = "3"
+			"#,
+		)
+		.unwrap();
+		let project_inner = tmp.path().join("inner.toml");
+		fs::write(
+			&project_inner,
+			r#"
+			[tools]
+			"github:a/one" = "4"
 			"github:a/three" = "3"
 			"#,
 		)
 		.unwrap();
-		let config = load(&ConfigPaths {
-			system: vec![system],
-			project: vec![project],
+		let files = load(&ConfigPaths {
+			system: vec![system, system_env],
+			project: vec![project_outer, project_inner],
 			..ConfigPaths::default()
 		})
 		.unwrap();
-		assert_eq!(config.tools.len(), 3);
-		assert_eq!(config.tools["github:a/one"].version(), "2");
-		assert_eq!(config.tools["github:a/two"].version(), "1");
-		assert_eq!(config.tools["github:a/three"].version(), "3");
+		assert_eq!(files.len(), 4);
+		assert_eq!(files[0].config.tools.len(), 2);
+		assert_eq!(files[0].config.tools["github:a/one"].version(), "1");
+		assert_eq!(files[0].config.tools["github:a/two"].version(), "1");
+		assert_eq!(files[1].config.tools["github:a/one"].version(), "2");
+		assert_eq!(files[2].config.tools["github:a/one"].version(), "3");
+		assert_eq!(files[3].config.tools.len(), 2);
+		assert_eq!(files[3].config.tools["github:a/one"].version(), "4");
+		assert_eq!(files[3].config.tools["github:a/three"].version(), "3");
 	}
 
 	#[test]
@@ -256,25 +214,27 @@ mod tests {
 			"#,
 		)
 		.unwrap();
-		let config = load(&ConfigPaths {
+		let files = load(&ConfigPaths {
 			system: vec![missing],
-			project: vec![path],
+			project: vec![path.clone()],
 			..ConfigPaths::default()
 		})
 		.unwrap();
-		assert_eq!(config.tools.len(), 1);
-		assert_eq!(config.tools["github:owner/repo"], ToolOptions::Version("latest".to_owned()));
+		assert_eq!(files.len(), 1);
+		assert_eq!(files[0].path, path);
+		assert_eq!(files[0].config.tools.len(), 1);
+		assert_eq!(files[0].config.tools["github:owner/repo"], ToolOptions::Version("latest".to_owned()));
 	}
 
 	#[test]
 	fn defaults_without_files() {
-		let config = load(&ConfigPaths {
+		let files = load(&ConfigPaths {
 			system: vec![],
 			project: vec![],
 			..ConfigPaths::default()
 		})
 		.unwrap();
-		assert!(config.tools.is_empty());
+		assert!(files.is_empty());
 	}
 
 	#[test]

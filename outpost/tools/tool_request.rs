@@ -1,12 +1,28 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use regex::regex;
 
 use super::version::{Version, split_lane};
-use crate::config::loader::{Config, ToolOptions};
+use crate::config::loader::{ConfigFile, ToolOptions};
 
-pub fn requests(config: &Config) -> Result<Vec<ToolRequest>, ToolRequestError> {
-	config.tools.iter().map(|(key, options)| ToolRequest::parse(key, options)).collect()
+pub fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequestEntry>, ToolRequestError> {
+	let mut requests = Vec::new();
+	for file in files {
+		for (key, options) in &file.config.tools {
+			requests.push(ToolRequestEntry {
+				origin: file.path.clone(),
+				request: ToolRequest::parse(key, options)?,
+			});
+		}
+	}
+	Ok(requests)
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ToolRequestEntry {
+	pub origin: PathBuf,
+	pub request: ToolRequest,
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,121 +77,226 @@ impl std::error::Error for ToolRequestError {}
 mod tests {
 	use super::*;
 
-	fn config(toml: &str) -> Config {
-		toml::from_str(toml).unwrap()
-	}
-
 	#[test]
 	fn parses_latest() {
-		let config = config(
-			r#"
-			[tools]
-			"github:owner/repo" = "latest"
-			"#,
-		);
-		assert_eq!(requests(&config).unwrap(), vec![ToolRequest::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::Latest,
+		let config = ConfigFile {
+			path: PathBuf::from("outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = "latest"
+				"#,
+			)
+			.unwrap(),
+		};
+		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
+			origin: PathBuf::from("outpost.toml"),
+			request: ToolRequest::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::Latest,
+			},
 		}]);
 	}
 
 	#[test]
 	fn parses_exact() {
-		let config = config(
-			r#"
-			[tools]
-			"github:owner/repo" = "0.26.0"
-			"#,
-		);
-		assert_eq!(requests(&config).unwrap(), vec![ToolRequest::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("0.26.0"),
+		let config = ConfigFile {
+			path: PathBuf::from("outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = "0.26.0"
+				"#,
+			)
+			.unwrap(),
+		};
+		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
+			origin: PathBuf::from("outpost.toml"),
+			request: ToolRequest::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("0.26.0"),
+			},
 		}]);
 	}
 
 	#[test]
 	fn parses_lanes() {
-		let configs = [
-			r#"
-			[tools]
-			"github:owner/repo" = "cli/1.2.3"
-			"#,
-			r#"
-			[tools]
-			"github:owner/repo" = "tool-10"
-			"#,
-		];
-		let expected = [
-			ToolRequest::Github {
+		let config = ConfigFile {
+			path: PathBuf::from("outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = "cli/1.2.3"
+				"#,
+			)
+			.unwrap(),
+		};
+		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
+			origin: PathBuf::from("outpost.toml"),
+			request: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: "cli/".to_owned(),
 				version: Version::Exact("1.2.3".to_owned()),
 			},
-			ToolRequest::Github {
+		}]);
+
+		let config = ConfigFile {
+			path: PathBuf::from("outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = "tool-10"
+				"#,
+			)
+			.unwrap(),
+		};
+		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
+			origin: PathBuf::from("outpost.toml"),
+			request: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: "tool-".to_owned(),
 				version: Version::parse("10"),
 			},
-		];
-		for (toml, expected) in configs.into_iter().zip(expected) {
-			assert_eq!(requests(&config(toml)).unwrap(), vec![expected], "{toml}");
-		}
+		}]);
 	}
 
 	#[test]
 	fn parses_dotted_full_name() {
-		let config = config(
-			r#"
-			[tools]
-			"github:owner/repo.js" = "latest"
-			"#,
-		);
-		assert_eq!(requests(&config).unwrap(), vec![ToolRequest::Github {
-			full_name: "owner/repo.js".to_owned(),
-			lane: String::new(),
-			version: Version::Latest,
+		let config = ConfigFile {
+			path: PathBuf::from("outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo.js" = "latest"
+				"#,
+			)
+			.unwrap(),
+		};
+		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
+			origin: PathBuf::from("outpost.toml"),
+			request: ToolRequest::Github {
+				full_name: "owner/repo.js".to_owned(),
+				lane: String::new(),
+				version: Version::Latest,
+			},
 		}]);
 	}
 
 	#[test]
 	fn parses_table_form() {
-		let config = config(
-			r#"
-			[tools]
-			"github:owner/repo" = { version = "0.26.0" }
-			"#,
-		);
-		assert_eq!(requests(&config).unwrap(), vec![ToolRequest::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("0.26.0"),
+		let config = ConfigFile {
+			path: PathBuf::from("outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = { version = "0.26.0" }
+				"#,
+			)
+			.unwrap(),
+		};
+		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
+			origin: PathBuf::from("outpost.toml"),
+			request: ToolRequest::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("0.26.0"),
+			},
 		}]);
 	}
 
 	#[test]
+	fn keeps_requests_from_every_file() {
+		let system = ConfigFile {
+			path: PathBuf::from("system/outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = "1"
+				"#,
+			)
+			.unwrap(),
+		};
+		let project = ConfigFile {
+			path: PathBuf::from("project/outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = "2"
+				"#,
+			)
+			.unwrap(),
+		};
+		let nested = ConfigFile {
+			path: PathBuf::from("project/nested/outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = "1"
+				"#,
+			)
+			.unwrap(),
+		};
+		assert_eq!(requests(&[system, project, nested]).unwrap(), vec![
+			ToolRequestEntry {
+				origin: PathBuf::from("system/outpost.toml"),
+				request: ToolRequest::Github {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1"),
+				},
+			},
+			ToolRequestEntry {
+				origin: PathBuf::from("project/outpost.toml"),
+				request: ToolRequest::Github {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("2"),
+				},
+			},
+			// the same request from another file is still a separate entry
+			ToolRequestEntry {
+				origin: PathBuf::from("project/nested/outpost.toml"),
+				request: ToolRequest::Github {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1"),
+				},
+			},
+		]);
+	}
+
+	#[test]
 	fn rejects_unsupported_backend() {
-		let config = config(
-			r#"
-			[tools]
-			"rust" = "latest"
-			"#,
-		);
-		assert!(matches!(requests(&config), Err(ToolRequestError::UnsupportedBackend(_))));
+		let config = ConfigFile {
+			path: PathBuf::from("outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"rust" = "latest"
+				"#,
+			)
+			.unwrap(),
+		};
+		assert!(matches!(requests(&[config]), Err(ToolRequestError::UnsupportedBackend(_))));
 	}
 
 	#[test]
 	fn rejects_invalid_full_name() {
 		for key in ["github:", "github:.", "github:..", r"github:a\b"] {
-			let config = config(&format!(
-				r#"
-				[tools]
-				'{key}' = "latest"
-				"#,
-			));
+			let config = ConfigFile {
+				path: PathBuf::from("outpost.toml"),
+				config: toml::from_str(&format!(
+					r#"
+					[tools]
+					'{key}' = "latest"
+					"#,
+				))
+				.unwrap(),
+			};
 			assert!(
-				matches!(requests(&config), Err(ToolRequestError::InvalidFullName(_))),
+				matches!(requests(&[config]), Err(ToolRequestError::InvalidFullName(_))),
 				"{key} should be rejected"
 			);
 		}
@@ -183,12 +304,16 @@ mod tests {
 
 	#[test]
 	fn rejects_empty_version() {
-		let config = config(
-			r#"
-			[tools]
-			"github:owner/repo" = ""
-			"#,
-		);
-		assert!(matches!(requests(&config), Err(ToolRequestError::EmptyVersion(_))));
+		let config = ConfigFile {
+			path: PathBuf::from("outpost.toml"),
+			config: toml::from_str(
+				r#"
+				[tools]
+				"github:owner/repo" = ""
+				"#,
+			)
+			.unwrap(),
+		};
+		assert!(matches!(requests(&[config]), Err(ToolRequestError::EmptyVersion(_))));
 	}
 }
