@@ -1,8 +1,8 @@
-pub mod backend;
-pub mod config;
+mod backend;
+mod config;
 mod install;
 mod list;
-pub mod tools;
+mod tools;
 
 use clap::{Parser, Subcommand};
 

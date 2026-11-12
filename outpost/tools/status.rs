@@ -5,9 +5,9 @@ use super::lock::{Lock, LockedTool};
 use super::tool_request::{ToolRequest, ToolRequestEntry};
 use super::version::Version;
 
-pub type Identity = (&'static str, String, String, Version);
+pub(crate) type Identity = (&'static str, String, String, Version);
 
-pub fn report(requests: Vec<ToolRequestEntry>, lock: &Lock, tools_dir: &Path) -> Report {
+pub(crate) fn report(requests: Vec<ToolRequestEntry>, lock: &Lock, tools_dir: &Path) -> Report {
 	let locked_entries: HashMap<Identity, &LockedTool> = lock.tools.iter().map(|tool| (_locked_identity(tool), tool)).collect();
 	let mut requested_identities = HashSet::with_capacity(requests.len());
 	let mut requested = Vec::with_capacity(requests.len());
@@ -41,26 +41,26 @@ pub fn report(requests: Vec<ToolRequestEntry>, lock: &Lock, tools_dir: &Path) ->
 	Report { requested, unrequested }
 }
 
-pub struct Report {
-	pub requested: Vec<ToolStatus>,
-	pub unrequested: Vec<LockedTool>,
+pub(crate) struct Report {
+	pub(crate) requested: Vec<ToolStatus>,
+	pub(crate) unrequested: Vec<LockedTool>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct ToolStatus {
-	pub origin: PathBuf,
-	pub install_state: InstallState,
-	pub installed_version: Option<String>,
-	pub tool: ToolRequest,
+pub(crate) struct ToolStatus {
+	pub(crate) origin: PathBuf,
+	pub(crate) install_state: InstallState,
+	pub(crate) installed_version: Option<String>,
+	pub(crate) tool: ToolRequest,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum InstallState {
+pub(crate) enum InstallState {
 	Installed,
 	Missing,
 }
 
-pub fn unique_requests(requests: Vec<ToolRequestEntry>) -> Vec<ToolRequest> {
+pub(crate) fn unique_requests(requests: Vec<ToolRequestEntry>) -> Vec<ToolRequest> {
 	let mut seen = HashSet::with_capacity(requests.len());
 	let mut unique = Vec::with_capacity(requests.len());
 	for request in requests {
@@ -71,7 +71,7 @@ pub fn unique_requests(requests: Vec<ToolRequestEntry>) -> Vec<ToolRequest> {
 	unique
 }
 
-pub fn missing_from_lock(requests: Vec<ToolRequest>, lock: &Lock, tools_dir: &Path) -> Vec<ToolRequest> {
+pub(crate) fn missing_from_lock(requests: Vec<ToolRequest>, lock: &Lock, tools_dir: &Path) -> Vec<ToolRequest> {
 	let installed: HashSet<Identity> = lock
 		.tools
 		.iter()
@@ -93,11 +93,8 @@ fn _request_identity(request: &ToolRequest) -> Identity {
 }
 
 fn _locked_identity(tool: &LockedTool) -> Identity {
-	match tool {
-		LockedTool::Github {
-			full_name, lane, requested, ..
-		} => ("github", full_name.clone(), lane.clone(), requested.clone()),
-	}
+	let (backend, full_name, lane, requested) = tool.key();
+	(backend, full_name.to_owned(), lane.to_owned(), requested.clone())
 }
 
 fn _installed(install_path: &str, tools_dir: &Path) -> bool {

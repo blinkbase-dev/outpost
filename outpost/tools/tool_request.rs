@@ -6,7 +6,7 @@ use regex::regex;
 use super::version::{Version, split_lane};
 use crate::config::loader::{ConfigFile, ToolOptions};
 
-pub fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequestEntry>, ToolRequestError> {
+pub(crate) fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequestEntry>, ToolRequestError> {
 	let mut requests = Vec::new();
 	for file in files {
 		for (key, options) in &file.config.tools {
@@ -20,13 +20,13 @@ pub fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequestEntry>, ToolReque
 }
 
 #[derive(Debug, PartialEq)]
-pub struct ToolRequestEntry {
-	pub origin: PathBuf,
-	pub tool: ToolRequest,
+pub(crate) struct ToolRequestEntry {
+	pub(crate) origin: PathBuf,
+	pub(crate) tool: ToolRequest,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum ToolRequest {
+pub(crate) enum ToolRequest {
 	Github { full_name: String, lane: String, version: Version },
 }
 
@@ -55,7 +55,7 @@ impl ToolRequest {
 }
 
 #[derive(Debug)]
-pub enum ToolRequestError {
+pub(crate) enum ToolRequestError {
 	UnsupportedBackend(String),
 	InvalidFullName(String),
 	EmptyVersion(String),

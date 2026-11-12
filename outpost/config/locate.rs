@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub fn locate(cwd: &Path) -> Result<ConfigPaths, LocateError> {
+pub(crate) fn locate(cwd: &Path) -> Result<ConfigPaths, LocateError> {
 	locate_with(cwd, &ConfigEnv::from_process())
 }
 
@@ -74,14 +74,14 @@ impl ConfigEnv {
 }
 
 #[derive(Default)]
-pub struct ConfigPaths {
-	pub system_dir: Option<PathBuf>,
-	pub system: Vec<PathBuf>,
-	pub project: Vec<PathBuf>,
+pub(crate) struct ConfigPaths {
+	pub(crate) system_dir: Option<PathBuf>,
+	pub(crate) system: Vec<PathBuf>,
+	pub(crate) project: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
-pub enum LocateError {
+pub(crate) enum LocateError {
 	Io(std::io::Error),
 	RelativeConfigDir(PathBuf),
 }

@@ -1,5 +1,5 @@
 mod _asset_selection;
 mod _backend;
-pub mod github;
+pub(crate) mod github;
 
-pub use _backend::ArchiveFormat;
+pub(crate) use _backend::ArchiveFormat;

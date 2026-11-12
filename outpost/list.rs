@@ -5,7 +5,7 @@ use crate::tools::tool_request::{self, ToolRequest};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
-pub fn list() -> Result<(), Error> {
+pub(crate) fn list() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let configs = loader::load(&paths)?;

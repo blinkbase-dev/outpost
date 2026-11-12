@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use super::locate::ConfigPaths;
 
-pub fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
+pub(crate) fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
 	let mut files = Vec::new();
 	for path in paths.system.iter().chain(&paths.project) {
 		let content = match fs::read_to_string(path) {
@@ -20,27 +20,27 @@ pub fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
 	Ok(files)
 }
 
-pub struct ConfigFile {
-	pub path: PathBuf,
-	pub config: Config,
+pub(crate) struct ConfigFile {
+	pub(crate) path: PathBuf,
+	pub(crate) config: Config,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Config {
+pub(crate) struct Config {
 	#[serde(default)]
-	pub tools: BTreeMap<String, ToolOptions>,
+	pub(crate) tools: BTreeMap<String, ToolOptions>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(untagged)]
-pub enum ToolOptions {
+pub(crate) enum ToolOptions {
 	Version(String),
 	Table(ToolTable),
 }
 
 impl ToolOptions {
-	pub fn version(&self) -> &str {
+	pub(crate) fn version(&self) -> &str {
 		match self {
 			Self::Version(version) => version,
 			Self::Table(table) => &table.version,
@@ -50,12 +50,12 @@ impl ToolOptions {
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct ToolTable {
+pub(crate) struct ToolTable {
 	version: String,
 }
 
 #[derive(Debug)]
-pub enum LoadError {
+pub(crate) enum LoadError {
 	Io(io::Error),
 	Parse(toml::de::Error),
 }

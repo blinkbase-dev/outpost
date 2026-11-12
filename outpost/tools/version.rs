@@ -5,14 +5,14 @@ use semver::Version as Semver;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum Version {
+pub(crate) enum Version {
 	Latest,
 	Prefix(Prefix),
 	Exact(String),
 }
 
 impl Version {
-	pub fn parse(input: &str) -> Self {
+	pub(crate) fn parse(input: &str) -> Self {
 		let input = input.trim();
 		if input == "latest" {
 			Self::Latest
@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for Version {
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Prefix {
+pub(crate) struct Prefix {
 	parts: Vec<u64>,
 }
 
@@ -63,7 +63,7 @@ impl Prefix {
 		(1..=2).contains(&parts.len()).then_some(Self { parts })
 	}
 
-	pub fn matches(&self, tag: &str) -> Option<Semver> {
+	pub(crate) fn matches(&self, tag: &str) -> Option<Semver> {
 		let version = tag_version(tag)?;
 		let components = [version.major, version.minor, version.patch];
 		(self.parts[..] == components[..self.parts.len()]).then_some(version)
@@ -82,7 +82,7 @@ impl fmt::Display for Prefix {
 	}
 }
 
-pub fn split_lane(input: &str) -> (&str, &str) {
+pub(crate) fn split_lane(input: &str) -> (&str, &str) {
 	match regex!(r"^(?:(?<lane>.*?[_@/-]))?(?<version>v?[0-9].*|latest)$").captures(input) {
 		Some(captures) => {
 			let lane = captures.name("lane").map_or(0..0, |lane| lane.range());
@@ -93,7 +93,7 @@ pub fn split_lane(input: &str) -> (&str, &str) {
 	}
 }
 
-pub fn tag_version(tag: &str) -> Option<Semver> {
+pub(crate) fn tag_version(tag: &str) -> Option<Semver> {
 	let tag = tag.strip_prefix('v').unwrap_or(tag);
 	if let Ok(version) = Semver::parse(tag) {
 		return Some(version);
