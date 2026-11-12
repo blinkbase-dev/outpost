@@ -9,11 +9,10 @@ use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate};
 use crate::tools::archive::{self, ToolDownloaded, ToolResolved};
 use crate::tools::lock::{self, Lock, LockedTool};
+use crate::tools::status::{self, Identity};
 use crate::tools::tool_request::{self, ToolRequest};
-use crate::tools::version::Version;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
-type Identity = (&'static str, String, String, Version);
 
 pub fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
@@ -28,7 +27,7 @@ pub fn install() -> Result<(), Error> {
 	let _install_lock = lock::acquire(config_dir)?;
 	// skip tools already recorded in the lock
 	let mut lock = lock::read(config_dir)?;
-	let requests = missing_from_lock(&lock, requests, &tools_dir);
+	let requests = status::missing_from_lock(requests, &lock, &tools_dir);
 	if requests.is_empty() {
 		return Ok(());
 	}
@@ -107,34 +106,6 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolved, Er
 	}
 }
 
-fn missing_from_lock(lock: &Lock, requests: Vec<ToolRequest>, tools_dir: &Path) -> Vec<ToolRequest> {
-	let installed: HashSet<Identity> = lock
-		.tools
-		.iter()
-		.filter_map(|entry| match entry {
-			LockedTool::Github {
-				full_name,
-				lane,
-				requested,
-				install_path,
-				..
-			} => {
-				if tools_dir.join(install_path).exists() {
-					Some(("github", full_name.clone(), lane.clone(), requested.clone()))
-				} else {
-					None
-				}
-			}
-		})
-		.collect();
-	requests
-		.into_iter()
-		.filter(|request| match request {
-			ToolRequest::Github { full_name, lane, version } => !installed.contains(&("github", full_name.clone(), lane.clone(), version.clone())),
-		})
-		.collect()
-}
-
 fn update_lock(lock: &mut Lock, installed: &[(ToolDownloaded, PathBuf)], tools_dir: &Path) -> Result<(), Error> {
 	// identities of the tools being installed
 	let incoming: HashSet<Identity> = installed
@@ -177,109 +148,6 @@ mod tests {
 	use super::*;
 	use crate::backend::ArchiveFormat;
 	use crate::tools::version::Version;
-
-	#[test]
-	fn treats_tool_with_existing_directory_as_installed() {
-		let dir = tempfile::tempdir().unwrap();
-		let tools = dir.path().join("tools");
-		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
-		let lock = Lock {
-			version: 1,
-			tools: vec![LockedTool::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.2.3"),
-				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
-			}],
-		};
-		let requests = vec![ToolRequest::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1.2.3"),
-		}];
-		assert!(missing_from_lock(&lock, requests, &tools).is_empty());
-	}
-
-	#[test]
-	fn treats_tool_with_missing_directory_as_not_installed() {
-		let dir = tempfile::tempdir().unwrap();
-		let tools = dir.path().join("tools");
-		let lock = Lock {
-			version: 1,
-			tools: vec![LockedTool::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.2.3"),
-				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
-			}],
-		};
-		let requests = vec![ToolRequest::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1.2.3"),
-		}];
-		assert_eq!(missing_from_lock(&lock, requests, &tools).len(), 1);
-	}
-
-	#[test]
-	fn treats_different_request_as_not_installed() {
-		let dir = tempfile::tempdir().unwrap();
-		let tools = dir.path().join("tools");
-		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
-		let lock = Lock {
-			version: 1,
-			tools: vec![LockedTool::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.2.3"),
-				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
-			}],
-		};
-		let other_lane = ToolRequest::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: "cli/".to_owned(),
-			version: Version::parse("1.2.3"),
-		};
-		let other_version = ToolRequest::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("2.0.0"),
-		};
-		assert_eq!(missing_from_lock(&lock, vec![other_lane, other_version], &tools).len(), 2);
-	}
-
-	#[test]
-	fn treats_mixed_batch_as_partially_missing() {
-		let dir = tempfile::tempdir().unwrap();
-		let tools = dir.path().join("tools");
-		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
-		let lock = Lock {
-			version: 1,
-			tools: vec![LockedTool::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.2.3"),
-				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
-			}],
-		};
-		let installed = ToolRequest::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1.2.3"),
-		};
-		let missing = ToolRequest::Github {
-			full_name: "owner/other".to_owned(),
-			lane: String::new(),
-			version: Version::parse("2.0.0"),
-		};
-		let requests = missing_from_lock(&lock, vec![installed, missing], &tools);
-		assert_eq!(requests.len(), 1);
-		assert!(matches!(&requests[0], ToolRequest::Github { full_name, .. } if full_name == "owner/other"));
-	}
 
 	#[test]
 	fn locks_installed_tools() {
