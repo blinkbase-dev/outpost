@@ -2,10 +2,15 @@
 name = "outpost"
 version = "0.0.0"
 edition = "2024"
+autotests = false
 
 [[bin]]
 name = "op"
 path = "main.rs"
+
+[[test]]
+name = "list"
+path = "_tests/list.rs"
 
 [dependencies]
 clap.workspace = true
