@@ -176,6 +176,7 @@ fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Er
 	Ok(())
 }
 
+#[derive(Clone)]
 pub(crate) enum ToolResolved {
 	Github {
 		request: GithubRequest,
@@ -197,18 +198,18 @@ pub(crate) enum ToolDownloaded {
 	},
 }
 
-#[derive(Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ArtifactKey(String);
 
 impl ArtifactKey {
 	pub(crate) fn new(request: &ToolRequest, version: &str) -> Self {
 		match request {
 			ToolRequest::Github(request) => {
-				let tag = version.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(version);
+				let tag = version.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(version).to_lowercase();
 				Self(format!(
 					"github_{}/{}",
 					request.full_name.to_lowercase().replace(['.', '/', '-'], "_"),
-					regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_")
+					regex!(r"[^a-z0-9_.]").replace_all(&tag, "_")
 				))
 			}
 		}
