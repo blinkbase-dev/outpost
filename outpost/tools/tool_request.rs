@@ -30,7 +30,7 @@ pub(crate) enum ToolRequest {
 	Github(GithubRequest),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct GithubRequest {
 	pub full_name: String,
 	pub lane: String,

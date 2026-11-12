@@ -7,7 +7,7 @@ use tokio::sync::Semaphore;
 
 use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate};
-use crate::tools::archive::{self, ToolDownloaded, ToolResolved};
+use crate::tools::archive::{self, ArtifactKey, ToolDownloaded, ToolResolved};
 use crate::tools::lock::{self, Lock, LockedTool};
 use crate::tools::status::{self, Identity};
 use crate::tools::tool_request::{self, GithubRequest, ToolRequest};
@@ -100,6 +100,7 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolved, Er
 					lane: lane.clone(),
 					version: version.clone(),
 				},
+				artifact_key: ArtifactKey::new(request, &release.tag_name),
 				tag_name: release.tag_name,
 				url,
 				size,
@@ -148,15 +149,20 @@ mod tests {
 	fn locks_installed_tools() {
 		let tools = PathBuf::from("tools");
 		let installed = vec![(
-			ToolDownloaded::Github {
-				request: GithubRequest {
+			{
+				let request = GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
-				},
-				tag_name: "v1.2.3".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.2.3");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.2.3".to_owned(),
+					path: PathBuf::from("tool.tar.gz"),
+					format: ArchiveFormat::TarGz,
+				}
 			},
 			tools.join("github_owner_repo").join("1.2.3"),
 		)];
@@ -183,15 +189,20 @@ mod tests {
 			install_path: "github_owner_repo/1.0.0".to_owned(),
 		});
 		let installed = vec![(
-			ToolDownloaded::Github {
-				request: GithubRequest {
+			{
+				let request = GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("latest"),
-				},
-				tag_name: "v2.0.0".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v2.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v2.0.0".to_owned(),
+					path: PathBuf::from("tool.tar.gz"),
+					format: ArchiveFormat::TarGz,
+				}
 			},
 			tools.join("github_owner_repo/2.0.0"),
 		)];
@@ -217,15 +228,20 @@ mod tests {
 			install_path: "github_owner_repo/cli_v1.0.0".to_owned(),
 		});
 		let installed = vec![(
-			ToolDownloaded::Github {
-				request: GithubRequest {
+			{
+				let request = GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
-				},
-				tag_name: "v1.0.0".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					path: PathBuf::from("tool.tar.gz"),
+					format: ArchiveFormat::TarGz,
+				}
 			},
 			tools.join("github_owner_repo/1.0.0"),
 		)];
@@ -263,15 +279,20 @@ mod tests {
 			tools: vec![other.clone()],
 		};
 		let installed = vec![(
-			ToolDownloaded::Github {
-				request: GithubRequest {
+			{
+				let request = GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
-				},
-				tag_name: "v1.0.0".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					path: PathBuf::from("tool.tar.gz"),
+					format: ArchiveFormat::TarGz,
+				}
 			},
 			tools.join("github_owner_repo/1.0.0"),
 		)];
@@ -288,15 +309,20 @@ mod tests {
 	#[test]
 	fn rejects_paths_outside_tools() {
 		let installed = vec![(
-			ToolDownloaded::Github {
-				request: GithubRequest {
+			{
+				let request = GithubRequest {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
-				},
-				tag_name: "v1.0.0".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					path: PathBuf::from("tool.tar.gz"),
+					format: ArchiveFormat::TarGz,
+				}
 			},
 			PathBuf::from("elsewhere/owner_repo/1.0.0"),
 		)];
