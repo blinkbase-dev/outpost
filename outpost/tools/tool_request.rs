@@ -1,5 +1,5 @@
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use regex::regex;
 
@@ -13,7 +13,7 @@ pub(crate) fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequestEntry>, To
 		for (key, options) in &file.config.tools {
 			requests.push(ToolRequestEntry {
 				origin: file.path.clone(),
-				tool: ToolRequest::parse(key, options)?,
+				tool: ToolRequest::parse(&file.path, key, options)?,
 			});
 		}
 	}
@@ -45,16 +45,25 @@ impl ToolRequest {
 		}
 	}
 
-	fn parse(key: &str, options: &ToolOptions) -> Result<Self, ToolRequestError> {
-		let (backend, full_name) = key.split_once(':').ok_or_else(|| ToolRequestError::UnsupportedBackend(key.to_owned()))?;
+	fn parse(path: &Path, key: &str, options: &ToolOptions) -> Result<Self, ToolRequestError> {
+		let (backend, full_name) = key.split_once(':').ok_or_else(|| ToolRequestError::UnsupportedBackend {
+			path: path.to_path_buf(),
+			key: key.to_owned(),
+		})?;
 		match backend {
 			"github" => {
 				if regex!(r"^(?:\.{1,2})?$|[^a-zA-Z0-9_./-]").is_match(full_name) {
-					return Err(ToolRequestError::InvalidFullName(key.to_owned()));
+					return Err(ToolRequestError::InvalidFullName {
+						path: path.to_path_buf(),
+						key: key.to_owned(),
+					});
 				}
 				let version = options.version().trim();
 				if version.is_empty() {
-					return Err(ToolRequestError::EmptyVersion(key.to_owned()));
+					return Err(ToolRequestError::EmptyVersion {
+						path: path.to_path_buf(),
+						key: key.to_owned(),
+					});
 				}
 				let (lane, value) = split_lane(version);
 				Ok(Self::Github(GithubRequest {
@@ -63,24 +72,27 @@ impl ToolRequest {
 					version: Version::parse(value),
 				}))
 			}
-			_ => Err(ToolRequestError::UnsupportedBackend(key.to_owned())),
+			_ => Err(ToolRequestError::UnsupportedBackend {
+				path: path.to_path_buf(),
+				key: key.to_owned(),
+			}),
 		}
 	}
 }
 
 #[derive(Debug)]
 pub(crate) enum ToolRequestError {
-	UnsupportedBackend(String),
-	InvalidFullName(String),
-	EmptyVersion(String),
+	UnsupportedBackend { path: PathBuf, key: String },
+	InvalidFullName { path: PathBuf, key: String },
+	EmptyVersion { path: PathBuf, key: String },
 }
 
 impl fmt::Display for ToolRequestError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::UnsupportedBackend(key) => write!(f, "unsupported backend in `{key}`"),
-			Self::InvalidFullName(key) => write!(f, "invalid full name in `{key}`"),
-			Self::EmptyVersion(key) => write!(f, "missing version for `{key}`"),
+			Self::UnsupportedBackend { path, key } => write!(f, "unsupported backend in `{key}` from `{}`", path.display()),
+			Self::InvalidFullName { path, key } => write!(f, "invalid full name in `{key}` from `{}`", path.display()),
+			Self::EmptyVersion { path, key } => write!(f, "missing version for `{key}` from `{}`", path.display()),
 		}
 	}
 }
@@ -293,7 +305,9 @@ mod tests {
 			)
 			.unwrap(),
 		};
-		assert!(matches!(requests(&[config]), Err(ToolRequestError::UnsupportedBackend(_))));
+		let error = requests(&[config]).unwrap_err();
+		assert!(matches!(&error, ToolRequestError::UnsupportedBackend { .. }));
+		assert!(error.to_string().contains("outpost.toml"));
 	}
 
 	#[test]
@@ -310,7 +324,7 @@ mod tests {
 				.unwrap(),
 			};
 			assert!(
-				matches!(requests(&[config]), Err(ToolRequestError::InvalidFullName(_))),
+				matches!(requests(&[config]), Err(ToolRequestError::InvalidFullName { .. })),
 				"{key} should be rejected"
 			);
 		}
@@ -328,6 +342,6 @@ mod tests {
 			)
 			.unwrap(),
 		};
-		assert!(matches!(requests(&[config]), Err(ToolRequestError::EmptyVersion(_))));
+		assert!(matches!(requests(&[config]), Err(ToolRequestError::EmptyVersion { .. })));
 	}
 }

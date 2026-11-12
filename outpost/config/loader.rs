@@ -12,9 +12,9 @@ pub(crate) fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
 		let content = match fs::read_to_string(path) {
 			Ok(content) => content,
 			Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
-			Err(source) => return Err(source.into()),
+			Err(source) => return Err(LoadError::Io { path: path.clone(), source }),
 		};
-		let config = toml::from_str(&content)?;
+		let config = toml::from_str(&content).map_err(|source| LoadError::Parse { path: path.clone(), source })?;
 		files.push(ConfigFile { path: path.clone(), config });
 	}
 	Ok(files)
@@ -56,27 +56,15 @@ pub(crate) struct ToolTable {
 
 #[derive(Debug)]
 pub(crate) enum LoadError {
-	Io(io::Error),
-	Parse(toml::de::Error),
-}
-
-impl From<io::Error> for LoadError {
-	fn from(error: io::Error) -> Self {
-		Self::Io(error)
-	}
-}
-
-impl From<toml::de::Error> for LoadError {
-	fn from(error: toml::de::Error) -> Self {
-		Self::Parse(error)
-	}
+	Io { path: PathBuf, source: io::Error },
+	Parse { path: PathBuf, source: toml::de::Error },
 }
 
 impl fmt::Display for LoadError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::Io(error) => write!(f, "{error}"),
-			Self::Parse(error) => write!(f, "{error}"),
+			Self::Io { path, source } => write!(f, "failed to read `{}`: {source}", path.display()),
+			Self::Parse { path, source } => write!(f, "failed to parse `{}`: {source}", path.display()),
 		}
 	}
 }
@@ -84,8 +72,8 @@ impl fmt::Display for LoadError {
 impl std::error::Error for LoadError {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		match self {
-			Self::Io(error) => Some(error),
-			Self::Parse(error) => Some(error),
+			Self::Io { source, .. } => Some(source),
+			Self::Parse { source, .. } => Some(source),
 		}
 	}
 }
@@ -243,10 +231,12 @@ mod tests {
 		let path = tmp.path().join("outpost.toml");
 		fs::write(&path, "[tools\n").unwrap();
 		let result = load(&ConfigPaths {
-			system: vec![path],
+			system: vec![path.clone()],
 			project: vec![],
 			..ConfigPaths::default()
 		});
-		assert!(matches!(result, Err(LoadError::Parse(_))));
+		let error = result.err().expect("expected a parse error");
+		assert!(matches!(&error, LoadError::Parse { .. }));
+		assert!(error.to_string().contains(&path.display().to_string()));
 	}
 }
