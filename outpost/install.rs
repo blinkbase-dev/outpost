@@ -40,7 +40,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	drop(runtime);
 	let (installed, extract_failed) = archive::extract_parallel(downloaded, &tools_dir)?;
 	// expand each installed artifact back to every request that resolved to it
-	_update_lock_entries(&mut lock, &resolved, &installed)?;
+	_update_lock_entries(&mut lock, resolved, &installed)?;
 	lock::write(config_dir, &lock)?;
 	for tool in &installed {
 		match tool {
@@ -123,11 +123,11 @@ fn _collapse_by_artifact_key(resolved: &[ToolResolved]) -> Vec<ToolResolved> {
 		.collect()
 }
 
-fn _update_lock_entries(lock: &mut Lock, resolved: &[ToolResolved], installed: &[ToolDownloaded]) -> Result<(), Error> {
+fn _update_lock_entries(lock: &mut Lock, resolved: Vec<ToolResolved>, installed: &[ToolDownloaded]) -> Result<(), Error> {
 	let installed_by_key: HashMap<_, _> = installed
 		.iter()
 		.map(|tool| match tool {
-			ToolDownloaded::Github { artifact_key, tag_name, .. } => (artifact_key.clone(), tag_name.clone()),
+			ToolDownloaded::Github { artifact_key, tag_name, .. } => (artifact_key, tag_name.as_str()),
 		})
 		.collect();
 	let mut rows = Vec::with_capacity(resolved.len());
@@ -139,17 +139,17 @@ fn _update_lock_entries(lock: &mut Lock, resolved: &[ToolResolved], installed: &
 				tag_name,
 				..
 			} => {
-				let Some(installed_tag) = installed_by_key.get(artifact_key) else {
+				let Some(&installed_tag) = installed_by_key.get(&artifact_key) else {
 					continue;
 				};
-				if installed_tag != tag_name {
+				if installed_tag != tag_name.as_str() {
 					return Err(format!("artifact collision: `{tag_name}` and `{installed_tag}` share `{}`", artifact_key.as_str()).into());
 				}
 				rows.push(LockedTool::Github {
-					full_name: request.full_name.clone(),
-					lane: request.lane.clone(),
-					requested: request.version.clone(),
-					tag_name: installed_tag.clone(),
+					full_name: request.full_name,
+					lane: request.lane,
+					requested: request.version,
+					tag_name: installed_tag.to_owned(),
 					install_path: artifact_key.as_str().to_owned(),
 				});
 			}
@@ -195,7 +195,7 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		}];
 		let mut lock = Lock::default();
-		_update_lock_entries(&mut lock, &resolved, &installed).unwrap();
+		_update_lock_entries(&mut lock, resolved, &installed).unwrap();
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -236,7 +236,7 @@ mod tests {
 			path: PathBuf::from("tool.tar.gz"),
 			format: ArchiveFormat::TarGz,
 		}];
-		_update_lock_entries(&mut lock, &resolved, &installed).unwrap();
+		_update_lock_entries(&mut lock, resolved, &installed).unwrap();
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -277,7 +277,7 @@ mod tests {
 			path: PathBuf::from("tool.tar.gz"),
 			format: ArchiveFormat::TarGz,
 		}];
-		_update_lock_entries(&mut lock, &resolved, &installed).unwrap();
+		_update_lock_entries(&mut lock, resolved, &installed).unwrap();
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
@@ -330,7 +330,7 @@ mod tests {
 			path: PathBuf::from("tool.tar.gz"),
 			format: ArchiveFormat::TarGz,
 		}];
-		_update_lock_entries(&mut lock, &resolved, &installed).unwrap();
+		_update_lock_entries(&mut lock, resolved, &installed).unwrap();
 		assert_eq!(lock.tools, vec![other, LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
