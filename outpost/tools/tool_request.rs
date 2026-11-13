@@ -67,7 +67,7 @@ impl ToolRequest {
 				}
 				let (lane, value) = split_lane(version);
 				Ok(Self::Github(GithubRequest {
-					full_name: full_name.to_owned(),
+					full_name: full_name.to_ascii_lowercase(),
 					lane: lane.to_owned(),
 					version: Version::parse(value),
 				}))
