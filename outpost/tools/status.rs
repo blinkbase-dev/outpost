@@ -76,7 +76,6 @@ fn _installed(install_path: &str, tools_dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::tools::tool_request::GithubRequest;
 	use crate::tools::version::Version;
 
 	#[test]
@@ -97,19 +96,19 @@ mod tests {
 		let requests = vec![
 			ToolRequestEntry {
 				origin: PathBuf::from("outpost.toml"),
-				tool: ToolRequest::Github(GithubRequest {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				}),
+				},
 			},
 			ToolRequestEntry {
 				origin: PathBuf::from("outpost.toml"),
-				tool: ToolRequest::Github(GithubRequest {
+				tool: ToolRequest::Github {
 					full_name: "owner/other".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
-				}),
+				},
 			},
 		];
 		let report = report(requests, &lock, &tools);
@@ -118,21 +117,21 @@ mod tests {
 				origin: PathBuf::from("outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: ToolRequest::Github(GithubRequest {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				}),
+				},
 			},
 			ToolStatus {
 				origin: PathBuf::from("outpost.toml"),
 				install_state: InstallState::Missing,
 				installed_version: None,
-				tool: ToolRequest::Github(GithubRequest {
+				tool: ToolRequest::Github {
 					full_name: "owner/other".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
-				}),
+				},
 			},
 		]);
 		assert!(report.unrequested.is_empty());
@@ -155,22 +154,22 @@ mod tests {
 		};
 		let requests = vec![ToolRequestEntry {
 			origin: PathBuf::from("outpost.toml"),
-			tool: ToolRequest::Github(GithubRequest {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
-			}),
+			},
 		}];
 		let report = report(requests, &lock, &tools);
 		assert_eq!(report.requested, vec![ToolStatus {
 			origin: PathBuf::from("outpost.toml"),
 			install_state: InstallState::Missing,
 			installed_version: Some("v1.2.3".to_owned()),
-			tool: ToolRequest::Github(GithubRequest {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
-			}),
+			},
 		}]);
 		assert!(report.unrequested.is_empty());
 	}
@@ -212,19 +211,19 @@ mod tests {
 		let requests = vec![
 			ToolRequestEntry {
 				origin: PathBuf::from("system/outpost.toml"),
-				tool: ToolRequest::Github(GithubRequest {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				}),
+				},
 			},
 			ToolRequestEntry {
 				origin: PathBuf::from("project/outpost.toml"),
-				tool: ToolRequest::Github(GithubRequest {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				}),
+				},
 			},
 		];
 		let report = report(requests, &lock, &tools);
@@ -233,21 +232,21 @@ mod tests {
 				origin: PathBuf::from("system/outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: ToolRequest::Github(GithubRequest {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				}),
+				},
 			},
 			ToolStatus {
 				origin: PathBuf::from("project/outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: ToolRequest::Github(GithubRequest {
+				tool: ToolRequest::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
-				}),
+				},
 			},
 		]);
 	}
@@ -269,11 +268,11 @@ mod tests {
 		};
 		let requests = ToolRequestGroup::from_entries(vec![ToolRequestEntry {
 			origin: PathBuf::new(),
-			tool: ToolRequest::Github(GithubRequest {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
-			}),
+			},
 		}]);
 		assert!(missing_from_lock(requests, &lock, &tools).is_empty());
 	}
@@ -294,11 +293,11 @@ mod tests {
 		};
 		let requests = ToolRequestGroup::from_entries(vec![ToolRequestEntry {
 			origin: PathBuf::new(),
-			tool: ToolRequest::Github(GithubRequest {
+			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
-			}),
+			},
 		}]);
 		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 1);
 	}
@@ -318,16 +317,16 @@ mod tests {
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
 		};
-		let other_lane = ToolRequest::Github(GithubRequest {
+		let other_lane = ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			version: Version::parse("1.2.3"),
-		});
-		let other_version = ToolRequest::Github(GithubRequest {
+		};
+		let other_version = ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
-		});
+		};
 		let requests = ToolRequestGroup::from_entries(vec![
 			ToolRequestEntry {
 				origin: PathBuf::new(),
@@ -356,16 +355,16 @@ mod tests {
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
 		};
-		let installed = ToolRequest::Github(GithubRequest {
+		let installed = ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
-		});
-		let missing = ToolRequest::Github(GithubRequest {
+		};
+		let missing = ToolRequest::Github {
 			full_name: "owner/other".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
-		});
+		};
 		let requests = missing_from_lock(
 			ToolRequestGroup::from_entries(vec![
 				ToolRequestEntry {
@@ -381,6 +380,6 @@ mod tests {
 			&tools,
 		);
 		assert_eq!(requests.len(), 1);
-		assert!(matches!(&requests[0].tool, ToolRequest::Github(GithubRequest { full_name, .. }) if full_name == "owner/other"));
+		assert!(matches!(&requests[0].tool, ToolRequest::Github { full_name, .. } if full_name == "owner/other"));
 	}
 }
