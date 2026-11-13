@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -35,17 +34,22 @@ pub(crate) fn install() -> Result<(), Error> {
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
 	let (resolved, resolve_failed) = runtime.block_on(resolve_parallel(http.clone(), requests))?;
-	// download each artifact once, keeping the full resolved list for the lock
-	let artifacts = _collapse_by_artifact_key(&resolved);
+	// download each artifact once, keeping duplicate requests for the lock
+	let (artifacts, duplicates) = _partition_by_artifact_key(resolved)?;
 	let (downloaded, download_failed) = runtime.block_on(archive::download_parallel(http, artifacts, downloads_dir))?;
 	drop(runtime);
-	let (installed, extract_failed) = archive::extract_parallel(downloaded, tools_dir.clone())?;
-	// expand each installed artifact back to every request that resolved to it
-	_update_lock_entries(&mut lock, &resolved, &installed, &tools_dir)?;
+	let (installed, extract_failed) = archive::extract_parallel(downloaded, &tools_dir)?;
+	let installed_count = _update_lock_entries(&mut lock, installed, duplicates);
 	lock::write(config_dir, &lock)?;
-	for (tool, dir) in &installed {
+	// representative rows are appended after duplicate rows
+	for tool in &lock.tools[lock.tools.len() - installed_count..] {
 		match tool {
-			ToolDownloaded::Github { request, tag_name, .. } => println!("{} {tag_name} {}", request.full_name, dir.display()),
+			LockedTool::Github {
+				full_name,
+				tag_name,
+				install_path,
+				..
+			} => println!("{full_name} {tag_name} {}", tools_dir.join(install_path).display()),
 		}
 	}
 	let failed = resolve_failed + download_failed + extract_failed;
@@ -108,46 +112,72 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolved, Er
 	}
 }
 
-fn _collapse_by_artifact_key(resolved: &[ToolResolved]) -> Vec<ToolResolved> {
-	let mut seen = HashSet::new();
-	resolved
-		.iter()
-		.filter(|resolved| match *resolved {
-			ToolResolved::Github { artifact_key, .. } => seen.insert(artifact_key.clone()),
-		})
-		.cloned()
-		.collect()
+fn _partition_by_artifact_key(resolved: Vec<ToolResolved>) -> Result<(Vec<ToolResolved>, Vec<ToolResolved>), Error> {
+	let mut artifacts = Vec::new();
+	let mut duplicates = Vec::new();
+	let mut index_by_key = HashMap::new();
+	for resolved in resolved {
+		match &resolved {
+			ToolResolved::Github { artifact_key, tag_name, .. } => {
+				if let Some(&index) = index_by_key.get(artifact_key) {
+					match &artifacts[index] {
+						ToolResolved::Github { tag_name: installed_tag, .. } => {
+							if installed_tag != tag_name {
+								return Err(format!("artifact collision: `{tag_name}` and `{installed_tag}` share `{}`", artifact_key.as_str()).into());
+							}
+						}
+					}
+					duplicates.push(resolved);
+				} else {
+					// point the key at the representative's index
+					index_by_key.insert(artifact_key.clone(), artifacts.len());
+					artifacts.push(resolved);
+				}
+			}
+		}
+	}
+	Ok((artifacts, duplicates))
 }
 
-fn _update_lock_entries(lock: &mut Lock, resolved: &[ToolResolved], installed: &[(ToolDownloaded, PathBuf)], tools_dir: &Path) -> Result<(), Error> {
+fn _update_lock_entries(lock: &mut Lock, installed: Vec<ToolDownloaded>, duplicates: Vec<ToolResolved>) -> usize {
+	let installed_count = installed.len();
+	let mut rows = Vec::with_capacity(installed_count + duplicates.len());
 	let installed_by_key: HashMap<_, _> = installed
 		.iter()
-		.map(|(tool, dir)| match tool {
-			ToolDownloaded::Github { artifact_key, tag_name, .. } => (artifact_key.clone(), (tag_name.clone(), dir.clone())),
+		.map(|tool| match tool {
+			ToolDownloaded::Github { artifact_key, tag_name, .. } => (artifact_key, tag_name.as_str()),
 		})
 		.collect();
-	let mut rows = Vec::with_capacity(resolved.len());
-	for resolved in resolved {
-		match resolved {
-			ToolResolved::Github {
+	for duplicate in duplicates {
+		match duplicate {
+			ToolResolved::Github { request, artifact_key, .. } => {
+				let Some(&installed_tag) = installed_by_key.get(&artifact_key) else {
+					continue;
+				};
+				rows.push(LockedTool::Github {
+					full_name: request.full_name,
+					lane: request.lane,
+					requested: request.version,
+					tag_name: installed_tag.to_owned(),
+					install_path: artifact_key.as_str().to_owned(),
+				});
+			}
+		}
+	}
+	for tool in installed {
+		match tool {
+			ToolDownloaded::Github {
 				request,
 				artifact_key,
 				tag_name,
 				..
 			} => {
-				let Some((installed_tag, dir)) = installed_by_key.get(artifact_key) else {
-					continue;
-				};
-				if installed_tag != tag_name {
-					return Err(format!("artifact collision: `{tag_name}` and `{installed_tag}` share `{}`", artifact_key.as_str()).into());
-				}
-				let install_path = dir.strip_prefix(tools_dir)?.to_string_lossy().replace('\\', "/");
 				rows.push(LockedTool::Github {
-					full_name: request.full_name.clone(),
-					lane: request.lane.clone(),
-					requested: request.version.clone(),
-					tag_name: installed_tag.clone(),
-					install_path,
+					full_name: request.full_name,
+					lane: request.lane,
+					requested: request.version,
+					tag_name,
+					install_path: artifact_key.as_str().to_owned(),
 				});
 			}
 		}
@@ -157,44 +187,108 @@ fn _update_lock_entries(lock: &mut Lock, resolved: &[ToolResolved], installed: &
 	// drop entries replaced by a new install before appending
 	lock.tools.retain(|existing| !incoming.contains(&existing.identity()));
 	lock.tools.extend(rows);
-	Ok(())
+	installed_count
+}
+
+#[cfg(test)]
+mod partition_tests {
+	use super::*;
+	use crate::backend::ArchiveFormat;
+	use crate::tools::version::Version;
+
+	#[test]
+	fn partitions_duplicate_requests() {
+		let latest = GithubRequest {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			version: Version::parse("latest"),
+		};
+		let exact = GithubRequest {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			version: Version::parse("1.0.0"),
+		};
+		let artifact_key = ArtifactKey::new(&ToolRequest::Github(latest.clone()), "v1.0.0");
+		let resolved = vec![
+			ToolResolved::Github {
+				request: latest,
+				artifact_key: artifact_key.clone(),
+				tag_name: "v1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+			},
+			ToolResolved::Github {
+				request: exact,
+				artifact_key,
+				tag_name: "v1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+			},
+		];
+		let (artifacts, duplicates) = _partition_by_artifact_key(resolved).unwrap();
+		assert_eq!(artifacts.len(), 1);
+		assert_eq!(duplicates.len(), 1);
+	}
+
+	#[test]
+	fn rejects_artifact_collisions() {
+		let request = GithubRequest {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			version: Version::parse("1.0.0"),
+		};
+		let tagged = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+		let plain = ArtifactKey::new(&ToolRequest::Github(request.clone()), "1.0.0");
+		let resolved = vec![
+			ToolResolved::Github {
+				request: request.clone(),
+				artifact_key: tagged,
+				tag_name: "v1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+			},
+			ToolResolved::Github {
+				request,
+				artifact_key: plain,
+				tag_name: "1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+			},
+		];
+		assert!(_partition_by_artifact_key(resolved).is_err());
+	}
 }
 
 #[cfg(test)]
 mod tests {
+	use std::path::PathBuf;
+
 	use super::*;
 	use crate::backend::ArchiveFormat;
 	use crate::tools::version::Version;
 
 	#[test]
 	fn locks_installed_tools() {
-		let tools = PathBuf::from("tools");
 		let request = GithubRequest {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.0.0"),
 		};
 		let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.2.3");
-		let resolved = vec![ToolResolved::Github {
-			request: request.clone(),
-			artifact_key: artifact_key.clone(),
+		let installed = vec![ToolDownloaded::Github {
+			request,
+			artifact_key,
 			tag_name: "v1.2.3".to_owned(),
-			url: String::new(),
-			size: 0,
+			path: PathBuf::from("tool.tar.gz"),
 			format: ArchiveFormat::TarGz,
 		}];
-		let installed = vec![(
-			ToolDownloaded::Github {
-				request,
-				artifact_key,
-				tag_name: "v1.2.3".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
-			},
-			tools.join("github_owner_repo").join("1.2.3"),
-		)];
 		let mut lock = Lock::default();
-		_update_lock_entries(&mut lock, &resolved, &installed, &tools).unwrap();
+		let installed_count = _update_lock_entries(&mut lock, installed, vec![]);
+		assert_eq!(installed_count, 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -206,7 +300,6 @@ mod tests {
 
 	#[test]
 	fn locks_newer_tag_replacing_older() {
-		let tools = PathBuf::from("tools");
 		let mut lock = Lock::default();
 		lock.tools.push(LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
@@ -221,25 +314,15 @@ mod tests {
 			version: Version::parse("latest"),
 		};
 		let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v2.0.0");
-		let resolved = vec![ToolResolved::Github {
-			request: request.clone(),
-			artifact_key: artifact_key.clone(),
+		let installed = vec![ToolDownloaded::Github {
+			request,
+			artifact_key,
 			tag_name: "v2.0.0".to_owned(),
-			url: String::new(),
-			size: 0,
+			path: PathBuf::from("tool.tar.gz"),
 			format: ArchiveFormat::TarGz,
 		}];
-		let installed = vec![(
-			ToolDownloaded::Github {
-				request,
-				artifact_key,
-				tag_name: "v2.0.0".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
-			},
-			tools.join("github_owner_repo/2.0.0"),
-		)];
-		_update_lock_entries(&mut lock, &resolved, &installed, &tools).unwrap();
+		let installed_count = _update_lock_entries(&mut lock, installed, vec![]);
+		assert_eq!(installed_count, 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -251,7 +334,6 @@ mod tests {
 
 	#[test]
 	fn locks_requests_separately() {
-		let tools = PathBuf::from("tools");
 		let mut lock = Lock::default();
 		lock.tools.push(LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
@@ -266,25 +348,15 @@ mod tests {
 			version: Version::parse("1.0.0"),
 		};
 		let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
-		let resolved = vec![ToolResolved::Github {
-			request: request.clone(),
-			artifact_key: artifact_key.clone(),
+		let installed = vec![ToolDownloaded::Github {
+			request,
+			artifact_key,
 			tag_name: "v1.0.0".to_owned(),
-			url: String::new(),
-			size: 0,
+			path: PathBuf::from("tool.tar.gz"),
 			format: ArchiveFormat::TarGz,
 		}];
-		let installed = vec![(
-			ToolDownloaded::Github {
-				request,
-				artifact_key,
-				tag_name: "v1.0.0".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
-			},
-			tools.join("github_owner_repo/1.0.0"),
-		)];
-		_update_lock_entries(&mut lock, &resolved, &installed, &tools).unwrap();
+		let installed_count = _update_lock_entries(&mut lock, installed, vec![]);
+		assert_eq!(installed_count, 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
@@ -305,7 +377,6 @@ mod tests {
 
 	#[test]
 	fn locks_unrelated_tools() {
-		let tools = PathBuf::from("tools");
 		let other = LockedTool::Github {
 			full_name: "other/repo".to_owned(),
 			lane: String::new(),
@@ -323,25 +394,15 @@ mod tests {
 			version: Version::parse("1.0.0"),
 		};
 		let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
-		let resolved = vec![ToolResolved::Github {
-			request: request.clone(),
-			artifact_key: artifact_key.clone(),
+		let installed = vec![ToolDownloaded::Github {
+			request,
+			artifact_key,
 			tag_name: "v1.0.0".to_owned(),
-			url: String::new(),
-			size: 0,
+			path: PathBuf::from("tool.tar.gz"),
 			format: ArchiveFormat::TarGz,
 		}];
-		let installed = vec![(
-			ToolDownloaded::Github {
-				request,
-				artifact_key,
-				tag_name: "v1.0.0".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
-			},
-			tools.join("github_owner_repo/1.0.0"),
-		)];
-		_update_lock_entries(&mut lock, &resolved, &installed, &tools).unwrap();
+		let installed_count = _update_lock_entries(&mut lock, installed, vec![]);
+		assert_eq!(installed_count, 1);
 		assert_eq!(lock.tools, vec![other, LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -352,31 +413,51 @@ mod tests {
 	}
 
 	#[test]
-	fn rejects_paths_outside_tools() {
-		let request = GithubRequest {
+	fn locks_duplicate_requests() {
+		let latest = GithubRequest {
+			full_name: "owner/repo".to_owned(),
+			lane: String::new(),
+			version: Version::parse("latest"),
+		};
+		let exact = GithubRequest {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.0.0"),
 		};
-		let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
-		let resolved = vec![ToolResolved::Github {
-			request: request.clone(),
+		let artifact_key = ArtifactKey::new(&ToolRequest::Github(latest.clone()), "v1.0.0");
+		let installed = vec![ToolDownloaded::Github {
+			request: latest,
 			artifact_key: artifact_key.clone(),
+			tag_name: "v1.0.0".to_owned(),
+			path: PathBuf::from("tool.tar.gz"),
+			format: ArchiveFormat::TarGz,
+		}];
+		let duplicates = vec![ToolResolved::Github {
+			request: exact,
+			artifact_key,
 			tag_name: "v1.0.0".to_owned(),
 			url: String::new(),
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		}];
-		let installed = vec![(
-			ToolDownloaded::Github {
-				request,
-				artifact_key,
+		let mut lock = Lock::default();
+		let installed_count = _update_lock_entries(&mut lock, installed, duplicates);
+		assert_eq!(installed_count, 1);
+		assert_eq!(lock.tools, vec![
+			LockedTool::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
-				path: PathBuf::from("tool.tar.gz"),
-				format: ArchiveFormat::TarGz,
+				install_path: "github_owner_repo/1.0.0".to_owned(),
 			},
-			PathBuf::from("elsewhere/owner_repo/1.0.0"),
-		)];
-		assert!(_update_lock_entries(&mut Lock::default(), &resolved, &installed, Path::new("tools")).is_err());
+			LockedTool::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: Version::parse("latest"),
+				tag_name: "v1.0.0".to_owned(),
+				install_path: "github_owner_repo/1.0.0".to_owned(),
+			}
+		]);
 	}
 }

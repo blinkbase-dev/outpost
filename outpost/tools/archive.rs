@@ -80,12 +80,12 @@ async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -
 	Ok(path)
 }
 
-pub(crate) fn extract_parallel(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<(Vec<(ToolDownloaded, PathBuf)>, usize), Error> {
+pub(crate) fn extract_parallel(downloaded: Vec<ToolDownloaded>, tools_dir: &Path) -> Result<(Vec<ToolDownloaded>, usize), Error> {
 	let pool = rayon::ThreadPoolBuilder::new().build()?;
-	let results: Vec<Result<(ToolDownloaded, PathBuf), (String, Error)>> = pool.install(|| {
+	let results: Vec<Result<ToolDownloaded, (String, Error)>> = pool.install(|| {
 		downloaded
 			.into_par_iter()
-			.map(|item| match item {
+			.map(|tool| match tool {
 				ToolDownloaded::Github {
 					request,
 					artifact_key,
@@ -95,16 +95,13 @@ pub(crate) fn extract_parallel(downloaded: Vec<ToolDownloaded>, tools_dir: PathB
 				} => {
 					let dir = tools_dir.join(artifact_key.as_str());
 					match extract(&path, &dir, &format) {
-						Ok(()) => Ok((
-							ToolDownloaded::Github {
-								request,
-								artifact_key,
-								tag_name,
-								path,
-								format,
-							},
-							dir,
-						)),
+						Ok(()) => Ok(ToolDownloaded::Github {
+							request,
+							artifact_key,
+							tag_name,
+							path,
+							format,
+						}),
 						Err(error) => Err((request.full_name, error)),
 					}
 				}
@@ -115,7 +112,7 @@ pub(crate) fn extract_parallel(downloaded: Vec<ToolDownloaded>, tools_dir: PathB
 	let mut failed = 0;
 	for result in results {
 		match result {
-			Ok(item) => installed.push(item),
+			Ok(tool) => installed.push(tool),
 			Err((full_name, error)) => {
 				eprintln!("{full_name}: {error}");
 				failed += 1;
@@ -628,7 +625,7 @@ mod extract_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			}
 		}];
-		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, &tools).unwrap();
 		let dest = tools.join("github_owner_repo/1.2.3");
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 1);
@@ -651,7 +648,7 @@ mod extract_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			}
 		}];
-		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, &tools).unwrap();
 		let dest = tools.join("github_google_magika/cli_v1.0.0");
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 1);
@@ -717,7 +714,7 @@ mod extract_parallel_tests {
 				}
 			},
 		];
-		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, &tools).unwrap();
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 3);
 		assert_eq!(std::fs::read(tools.join("github_owner_tar_gz/1.0.0/example-tool")).unwrap(), b"one");
@@ -767,7 +764,7 @@ mod extract_parallel_tests {
 				}
 			},
 		];
-		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, &tools).unwrap();
 		assert_eq!(failed, 1);
 		assert_eq!(installed.len(), 1);
 		assert_eq!(std::fs::read(tools.join("github_owner_good/1.0.0/example-tool")).unwrap(), b"binary");
