@@ -2,8 +2,9 @@ use std::fmt;
 
 use regex::regex;
 use semver::Version as Semver;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Version {
 	Latest,
 	Prefix(Prefix),
@@ -23,7 +24,35 @@ impl Version {
 	}
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl fmt::Display for Version {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Latest => f.write_str("latest"),
+			Self::Prefix(prefix) => write!(f, "{prefix}"),
+			Self::Exact(value) => f.write_str(value),
+		}
+	}
+}
+
+impl Serialize for Version {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		serializer.serialize_str(&self.to_string())
+	}
+}
+
+impl<'de> Deserialize<'de> for Version {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		Ok(Self::parse(&String::deserialize(deserializer)?))
+	}
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Prefix {
 	parts: Vec<u64>,
 }

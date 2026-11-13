@@ -9,7 +9,7 @@ pub fn requests(config: &Config) -> Result<Vec<ToolRequest>, ToolRequestError> {
 	config.tools.iter().map(|(key, options)| ToolRequest::parse(key, options)).collect()
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum ToolRequest {
 	Github { full_name: String, lane: String, version: Version },
 }
@@ -38,7 +38,7 @@ impl ToolRequest {
 	}
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ToolRequestError {
 	UnsupportedBackend(String),
 	InvalidFullName(String),

@@ -9,7 +9,6 @@ use super::_asset_selection::select;
 use super::_backend::ArchiveFormat;
 use crate::tools::version::{Prefix, Version, split_lane, tag_version};
 
-#[derive(Debug)]
 pub struct GithubBackend {
 	client: GithubClient,
 }
@@ -157,7 +156,7 @@ fn _pick_release_from_prefix(releases: Vec<Release>, lane: &str, prefix: &Prefix
 	best.map(|(_, release)| release)
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Deserialize)]
 pub struct Release {
 	pub tag_name: String,
 	pub draft: bool,
@@ -165,14 +164,13 @@ pub struct Release {
 	pub assets: Vec<Asset>,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Deserialize)]
 pub struct Asset {
 	pub name: String,
 	pub browser_download_url: String,
 	pub size: u64,
 }
 
-#[derive(Debug)]
 pub struct GithubOptions {
 	pub api_url: String,
 	pub api_version: String,
@@ -200,7 +198,6 @@ impl Default for GithubOptions {
 	}
 }
 
-#[derive(Debug)]
 struct GithubClient {
 	http: Client,
 	options: GithubOptions,
