@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::version::Version;
 
-pub fn read(config_dir: &Path) -> Result<Lock, LockError> {
+pub(crate) fn read(config_dir: &Path) -> Result<Lock, LockError> {
 	match std::fs::read_to_string(config_dir.join("outpost.lock")) {
 		Ok(text) if text.trim().is_empty() => Ok(Lock::default()),
 		Ok(text) => {
@@ -32,7 +32,7 @@ pub fn read(config_dir: &Path) -> Result<Lock, LockError> {
 	}
 }
 
-pub fn write(config_dir: &Path, lock: &Lock) -> Result<(), LockError> {
+pub(crate) fn write(config_dir: &Path, lock: &Lock) -> Result<(), LockError> {
 	let mut tools = lock.tools.clone();
 	tools.sort_by(|a, b| a.key().cmp(&b.key()));
 	let text = toml::to_string_pretty(&Lock { version: lock.version, tools })?;
@@ -46,7 +46,7 @@ pub fn write(config_dir: &Path, lock: &Lock) -> Result<(), LockError> {
 	Ok(())
 }
 
-pub fn acquire(config_dir: &Path) -> Result<File, LockError> {
+pub(crate) fn acquire(config_dir: &Path) -> Result<File, LockError> {
 	let file = OpenOptions::new()
 		.read(true)
 		.write(true)
@@ -61,10 +61,10 @@ pub fn acquire(config_dir: &Path) -> Result<File, LockError> {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct Lock {
-	pub version: u32,
+pub(crate) struct Lock {
+	pub(crate) version: u32,
 	#[serde(default, rename = "tool")]
-	pub tools: Vec<LockedTool>,
+	pub(crate) tools: Vec<LockedTool>,
 }
 
 impl Default for Lock {
@@ -75,7 +75,7 @@ impl Default for Lock {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "backend", rename_all = "lowercase")]
-pub enum LockedTool {
+pub(crate) enum LockedTool {
 	Github {
 		full_name: String,
 		lane: String,
@@ -86,7 +86,7 @@ pub enum LockedTool {
 }
 
 impl LockedTool {
-	fn key(&self) -> (&str, &str, &str, &Version) {
+	pub(crate) fn key(&self) -> (&'static str, &str, &str, &Version) {
 		match self {
 			Self::Github {
 				full_name, lane, requested, ..
@@ -96,7 +96,7 @@ impl LockedTool {
 }
 
 #[derive(Debug)]
-pub enum LockError {
+pub(crate) enum LockError {
 	Io(std::io::Error),
 	Parse(toml::de::Error),
 	Serialize(toml::ser::Error),

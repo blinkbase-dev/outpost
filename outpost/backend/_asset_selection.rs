@@ -2,7 +2,7 @@ use regex::regex;
 
 use super::ArchiveFormat;
 
-pub fn select<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(usize, &'a str, ArchiveFormat)> {
+pub(crate) fn select<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(usize, &'a str, ArchiveFormat)> {
 	select_with(names, &Target::current())
 }
 

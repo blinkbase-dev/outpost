@@ -12,7 +12,7 @@ use crate::tools::version::Version;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
-pub async fn download_parallel(http: Client, resolved: Vec<ToolResolved>, downloads_dir: PathBuf) -> Result<(Vec<ToolDownloaded>, usize), Error> {
+pub(crate) async fn download_parallel(http: Client, resolved: Vec<ToolResolved>, downloads_dir: PathBuf) -> Result<(Vec<ToolDownloaded>, usize), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(resolved.len());
 	for resolved in resolved {
@@ -87,7 +87,7 @@ async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -
 	Ok(path)
 }
 
-pub fn extract_all(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<(Vec<(ToolDownloaded, PathBuf)>, usize), Error> {
+pub(crate) fn extract_all(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<(Vec<(ToolDownloaded, PathBuf)>, usize), Error> {
 	let pool = rayon::ThreadPoolBuilder::new().build()?;
 	let results: Vec<Result<(ToolDownloaded, PathBuf), (String, Error)>> = pool.install(|| {
 		downloaded
@@ -188,7 +188,7 @@ fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Er
 	Ok(())
 }
 
-pub enum ToolResolved {
+pub(crate) enum ToolResolved {
 	Github {
 		full_name: String,
 		lane: String,
@@ -200,7 +200,7 @@ pub enum ToolResolved {
 	},
 }
 
-pub enum ToolDownloaded {
+pub(crate) enum ToolDownloaded {
 	Github {
 		full_name: String,
 		lane: String,

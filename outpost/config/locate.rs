@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub fn locate(cwd: &Path) -> Result<ConfigPaths, LocateError> {
+pub(crate) fn locate(cwd: &Path) -> Result<ConfigPaths, LocateError> {
 	locate_with(cwd, &ConfigEnv::from_process())
 }
 
@@ -46,11 +46,17 @@ fn system_configs(home_config_dir: Option<&Path>, config_dir: Option<&Path>, env
 }
 
 fn project_configs(cwd: &Path, config_dir: Option<&Path>) -> Vec<PathBuf> {
+	let config_dir = config_dir.map(|dir| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()));
 	let mut configs: Vec<PathBuf> = cwd
 		.ancestors()
-		.filter(|dir| Some(*dir) != config_dir)
 		.map(|dir| dir.join("outpost.toml"))
 		.filter(|path| path.is_file())
+		// skip the system config dir, including through symlinks; hardlinks are not detected
+		.filter(|path| {
+			config_dir
+				.as_deref()
+				.is_none_or(|config_dir| path.parent() != Some(config_dir) && std::fs::canonicalize(path).map_or(true, |path| path.parent() != Some(config_dir)))
+		})
 		.collect();
 	configs.reverse();
 	configs
@@ -74,14 +80,14 @@ impl ConfigEnv {
 }
 
 #[derive(Default)]
-pub struct ConfigPaths {
-	pub system_dir: Option<PathBuf>,
-	pub system: Vec<PathBuf>,
-	pub project: Vec<PathBuf>,
+pub(crate) struct ConfigPaths {
+	pub(crate) system_dir: Option<PathBuf>,
+	pub(crate) system: Vec<PathBuf>,
+	pub(crate) project: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
-pub enum LocateError {
+pub(crate) enum LocateError {
 	Io(std::io::Error),
 	RelativeConfigDir(PathBuf),
 }
@@ -253,5 +259,34 @@ mod tests {
 		assert_eq!(locations.system_dir.as_ref(), Some(&cwd));
 		assert_eq!(locations.system, vec![cwd.join("outpost.toml")]);
 		assert_eq!(locations.project, vec![nested.join("outpost.toml")]);
+	}
+
+	#[test]
+	fn excludes_config_dir_through_symlink() {
+		let tmp = tempfile::tempdir().unwrap();
+		let config_dir = tmp.path().join("config");
+		fs::create_dir_all(&config_dir).unwrap();
+		touch(&config_dir.join("outpost.toml"));
+		let alias = tmp.path().join("alias");
+
+		#[cfg(unix)]
+		let linked = std::os::unix::fs::symlink(&config_dir, &alias).is_ok();
+		#[cfg(windows)]
+		let linked = std::os::windows::fs::symlink_dir(&config_dir, &alias).is_ok();
+		#[cfg(not(any(unix, windows)))]
+		let linked = false;
+		if !linked {
+			eprintln!("skipping: cannot create a directory symlink");
+			return;
+		}
+
+		let env = ConfigEnv {
+			config_dir: Some(config_dir.clone()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&alias, &env).unwrap();
+		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
+		assert_eq!(locations.system, vec![config_dir.join("outpost.toml")]);
+		assert!(locations.project.is_empty());
 	}
 }

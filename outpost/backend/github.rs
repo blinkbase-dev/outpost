@@ -9,18 +9,18 @@ use super::_asset_selection::select;
 use super::_backend::ArchiveFormat;
 use crate::tools::version::{Prefix, Version, split_lane, tag_version};
 
-pub struct GithubBackend {
+pub(crate) struct GithubBackend {
 	client: GithubClient,
 }
 
 impl GithubBackend {
-	pub fn new(http: Client, options: GithubOptions) -> Self {
+	pub(crate) fn new(http: Client, options: GithubOptions) -> Self {
 		Self {
 			client: GithubClient::new(http, options),
 		}
 	}
 
-	pub async fn select_release(&self, full_name: &str, lane: &str, version: &Version) -> Result<Release, GithubError> {
+	pub(crate) async fn select_release(&self, full_name: &str, lane: &str, version: &Version) -> Result<Release, GithubError> {
 		match version {
 			Version::Latest => {
 				// repo-wide latest
@@ -103,7 +103,7 @@ impl GithubBackend {
 		}
 	}
 
-	pub fn select_asset(&self, full_name: &str, release: &Release) -> Result<(String, u64, ArchiveFormat), GithubError> {
+	pub(crate) fn select_asset(&self, full_name: &str, release: &Release) -> Result<(String, u64, ArchiveFormat), GithubError> {
 		let (asset, format) = select(release.assets.iter().map(|asset| asset.name.as_str()))
 			.and_then(|(index, _, format)| release.assets.get(index).map(|asset| (asset, format)))
 			.ok_or_else(|| GithubError::NoAsset {
@@ -157,28 +157,28 @@ fn _pick_release_from_prefix(releases: Vec<Release>, lane: &str, prefix: &Prefix
 }
 
 #[derive(Deserialize)]
-pub struct Release {
-	pub tag_name: String,
-	pub draft: bool,
-	pub prerelease: bool,
-	pub assets: Vec<Asset>,
+pub(crate) struct Release {
+	pub(crate) tag_name: String,
+	draft: bool,
+	prerelease: bool,
+	assets: Vec<Asset>,
 }
 
 #[derive(Deserialize)]
-pub struct Asset {
-	pub name: String,
-	pub browser_download_url: String,
-	pub size: u64,
+struct Asset {
+	name: String,
+	browser_download_url: String,
+	size: u64,
 }
 
-pub struct GithubOptions {
-	pub api_url: String,
-	pub api_version: String,
-	pub token: Option<String>,
+pub(crate) struct GithubOptions {
+	api_url: String,
+	api_version: String,
+	token: Option<String>,
 }
 
 impl GithubOptions {
-	pub fn from_process() -> Self {
+	pub(crate) fn from_process() -> Self {
 		let token = ["GITHUB_TOKEN", "GH_TOKEN"]
 			.into_iter()
 			.find_map(|key| env::var(key).ok())
@@ -261,7 +261,7 @@ impl GithubClient {
 }
 
 #[derive(Debug)]
-pub enum GithubError {
+pub(crate) enum GithubError {
 	Http(reqwest::Error),
 	Parse(serde_json::Error),
 	Status(StatusCode),

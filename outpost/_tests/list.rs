@@ -20,14 +20,15 @@ impl Fixture {
 		std::fs::create_dir_all(self.config_dir.join("tools").join(path)).unwrap();
 	}
 
-	fn run(&self) -> Output {
-		Command::new(env!("CARGO_BIN_EXE_op"))
-			.arg("list")
-			.current_dir(&self.config_dir)
-			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
-			.env_remove("OUTPOST_ENV")
-			.output()
-			.unwrap()
+	fn run(&self, envs: Option<&str>) -> Output {
+		let mut command = Command::new(env!("CARGO_BIN_EXE_op"));
+		command.arg("list").current_dir(&self.config_dir).env("OUTPOST_CONFIG_DIR", &self.config_dir);
+		if let Some(envs) = envs {
+			command.env("OUTPOST_ENV", envs);
+		} else {
+			command.env_remove("OUTPOST_ENV");
+		}
+		command.output().unwrap()
 	}
 }
 
@@ -77,23 +78,46 @@ install_path = "github_owner_gone/8.0.0"
 	let fixture = Fixture::new(config, lock);
 	fixture.install("github_owner_repo/1.2.3");
 	fixture.install("github_owner_old/9.0.0");
-	let output = fixture.run();
+	let output = fixture.run(None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
-	let expected = r#"TOOL                REQUESTED  VERSION
-github:owner/new    3.0.0      missing
-github:owner/other  2.0.0      v2.0.0 (missing)
-github:owner/repo   1.2.3      v1.2.3
-github:owner/old    -          v9.0.0
-github:owner/gone   -          v8.0.0 (missing)
+	let source = fixture.config_dir.join("outpost.toml").display().to_string();
+	let template = r#"TOOL                REQUESTED  VERSION           SOURCE
+github:owner/new    3.0.0      missing           {source}
+github:owner/other  2.0.0      v2.0.0 (missing)  {source}
+github:owner/repo   1.2.3      v1.2.3            {source}
+github:owner/old    -          v9.0.0            -
+github:owner/gone   -          v8.0.0 (missing)  -
 "#;
+	let expected = template.replace("{source}", &source);
+	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+}
+
+#[test]
+fn lists_duplicate_requests_per_config_file() {
+	let config = r#"
+[tools]
+"github:owner/repo" = "1.2.3"
+"#;
+	let fixture = Fixture::new(config, "");
+	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), config).unwrap();
+	let output = fixture.run(Some("dev"));
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(output.status.success(), "{stderr}");
+	let template = r#"TOOL               REQUESTED  VERSION  SOURCE
+github:owner/repo  1.2.3      missing  {source1}
+github:owner/repo  1.2.3      missing  {source2}
+"#;
+	let source1 = fixture.config_dir.join("outpost.toml").display().to_string();
+	let source2 = fixture.config_dir.join("outpost.dev.toml").display().to_string();
+	let expected = template.replace("{source1}", &source1).replace("{source2}", &source2);
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
 
 #[test]
 fn prints_nothing_without_tools() {
 	let fixture = Fixture::new("", "");
-	let output = fixture.run();
+	let output = fixture.run(None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
@@ -104,15 +128,16 @@ fn keeps_full_values_when_output_is_piped() {
 	let long_name = format!("owner/{}", "a".repeat(60));
 	let config = format!("[tools]\n\"github:{long_name}\" = \"latest\"\n");
 	let fixture = Fixture::new(&config, "");
-	let output = fixture.run();
+	let output = fixture.run(None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let tool = format!("github:{long_name}");
 	let padding = " ".repeat(tool.len() - "TOOL".len());
-	let template = r#"TOOL{padding}  REQUESTED  VERSION
-{tool}  latest     missing
+	let template = r#"TOOL{padding}  REQUESTED  VERSION  SOURCE
+{tool}  latest     missing  {source}
 "#;
-	let expected = template.replace("{padding}", &padding).replace("{tool}", &tool);
+	let source = fixture.config_dir.join("outpost.toml").display().to_string();
+	let expected = template.replace("{padding}", &padding).replace("{tool}", &tool).replace("{source}", &source);
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
 
@@ -135,19 +160,21 @@ install_path = "github_owner_repo/cli/v1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	fixture.install("github_owner_repo/cli/v1.2.3");
-	let output = fixture.run();
+	let output = fixture.run(None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
-	let expected = r#"TOOL               REQUESTED  VERSION
-github:owner/repo  cli/1.2.3  cli/v1.2.3
+	let template = r#"TOOL               REQUESTED  VERSION     SOURCE
+github:owner/repo  cli/1.2.3  cli/v1.2.3  {source}
 "#;
+	let source = fixture.config_dir.join("outpost.toml").display().to_string();
+	let expected = template.replace("{source}", &source);
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
 
 #[test]
 fn reports_unsupported_lock_version() {
 	let fixture = Fixture::new("", "version = 2\n");
-	let output = fixture.run();
+	let output = fixture.run(None);
 	assert!(!output.status.success());
 	assert!(String::from_utf8(output.stderr).unwrap().contains("unsupported lock version 2"));
 }
@@ -170,7 +197,7 @@ tag_name = "v1.2.3"
 install_path = "../escape"
 "#;
 	let fixture = Fixture::new(config, lock);
-	let output = fixture.run();
+	let output = fixture.run(None);
 	assert!(!output.status.success());
 	assert!(String::from_utf8(output.stderr).unwrap().contains("invalid install path `../escape` in lock"));
 }
@@ -178,7 +205,7 @@ install_path = "../escape"
 #[test]
 fn reports_unsupported_backend() {
 	let fixture = Fixture::new("[tools]\n\"rust\" = \"latest\"\n", "");
-	let output = fixture.run();
+	let output = fixture.run(None);
 	assert!(!output.status.success());
 	assert!(String::from_utf8(output.stderr).unwrap().contains("unsupported backend in `rust`"));
 }

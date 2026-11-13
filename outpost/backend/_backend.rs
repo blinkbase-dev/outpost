@@ -1,12 +1,12 @@
 #[derive(Debug, PartialEq)]
-pub enum ArchiveFormat {
+pub(crate) enum ArchiveFormat {
 	TarGz,
 	TarXz,
 	Zip,
 }
 
 impl ArchiveFormat {
-	pub fn from_name(name: &str) -> Option<Self> {
+	pub(crate) fn from_name(name: &str) -> Option<Self> {
 		let name = name.to_ascii_lowercase();
 		if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
 			Some(Self::TarGz)
