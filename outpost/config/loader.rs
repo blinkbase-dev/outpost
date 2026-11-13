@@ -7,8 +7,8 @@ use serde::Deserialize;
 use super::locate::ConfigPaths;
 
 pub(crate) fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
-	let mut files = Vec::new();
-	for path in paths.system.iter().chain(&paths.project) {
+	let mut files = Vec::with_capacity(paths.system.len() + paths.project.len() + paths.registered.len());
+	for path in paths.system.iter().chain(&paths.project).chain(&paths.registered) {
 		let content = match fs::read_to_string(path) {
 			Ok(content) => content,
 			Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
@@ -83,6 +83,52 @@ mod tests {
 	use std::fs;
 
 	use super::*;
+
+	#[test]
+	fn loads_files_from_all_sources() {
+		let tmp = tempfile::tempdir().unwrap();
+		let system = tmp.path().join("system.toml");
+		fs::write(
+			&system,
+			r#"
+			[tools]
+			"github:a/system" = "1"
+			"#,
+		)
+		.unwrap();
+		let project = tmp.path().join("project.toml");
+		fs::write(
+			&project,
+			r#"
+			[tools]
+			"github:a/project" = "2"
+			"#,
+		)
+		.unwrap();
+		let registered = tmp.path().join("registered.toml");
+		fs::write(
+			&registered,
+			r#"
+			[tools]
+			"github:a/registered" = "3"
+			"#,
+		)
+		.unwrap();
+		let files = load(&ConfigPaths {
+			system: vec![system.clone()],
+			project: vec![project.clone()],
+			registered: vec![registered.clone()],
+			..ConfigPaths::default()
+		})
+		.unwrap();
+		assert_eq!(files.len(), 3);
+		assert_eq!(files[0].path, system);
+		assert_eq!(files[1].path, project);
+		assert_eq!(files[2].path, registered);
+		assert_eq!(files[0].config.tools["github:a/system"].version(), "1");
+		assert_eq!(files[1].config.tools["github:a/project"].version(), "2");
+		assert_eq!(files[2].config.tools["github:a/registered"].version(), "3");
+	}
 
 	#[test]
 	fn loads_string_form() {
