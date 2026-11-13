@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::lock::{Identity, Lock, LockedTool};
-use super::tool_request::{ToolRequest, ToolRequestEntry};
+use super::tool_request::{ToolRequest, ToolRequestEntry, ToolRequestGroup};
 
 pub(crate) fn report(requests: Vec<ToolRequestEntry>, lock: &Lock, tools_dir: &Path) -> Report {
 	let locked_entries: HashMap<Identity, &LockedTool> = lock.tools.iter().map(|tool| (tool.identity(), tool)).collect();
@@ -57,7 +57,7 @@ pub(crate) enum InstallState {
 	Missing,
 }
 
-pub(crate) fn missing_from_lock(requests: Vec<ToolRequest>, lock: &Lock, tools_dir: &Path) -> Vec<ToolRequest> {
+pub(crate) fn missing_from_lock(requests: Vec<ToolRequestGroup>, lock: &Lock, tools_dir: &Path) -> Vec<ToolRequestGroup> {
 	let installed: HashSet<Identity> = lock
 		.tools
 		.iter()
@@ -66,7 +66,7 @@ pub(crate) fn missing_from_lock(requests: Vec<ToolRequest>, lock: &Lock, tools_d
 		})
 		.map(LockedTool::identity)
 		.collect();
-	requests.into_iter().filter(|request| !installed.contains(&request.identity())).collect()
+	requests.into_iter().filter(|group| !installed.contains(&group.tool.identity())).collect()
 }
 
 fn _installed(install_path: &str, tools_dir: &Path) -> bool {
@@ -267,11 +267,14 @@ mod tests {
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
 		};
-		let requests = vec![ToolRequest::Github(GithubRequest {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1.2.3"),
-		})];
+		let requests = ToolRequestGroup::from_entries(vec![ToolRequestEntry {
+			origin: PathBuf::new(),
+			tool: ToolRequest::Github(GithubRequest {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.2.3"),
+			}),
+		}]);
 		assert!(missing_from_lock(requests, &lock, &tools).is_empty());
 	}
 
@@ -289,11 +292,14 @@ mod tests {
 				install_path: "github_owner_repo/1.2.3".to_owned(),
 			}],
 		};
-		let requests = vec![ToolRequest::Github(GithubRequest {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1.2.3"),
-		})];
+		let requests = ToolRequestGroup::from_entries(vec![ToolRequestEntry {
+			origin: PathBuf::new(),
+			tool: ToolRequest::Github(GithubRequest {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.2.3"),
+			}),
+		}]);
 		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 1);
 	}
 
@@ -322,7 +328,16 @@ mod tests {
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
 		});
-		let requests = vec![other_lane, other_version];
+		let requests = ToolRequestGroup::from_entries(vec![
+			ToolRequestEntry {
+				origin: PathBuf::new(),
+				tool: other_lane,
+			},
+			ToolRequestEntry {
+				origin: PathBuf::new(),
+				tool: other_version,
+			},
+		]);
 		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 2);
 	}
 
@@ -351,8 +366,21 @@ mod tests {
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
 		});
-		let requests = missing_from_lock(vec![installed, missing], &lock, &tools);
+		let requests = missing_from_lock(
+			ToolRequestGroup::from_entries(vec![
+				ToolRequestEntry {
+					origin: PathBuf::new(),
+					tool: installed,
+				},
+				ToolRequestEntry {
+					origin: PathBuf::new(),
+					tool: missing,
+				},
+			]),
+			&lock,
+			&tools,
+		);
 		assert_eq!(requests.len(), 1);
-		assert!(matches!(&requests[0], ToolRequest::Github(GithubRequest { full_name, .. }) if full_name == "owner/other"));
+		assert!(matches!(&requests[0].tool, ToolRequest::Github(GithubRequest { full_name, .. }) if full_name == "owner/other"));
 	}
 }

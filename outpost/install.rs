@@ -26,12 +26,12 @@ pub(crate) fn install() -> Result<(), Error> {
 	let _install_lock = lock::acquire(config_dir)?;
 	// skip tools already recorded in the lock
 	let groups = ToolRequestGroup::from_entries(requests);
-	let requests = groups.into_iter().map(|group| group.tool).collect();
 	let mut lock = lock::read(config_dir)?;
-	let requests = status::missing_from_lock(requests, &lock, &tools_dir);
-	if requests.is_empty() {
+	let groups = status::missing_from_lock(groups, &lock, &tools_dir);
+	if groups.is_empty() {
 		return Ok(());
 	}
+	let requests = groups.into_iter().map(|group| group.tool).collect();
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
 	let (resolved, resolve_failed) = runtime.block_on(resolve_parallel(http.clone(), requests))?;
