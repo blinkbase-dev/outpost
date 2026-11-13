@@ -208,7 +208,7 @@ impl ArtifactKey {
 				let tag = version.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(version).to_lowercase();
 				Self(format!(
 					"github_{}/{}",
-					request.full_name.to_lowercase().replace(['.', '/', '-'], "_"),
+					request.full_name.replace(['.', '/', '-'], "_"),
 					regex!(r"[^a-z0-9_.]").replace_all(&tag, "_")
 				))
 			}

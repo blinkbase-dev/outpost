@@ -14,23 +14,25 @@ pub(crate) fn read(config_dir: &Path) -> Result<Lock, LockError> {
 	match std::fs::read_to_string(config_dir.join("outpost.lock")) {
 		Ok(text) if text.trim().is_empty() => Ok(Lock::default()),
 		Ok(text) => {
-			let lock: Lock = toml::from_str(&text)?;
+			let mut lock: Lock = toml::from_str(&text)?;
 			if lock.version != 1 {
 				return Err(LockError::UnsupportedVersion(lock.version));
 			}
 			let mut identities = HashSet::new();
-			for tool in &lock.tools {
+			for tool in &mut lock.tools {
+				match tool {
+					LockedTool::Github { full_name, install_path, .. } => {
+						full_name.make_ascii_lowercase();
+						let path = Path::new(install_path.as_str());
+						let relative = !path.as_os_str().is_empty() && path.components().all(|component| matches!(component, Component::Normal(_)));
+						if !relative {
+							return Err(LockError::InvalidPath(install_path.clone()));
+						}
+					}
+				}
 				let identity = tool.identity();
 				if !identities.insert(identity.clone()) {
 					return Err(LockError::DuplicateIdentity(identity));
-				}
-				let install_path = match tool {
-					LockedTool::Github { install_path, .. } => install_path,
-				};
-				let path = Path::new(install_path);
-				let relative = !path.as_os_str().is_empty() && path.components().all(|component| matches!(component, Component::Normal(_)));
-				if !relative {
-					return Err(LockError::InvalidPath(install_path.clone()));
 				}
 			}
 			Ok(lock)
