@@ -1,7 +1,7 @@
 use std::fmt;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,16 @@ pub fn read(config_dir: &Path) -> Result<Lock, LockError> {
 			let lock: Lock = toml::from_str(&text)?;
 			if lock.version != 1 {
 				return Err(LockError::UnsupportedVersion(lock.version));
+			}
+			for tool in &lock.tools {
+				let install_path = match tool {
+					LockedTool::Github { install_path, .. } => install_path,
+				};
+				let path = Path::new(install_path);
+				let relative = !path.as_os_str().is_empty() && path.components().all(|component| matches!(component, Component::Normal(_)));
+				if !relative {
+					return Err(LockError::InvalidPath(install_path.clone()));
+				}
 			}
 			Ok(lock)
 		}
@@ -92,6 +102,7 @@ pub enum LockError {
 	Serialize(toml::ser::Error),
 	Busy,
 	UnsupportedVersion(u32),
+	InvalidPath(String),
 }
 
 impl From<std::io::Error> for LockError {
@@ -120,6 +131,7 @@ impl fmt::Display for LockError {
 			Self::Serialize(error) => write!(f, "lock file serialize failed: {error}"),
 			Self::Busy => write!(f, "another outpost install is already running"),
 			Self::UnsupportedVersion(version) => write!(f, "unsupported lock version {version}, expected 1"),
+			Self::InvalidPath(path) => write!(f, "invalid install path `{path}` in lock"),
 		}
 	}
 }
@@ -132,6 +144,7 @@ impl std::error::Error for LockError {
 			Self::Serialize(error) => Some(error),
 			Self::Busy => None,
 			Self::UnsupportedVersion(_) => None,
+			Self::InvalidPath(_) => None,
 		}
 	}
 }
@@ -158,6 +171,44 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("outpost.lock"), "version = 2\n").unwrap();
 		assert!(matches!(read(dir.path()), Err(LockError::UnsupportedVersion(2))));
+	}
+
+	#[test]
+	fn rejects_unsafe_install_paths() {
+		let text = r#"version = 1
+
+[[tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+tag_name = "v1.0.0"
+install_path = "{}"
+"#;
+		for path in ["/tmp/tool", "../tool", "./tool", ""] {
+			let dir = tempfile::tempdir().unwrap();
+			let text = text.replace("{}", path);
+			std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
+			assert!(matches!(read(dir.path()), Err(LockError::InvalidPath(_))), "{path}");
+		}
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn rejects_windows_prefix_install_path() {
+		let dir = tempfile::tempdir().unwrap();
+		let text = r#"version = 1
+
+[[tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+tag_name = "v1.0.0"
+install_path = "C:"
+"#;
+		std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
+		assert!(matches!(read(dir.path()), Err(LockError::InvalidPath(_))));
 	}
 
 	#[test]
@@ -233,17 +284,16 @@ mod tests {
 		};
 		write(dir.path(), &lock).unwrap();
 		let text = std::fs::read_to_string(dir.path().join("outpost.lock")).unwrap();
-		let expected = "\
-version = 1
+		let expected = r#"version = 1
 
 [[tool]]
-backend = \"github\"
-full_name = \"owner/repo\"
-lane = \"\"
-requested = \"2.20\"
-tag_name = \"2.20\"
-install_path = \"github_owner_repo/2.20\"
-";
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "2.20"
+tag_name = "2.20"
+install_path = "github_owner_repo/2.20"
+"#;
 		assert_eq!(text, expected);
 	}
 
