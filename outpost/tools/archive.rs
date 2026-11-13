@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::backend::ArchiveFormat;
-use crate::tools::version::Version;
+use crate::tools::tool_request::{GithubRequest, ToolRequest};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -22,33 +22,26 @@ pub(crate) async fn download_parallel(http: Client, resolved: Vec<ToolResolved>,
 		handles.push(tokio::spawn(async move {
 			match resolved {
 				ToolResolved::Github {
-					full_name,
-					lane,
-					requested,
+					request,
+					artifact_key,
 					tag_name,
 					url,
 					size,
 					format,
 				} => {
-					let tag = tag_name.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(&tag_name);
-					let name = format!(
-						"{}_{}",
-						full_name.replace(['.', '/', '-'], "_"),
-						regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_")
-					);
+					let name = artifact_key.as_str().replace('/', "_");
 					match semaphore.acquire_owned().await {
 						Ok(_permit) => match download(&http, &url, &downloads_dir, &name, size).await {
 							Ok(path) => Ok(ToolDownloaded::Github {
-								full_name,
-								lane,
-								requested,
+								request,
+								artifact_key,
 								tag_name,
 								path,
 								format,
 							}),
-							Err(error) => Err((full_name, error)),
+							Err(error) => Err((request.full_name, error)),
 						},
-						Err(error) => Err((full_name, error.into())),
+						Err(error) => Err((request.full_name, error.into())),
 					}
 				}
 			}
@@ -87,37 +80,32 @@ async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -
 	Ok(path)
 }
 
-pub(crate) fn extract_all(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<(Vec<(ToolDownloaded, PathBuf)>, usize), Error> {
+pub(crate) fn extract_parallel(downloaded: Vec<ToolDownloaded>, tools_dir: PathBuf) -> Result<(Vec<(ToolDownloaded, PathBuf)>, usize), Error> {
 	let pool = rayon::ThreadPoolBuilder::new().build()?;
 	let results: Vec<Result<(ToolDownloaded, PathBuf), (String, Error)>> = pool.install(|| {
 		downloaded
 			.into_par_iter()
 			.map(|item| match item {
 				ToolDownloaded::Github {
-					full_name,
-					lane,
-					requested,
+					request,
+					artifact_key,
 					tag_name,
 					path,
 					format,
 				} => {
-					let tag = tag_name.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(&tag_name);
-					let dir = tools_dir
-						.join(format!("github_{}", full_name.to_lowercase().replace(['.', '/', '-'], "_")))
-						.join(regex!(r"[^a-zA-Z0-9_.]").replace_all(tag, "_").into_owned());
+					let dir = tools_dir.join(artifact_key.as_str());
 					match extract(&path, &dir, &format) {
 						Ok(()) => Ok((
 							ToolDownloaded::Github {
-								full_name,
-								lane,
-								requested,
+								request,
+								artifact_key,
 								tag_name,
 								path,
 								format,
 							},
 							dir,
 						)),
-						Err(error) => Err((full_name, error)),
+						Err(error) => Err((request.full_name, error)),
 					}
 				}
 			})
@@ -188,11 +176,11 @@ fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Er
 	Ok(())
 }
 
+#[derive(Clone)]
 pub(crate) enum ToolResolved {
 	Github {
-		full_name: String,
-		lane: String,
-		requested: Version,
+		request: GithubRequest,
+		artifact_key: ArtifactKey,
 		tag_name: String,
 		url: String,
 		size: u64,
@@ -202,13 +190,34 @@ pub(crate) enum ToolResolved {
 
 pub(crate) enum ToolDownloaded {
 	Github {
-		full_name: String,
-		lane: String,
-		requested: Version,
+		request: GithubRequest,
+		artifact_key: ArtifactKey,
 		tag_name: String,
 		path: PathBuf,
 		format: ArchiveFormat,
 	},
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct ArtifactKey(String);
+
+impl ArtifactKey {
+	pub(crate) fn new(request: &ToolRequest, version: &str) -> Self {
+		match request {
+			ToolRequest::Github(request) => {
+				let tag = version.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(version).to_lowercase();
+				Self(format!(
+					"github_{}/{}",
+					request.full_name.to_lowercase().replace(['.', '/', '-'], "_"),
+					regex!(r"[^a-z0-9_.]").replace_all(&tag, "_")
+				))
+			}
+		}
+	}
+
+	pub(crate) fn as_str(&self) -> &str {
+		&self.0
+	}
 }
 
 #[cfg(test)]
@@ -289,6 +298,7 @@ mod download_parallel_tests {
 	use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 	use super::*;
+	use crate::tools::version::Version;
 
 	fn http() -> Client {
 		Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build().unwrap()
@@ -321,14 +331,21 @@ mod download_parallel_tests {
 			.await;
 		let dir = tempfile::tempdir().unwrap();
 		let resolved = (0..16)
-			.map(|index| ToolResolved::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse(&format!("1.0.{index}")),
-				tag_name: format!("v1.0.{index}"),
-				url: format!("{}/asset{index}", server.uri()),
-				size: 4,
-				format: ArchiveFormat::TarGz,
+			.map(|index| {
+				let request = GithubRequest {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse(&format!("1.0.{index}")),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), &format!("v1.0.{index}"));
+				ToolResolved::Github {
+					request,
+					artifact_key,
+					tag_name: format!("v1.0.{index}"),
+					url: format!("{}/asset{index}", server.uri()),
+					size: 4,
+					format: ArchiveFormat::TarGz,
+				}
 			})
 			.collect();
 		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
@@ -352,14 +369,21 @@ mod download_parallel_tests {
 		}
 		let dir = tempfile::tempdir().unwrap();
 		let resolved = (0..10)
-			.map(|index| ToolResolved::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse(&format!("1.0.{index}")),
-				tag_name: format!("1.0.{index}"),
-				url: format!("{}/asset{index}", server.uri()),
-				size: 4,
-				format: ArchiveFormat::TarGz,
+			.map(|index| {
+				let request = GithubRequest {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse(&format!("1.0.{index}")),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), &format!("1.0.{index}"));
+				ToolResolved::Github {
+					request,
+					artifact_key,
+					tag_name: format!("1.0.{index}"),
+					url: format!("{}/asset{index}", server.uri()),
+					size: 4,
+					format: ArchiveFormat::TarGz,
+				}
 			})
 			.collect();
 		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
@@ -386,23 +410,37 @@ mod download_parallel_tests {
 			.await;
 		let dir = tempfile::tempdir().unwrap();
 		let resolved = vec![
-			ToolResolved::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.0.0"),
-				tag_name: "v1.0.0".to_owned(),
-				url: format!("{}/good", server.uri()),
-				size: 4,
-				format: ArchiveFormat::TarGz,
+			{
+				let request = GithubRequest {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.0.0"),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolResolved::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					url: format!("{}/good", server.uri()),
+					size: 4,
+					format: ArchiveFormat::TarGz,
+				}
 			},
-			ToolResolved::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.1.0"),
-				tag_name: "v1.1.0".to_owned(),
-				url: format!("{}/missing", server.uri()),
-				size: 4,
-				format: ArchiveFormat::TarGz,
+			{
+				let request = GithubRequest {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.1.0"),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.1.0");
+				ToolResolved::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.1.0".to_owned(),
+					url: format!("{}/missing", server.uri()),
+					size: 4,
+					format: ArchiveFormat::TarGz,
+				}
 			},
 		];
 		let (downloaded, failed) = download_parallel(http(), resolved, dir.path().to_owned()).await.unwrap();
@@ -410,8 +448,8 @@ mod download_parallel_tests {
 		assert_eq!(downloaded.len(), 1);
 		let ToolDownloaded::Github { path, .. } = &downloaded[0];
 		assert!(path.exists());
-		assert!(!dir.path().join("owner_repo_1.1.0").exists());
-		assert!(!dir.path().join("owner_repo_1.1.0.part").exists());
+		assert!(!dir.path().join("github_owner_repo_1.1.0").exists());
+		assert!(!dir.path().join("github_owner_repo_1.1.0.part").exists());
 	}
 }
 
@@ -562,9 +600,10 @@ mod extract_tests {
 }
 
 #[cfg(test)]
-mod extract_all_tests {
+mod extract_parallel_tests {
 	use super::extract_tests::{tar_gz, tar_xz, zip_bytes};
 	use super::*;
+	use crate::tools::version::Version;
 
 	#[test]
 	fn extracts_into_repo_and_tag_directory() {
@@ -574,15 +613,22 @@ mod extract_all_tests {
 		let tools = dir.path().join("tools");
 		let archive = downloads.join("tool.tar.gz");
 		std::fs::write(&archive, tar_gz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
-		let downloaded = vec![ToolDownloaded::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			requested: Version::parse("1.0.0"),
-			tag_name: "v1.2.3".to_owned(),
-			path: archive,
-			format: ArchiveFormat::TarGz,
+		let downloaded = vec![{
+			let request = GithubRequest {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.0.0"),
+			};
+			let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.2.3");
+			ToolDownloaded::Github {
+				request,
+				artifact_key,
+				tag_name: "v1.2.3".to_owned(),
+				path: archive,
+				format: ArchiveFormat::TarGz,
+			}
 		}];
-		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
 		let dest = tools.join("github_owner_repo/1.2.3");
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 1);
@@ -590,15 +636,22 @@ mod extract_all_tests {
 
 		let archive = downloads.join("magika.tar.gz");
 		std::fs::write(&archive, tar_gz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
-		let downloaded = vec![ToolDownloaded::Github {
-			full_name: "google/magika".to_owned(),
-			lane: String::new(),
-			requested: Version::parse("1.0.0"),
-			tag_name: "cli/v1.0.0".to_owned(),
-			path: archive,
-			format: ArchiveFormat::TarGz,
+		let downloaded = vec![{
+			let request = GithubRequest {
+				full_name: "google/magika".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.0.0"),
+			};
+			let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "cli/v1.0.0");
+			ToolDownloaded::Github {
+				request,
+				artifact_key,
+				tag_name: "cli/v1.0.0".to_owned(),
+				path: archive,
+				format: ArchiveFormat::TarGz,
+			}
 		}];
-		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
 		let dest = tools.join("github_google_magika/cli_v1.0.0");
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 1);
@@ -618,32 +671,53 @@ mod extract_all_tests {
 		std::fs::write(&zip_archive, zip_bytes(&[("tool-1.0.0/example-tool", b"three")])).unwrap();
 		let tools = dir.path().join("tools");
 		let downloaded = vec![
-			ToolDownloaded::Github {
-				full_name: "owner/tar-gz".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.0.0"),
-				tag_name: "v1.0.0".to_owned(),
-				path: gz_archive,
-				format: ArchiveFormat::TarGz,
+			{
+				let request = GithubRequest {
+					full_name: "owner/tar-gz".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.0.0"),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					path: gz_archive,
+					format: ArchiveFormat::TarGz,
+				}
 			},
-			ToolDownloaded::Github {
-				full_name: "owner/tar-xz".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.0.0"),
-				tag_name: "v1.0.0".to_owned(),
-				path: xz_archive,
-				format: ArchiveFormat::TarXz,
+			{
+				let request = GithubRequest {
+					full_name: "owner/tar-xz".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.0.0"),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					path: xz_archive,
+					format: ArchiveFormat::TarXz,
+				}
 			},
-			ToolDownloaded::Github {
-				full_name: "owner/zip".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.0.0"),
-				tag_name: "v1.0.0".to_owned(),
-				path: zip_archive,
-				format: ArchiveFormat::Zip,
+			{
+				let request = GithubRequest {
+					full_name: "owner/zip".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.0.0"),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					path: zip_archive,
+					format: ArchiveFormat::Zip,
+				}
 			},
 		];
-		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
 		assert_eq!(failed, 0);
 		assert_eq!(installed.len(), 3);
 		assert_eq!(std::fs::read(tools.join("github_owner_tar_gz/1.0.0/example-tool")).unwrap(), b"one");
@@ -662,24 +736,38 @@ mod extract_all_tests {
 		std::fs::write(&bad, b"not an archive").unwrap();
 		let tools = dir.path().join("tools");
 		let downloaded = vec![
-			ToolDownloaded::Github {
-				full_name: "owner/good".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.0.0"),
-				tag_name: "v1.0.0".to_owned(),
-				path: good,
-				format: ArchiveFormat::TarGz,
+			{
+				let request = GithubRequest {
+					full_name: "owner/good".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.0.0"),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					path: good,
+					format: ArchiveFormat::TarGz,
+				}
 			},
-			ToolDownloaded::Github {
-				full_name: "owner/bad".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.0.0"),
-				tag_name: "v1.0.0".to_owned(),
-				path: bad,
-				format: ArchiveFormat::TarGz,
+			{
+				let request = GithubRequest {
+					full_name: "owner/bad".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.0.0"),
+				};
+				let artifact_key = ArtifactKey::new(&ToolRequest::Github(request.clone()), "v1.0.0");
+				ToolDownloaded::Github {
+					request,
+					artifact_key,
+					tag_name: "v1.0.0".to_owned(),
+					path: bad,
+					format: ArchiveFormat::TarGz,
+				}
 			},
 		];
-		let (installed, failed) = extract_all(downloaded, tools.clone()).unwrap();
+		let (installed, failed) = extract_parallel(downloaded, tools.clone()).unwrap();
 		assert_eq!(failed, 1);
 		assert_eq!(installed.len(), 1);
 		assert_eq!(std::fs::read(tools.join("github_owner_good/1.0.0/example-tool")).unwrap(), b"binary");
