@@ -13,6 +13,7 @@ use crate::tools::tool_request::{self, ToolRequest, ToolRequestGroup};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolvedRequest = (ToolRequestGroup, ToolResolved);
+type DownloadedRequest = (ToolRequestGroup, ToolDownloaded);
 type RejectedRequest = (ToolRequestGroup, Error);
 
 pub(crate) fn install() -> Result<(), Error> {
@@ -122,29 +123,28 @@ fn _partition_by_artifact_key(resolved: Vec<ResolvedRequest>) -> Result<(Vec<Res
 	let mut duplicates: Vec<ResolvedRequest> = Vec::new();
 	let mut index_by_key: HashMap<ArtifactKey, usize> = HashMap::new();
 	for (request, resolved) in resolved {
-		match &resolved {
-			ToolResolved::Github { artifact_key, tag_name, .. } => {
-				if let Some(&index) = index_by_key.get(artifact_key) {
-					match &artifacts[index].1 {
-						ToolResolved::Github { tag_name: installed_tag, .. } => {
-							if installed_tag.as_str() != tag_name.as_str() {
-								return Err(format!("artifact collision: `{tag_name}` and `{installed_tag}` share `{}`", artifact_key.as_str()).into());
-							}
-						}
+		let artifact_key = match &resolved {
+			ToolResolved::Github { artifact_key, .. } => artifact_key,
+		};
+		if let Some(&index) = index_by_key.get(artifact_key) {
+			match (&resolved, &artifacts[index].1) {
+				(ToolResolved::Github { tag_name, .. }, ToolResolved::Github { tag_name: installed_tag, .. }) => {
+					if installed_tag.as_str() != tag_name.as_str() {
+						return Err(format!("artifact collision: `{tag_name}` and `{installed_tag}` share `{}`", artifact_key.as_str()).into());
 					}
-					duplicates.push((request, resolved));
-				} else {
-					// point the key at the representative's index
-					index_by_key.insert(artifact_key.clone(), artifacts.len());
-					artifacts.push((request, resolved));
 				}
 			}
+			duplicates.push((request, resolved));
+		} else {
+			// point the key at the representative's index
+			index_by_key.insert(artifact_key.clone(), artifacts.len());
+			artifacts.push((request, resolved));
 		}
 	}
 	Ok((artifacts, duplicates))
 }
 
-fn _update_lock_entries(lock: &mut Lock, installed: Vec<(ToolRequestGroup, ToolDownloaded)>, duplicates: Vec<(ToolRequestGroup, ToolResolved)>) -> usize {
+fn _update_lock_entries(lock: &mut Lock, installed: Vec<DownloadedRequest>, duplicates: Vec<ResolvedRequest>) -> usize {
 	let installed_count = installed.len();
 	let mut rows = Vec::with_capacity(installed_count + duplicates.len());
 	let installed_by_key: HashMap<_, _> = installed
