@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod config;
 mod install;
+mod list;
 pub mod tools;
 
 use clap::{Parser, Subcommand};
@@ -8,6 +9,7 @@ use clap::{Parser, Subcommand};
 fn main() {
 	let result = match Args::parse().command {
 		Command::Install => install::install(),
+		Command::List => list::list(),
 	};
 	if let Err(error) = result {
 		eprintln!("{error}");
@@ -25,4 +27,5 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
 	Install,
+	List,
 }

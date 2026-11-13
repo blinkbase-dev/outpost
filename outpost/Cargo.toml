@@ -2,10 +2,15 @@
 name = "outpost"
 version = "0.0.0"
 edition = "2024"
+autotests = false
 
 [[bin]]
 name = "op"
 path = "main.rs"
+
+[[test]]
+name = "list"
+path = "_tests/list.rs"
 
 [dependencies]
 clap.workspace = true
@@ -19,6 +24,7 @@ semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tar.workspace = true
+terminal_size.workspace = true
 tokio.workspace = true
 toml.workspace = true
 zip.workspace = true
