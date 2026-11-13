@@ -57,17 +57,6 @@ pub(crate) enum InstallState {
 	Missing,
 }
 
-pub(crate) fn unique_requests(requests: Vec<ToolRequestEntry>) -> Vec<ToolRequest> {
-	let mut seen = HashSet::with_capacity(requests.len());
-	let mut unique = Vec::with_capacity(requests.len());
-	for request in requests {
-		if seen.insert(request.tool.identity()) {
-			unique.push(request.tool);
-		}
-	}
-	unique
-}
-
 pub(crate) fn missing_from_lock(requests: Vec<ToolRequest>, lock: &Lock, tools_dir: &Path) -> Vec<ToolRequest> {
 	let installed: HashSet<Identity> = lock
 		.tools
@@ -260,48 +249,6 @@ mod tests {
 					version: Version::parse("1.2.3"),
 				}),
 			},
-		]);
-	}
-
-	#[test]
-	fn deduplicates_requests_by_identity() {
-		let requests = vec![
-			ToolRequestEntry {
-				origin: std::path::PathBuf::from("a.toml"),
-				tool: ToolRequest::Github(GithubRequest {
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("1.2.3"),
-				}),
-			},
-			ToolRequestEntry {
-				origin: std::path::PathBuf::from("b.toml"),
-				tool: ToolRequest::Github(GithubRequest {
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("1.2.3"),
-				}),
-			},
-			ToolRequestEntry {
-				origin: std::path::PathBuf::from("c.toml"),
-				tool: ToolRequest::Github(GithubRequest {
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("2.0.0"),
-				}),
-			},
-		];
-		assert_eq!(unique_requests(requests), vec![
-			ToolRequest::Github(GithubRequest {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::parse("1.2.3"),
-			}),
-			ToolRequest::Github(GithubRequest {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::parse("2.0.0"),
-			}),
 		]);
 	}
 

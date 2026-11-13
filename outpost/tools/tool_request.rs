@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -77,6 +78,32 @@ impl ToolRequest {
 				key: key.to_owned(),
 			}),
 		}
+	}
+}
+
+pub(crate) struct ToolRequestGroup {
+	pub(crate) origins: Vec<PathBuf>,
+	pub(crate) tool: ToolRequest,
+}
+
+impl ToolRequestGroup {
+	pub(crate) fn from_entries(entries: Vec<ToolRequestEntry>) -> Vec<Self> {
+		let mut index: HashMap<Identity, usize> = HashMap::with_capacity(entries.len());
+		let mut groups: Vec<Self> = Vec::with_capacity(entries.len());
+		for entry in entries {
+			let identity = entry.tool.identity();
+			match index.get(&identity) {
+				Some(&index) => groups[index].origins.push(entry.origin),
+				None => {
+					index.insert(identity, groups.len());
+					groups.push(Self {
+						origins: vec![entry.origin],
+						tool: entry.tool,
+					});
+				}
+			}
+		}
+		groups
 	}
 }
 
@@ -343,5 +370,60 @@ mod tests {
 			.unwrap(),
 		};
 		assert!(matches!(requests(&[config]), Err(ToolRequestError::EmptyVersion { .. })));
+	}
+}
+
+#[cfg(test)]
+mod group_tests {
+	use super::*;
+
+	#[test]
+	fn groups_requests_by_identity() {
+		let requests = vec![
+			ToolRequestEntry {
+				origin: std::path::PathBuf::from("a.toml"),
+				tool: ToolRequest::Github(GithubRequest {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.2.3"),
+				}),
+			},
+			ToolRequestEntry {
+				origin: std::path::PathBuf::from("b.toml"),
+				tool: ToolRequest::Github(GithubRequest {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.2.3"),
+				}),
+			},
+			ToolRequestEntry {
+				origin: std::path::PathBuf::from("c.toml"),
+				tool: ToolRequest::Github(GithubRequest {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("2.0.0"),
+				}),
+			},
+		];
+		let groups = ToolRequestGroup::from_entries(requests);
+		assert_eq!(groups.len(), 2);
+		assert_eq!(
+			groups[0].tool,
+			ToolRequest::Github(GithubRequest {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.2.3"),
+			})
+		);
+		assert_eq!(groups[0].origins, vec![PathBuf::from("a.toml"), PathBuf::from("b.toml")]);
+		assert_eq!(
+			groups[1].tool,
+			ToolRequest::Github(GithubRequest {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("2.0.0"),
+			})
+		);
+		assert_eq!(groups[1].origins, vec![PathBuf::from("c.toml")]);
 	}
 }

@@ -9,7 +9,7 @@ use crate::config::{loader, locate};
 use crate::tools::archive::{self, ArtifactKey, ToolDownloaded, ToolResolved};
 use crate::tools::lock::{self, Identity, Lock, LockedTool};
 use crate::tools::status;
-use crate::tools::tool_request::{self, GithubRequest, ToolRequest};
+use crate::tools::tool_request::{self, GithubRequest, ToolRequest, ToolRequestGroup};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -25,7 +25,8 @@ pub(crate) fn install() -> Result<(), Error> {
 	std::fs::create_dir_all(&tools_dir)?;
 	let _install_lock = lock::acquire(config_dir)?;
 	// skip tools already recorded in the lock
-	let requests = status::unique_requests(requests);
+	let groups = ToolRequestGroup::from_entries(requests);
+	let requests = groups.into_iter().map(|group| group.tool).collect();
 	let mut lock = lock::read(config_dir)?;
 	let requests = status::missing_from_lock(requests, &lock, &tools_dir);
 	if requests.is_empty() {
