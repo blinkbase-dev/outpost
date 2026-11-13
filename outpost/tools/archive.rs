@@ -85,26 +85,17 @@ pub(crate) fn extract_parallel(downloaded: Vec<ToolDownloaded>, tools_dir: &Path
 	let results: Vec<Result<ToolDownloaded, (String, Error)>> = pool.install(|| {
 		downloaded
 			.into_par_iter()
-			.map(|tool| match tool {
+			.map(|tool| match &tool {
 				ToolDownloaded::Github {
 					request,
 					artifact_key,
-					tag_name,
 					path,
 					format,
-				} => {
-					let dir = tools_dir.join(artifact_key.as_str());
-					match extract(&path, &dir, &format) {
-						Ok(()) => Ok(ToolDownloaded::Github {
-							request,
-							artifact_key,
-							tag_name,
-							path,
-							format,
-						}),
-						Err(error) => Err((request.full_name, error)),
-					}
-				}
+					..
+				} => match extract(path, &tools_dir.join(artifact_key.as_str()), format) {
+					Ok(()) => Ok(tool),
+					Err(error) => Err((request.full_name.clone(), error)),
+				},
 			})
 			.collect()
 	});
