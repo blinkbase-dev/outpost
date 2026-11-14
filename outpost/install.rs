@@ -13,8 +13,8 @@ use crate::tools::tool_request::{self, ToolRequest, ToolRequestGroup};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestGroup, ToolResolution);
+type ResolutionFailure = (ToolRequestGroup, Error);
 type DownloadEntry = (ToolResolutionGroup, ToolArchive);
-type RequestFailure = (Vec<ToolRequestGroup>, Error);
 
 pub(crate) fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
@@ -43,10 +43,10 @@ pub(crate) fn install() -> Result<(), Error> {
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, &tools_dir)?;
-	let installed_count = _update_lock_entries(&mut lock, extractions);
+	let installed_artifacts = _update_lock_entries(&mut lock, extractions);
 	lock::write(config_dir, &lock)?;
 	// representative rows are appended after duplicate rows
-	for tool in &lock.tools[lock.tools.len() - installed_count..] {
+	for tool in &lock.tools[lock.tools.len() - installed_artifacts..] {
 		match tool {
 			LockedTool::Github {
 				full_name,
@@ -56,13 +56,13 @@ pub(crate) fn install() -> Result<(), Error> {
 			} => println!("{full_name} {tag_name} {}", tools_dir.join(install_path).display()),
 		}
 	}
-	let rejected: Vec<RequestFailure> = resolve_err
+	let failures = resolve_err
 		.into_iter()
 		.map(|(request, error)| (vec![request], error))
 		.chain(download_err.into_iter().map(|(group, error)| (group.requests, error)))
 		.chain(extract_err.into_iter().map(|(group, error)| (group.requests, error)))
-		.collect();
-	for (requests, error) in &rejected {
+		.collect::<Vec<_>>();
+	for (requests, error) in &failures {
 		for request in requests {
 			match &request.tool {
 				ToolRequest::Github { full_name, lane, version } => {
@@ -74,14 +74,14 @@ pub(crate) fn install() -> Result<(), Error> {
 			}
 		}
 	}
-	let failed = rejected.iter().map(|(requests, _)| requests.len()).sum::<usize>();
+	let failed = failures.iter().map(|(requests, _)| requests.len()).sum::<usize>();
 	if failed > 0 {
 		return Err(format!("failed to install {failed} tool(s)").into());
 	}
 	Ok(())
 }
 
-async fn resolve_parallel(requests: Vec<ToolRequestGroup>, http: Client) -> Result<(Vec<ResolutionEntry>, Vec<(ToolRequestGroup, Error)>), Error> {
+async fn resolve_parallel(requests: Vec<ToolRequestGroup>, http: Client) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(requests.len());
 	for request in requests {
@@ -96,15 +96,15 @@ async fn resolve_parallel(requests: Vec<ToolRequestGroup>, http: Client) -> Resu
 		}));
 	}
 	let mut resolutions = Vec::with_capacity(handles.len());
-	let mut rejected = Vec::new();
+	let mut failures = Vec::new();
 	for handle in handles {
 		let (request, result) = handle.await?;
 		match result {
 			Ok(item) => resolutions.push((request, item)),
-			Err(error) => rejected.push((request, error)),
+			Err(error) => failures.push((request, error)),
 		}
 	}
-	Ok((resolutions, rejected))
+	Ok((resolutions, failures))
 }
 
 async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, Error> {
@@ -124,7 +124,7 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, 
 }
 
 fn _update_lock_entries(lock: &mut Lock, installed: Vec<DownloadEntry>) -> usize {
-	let installed_count = installed.len();
+	let installed_artifacts = installed.len();
 	let groups: Vec<ToolResolutionGroup> = installed.into_iter().map(|(group, _)| group).collect();
 	let row = |group: &ToolResolutionGroup, request: &ToolRequestGroup| match (&request.tool, &group.resolution) {
 		(ToolRequest::Github { full_name, lane, version }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
@@ -152,7 +152,7 @@ fn _update_lock_entries(lock: &mut Lock, installed: Vec<DownloadEntry>) -> usize
 	// drop entries replaced by a new install before appending
 	lock.tools.retain(|existing| !incoming.contains(&existing.identity()));
 	lock.tools.extend(rows);
-	installed_count
+	installed_artifacts
 }
 
 #[cfg(test)]
@@ -189,8 +189,8 @@ mod tests {
 			})
 			.collect();
 		let mut lock = Lock::default();
-		let installed_count = _update_lock_entries(&mut lock, installed);
-		assert_eq!(installed_count, 1);
+		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -233,8 +233,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_count = _update_lock_entries(&mut lock, installed);
-		assert_eq!(installed_count, 1);
+		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -277,8 +277,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_count = _update_lock_entries(&mut lock, installed);
-		assert_eq!(installed_count, 1);
+		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
@@ -333,8 +333,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_count = _update_lock_entries(&mut lock, installed);
-		assert_eq!(installed_count, 1);
+		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![other, LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -384,8 +384,8 @@ mod tests {
 			})
 			.collect();
 		let mut lock = Lock::default();
-		let installed_count = _update_lock_entries(&mut lock, installed);
-		assert_eq!(installed_count, 1);
+		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),

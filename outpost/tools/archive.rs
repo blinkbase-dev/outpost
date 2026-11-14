@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -14,11 +15,11 @@ use crate::tools::tool_request::{ToolRequest, ToolRequestGroup};
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestGroup, ToolResolution);
 type DownloadEntry = (ToolResolutionGroup, ToolArchive);
-type ResolutionFailure = (ToolResolutionGroup, Error);
+type GroupFailure = (ToolResolutionGroup, Error);
 
 pub(crate) async fn download_parallel(
 	resolutions: Vec<ToolResolutionGroup>, http: Client, downloads_dir: PathBuf,
-) -> Result<(Vec<DownloadEntry>, Vec<ResolutionFailure>), Error> {
+) -> Result<(Vec<DownloadEntry>, Vec<GroupFailure>), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(resolutions.len());
 	for group in resolutions {
@@ -41,14 +42,14 @@ pub(crate) async fn download_parallel(
 		}));
 	}
 	let mut archives = Vec::with_capacity(handles.len());
-	let mut rejected = Vec::new();
+	let mut failures = Vec::new();
 	for handle in handles {
 		match handle.await? {
 			Ok(tool) => archives.push(tool),
-			Err(error) => rejected.push(error),
+			Err(error) => failures.push(error),
 		}
 	}
-	Ok((archives, rejected))
+	Ok((archives, failures))
 }
 
 async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -> Result<PathBuf, Error> {
@@ -70,9 +71,9 @@ async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -
 	Ok(path)
 }
 
-pub(crate) fn extract_parallel(archives: Vec<DownloadEntry>, tools_dir: &Path) -> Result<(Vec<DownloadEntry>, Vec<ResolutionFailure>), Error> {
+pub(crate) fn extract_parallel(archives: Vec<DownloadEntry>, tools_dir: &Path) -> Result<(Vec<DownloadEntry>, Vec<GroupFailure>), Error> {
 	let pool = rayon::ThreadPoolBuilder::new().build()?;
-	let results: Vec<Result<DownloadEntry, ResolutionFailure>> = pool.install(|| {
+	let results: Vec<Result<DownloadEntry, GroupFailure>> = pool.install(|| {
 		archives
 			.into_par_iter()
 			.map(|(group, tool)| match (&group.resolution, &tool) {
@@ -83,15 +84,15 @@ pub(crate) fn extract_parallel(archives: Vec<DownloadEntry>, tools_dir: &Path) -
 			})
 			.collect()
 	});
-	let mut installed = Vec::with_capacity(results.len());
-	let mut rejected = Vec::new();
+	let mut extractions = Vec::with_capacity(results.len());
+	let mut failures = Vec::new();
 	for result in results {
 		match result {
-			Ok(tool) => installed.push(tool),
-			Err(error) => rejected.push(error),
+			Ok(extraction) => extractions.push(extraction),
+			Err(error) => failures.push(error),
 		}
 	}
-	Ok((installed, rejected))
+	Ok((extractions, failures))
 }
 
 fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Error> {
@@ -145,7 +146,6 @@ fn extract(archive: &Path, dest: &Path, format: &ArchiveFormat) -> Result<(), Er
 	Ok(())
 }
 
-#[derive(Clone)]
 pub(crate) enum ToolResolution {
 	Github {
 		tag_name: String,
@@ -173,7 +173,14 @@ impl ToolResolutionGroup {
 				match (&resolution, &groups[index].resolution) {
 					(ToolResolution::Github { tag_name, .. }, ToolResolution::Github { tag_name: installed_tag, .. }) => {
 						if installed_tag.as_str() != tag_name.as_str() {
-							return Err(format!("artifact collision: `{tag_name}` and `{installed_tag}` share `{}`", artifact_key.as_str()).into());
+							let origins: String = groups[index]
+								.requests
+								.iter()
+								.chain(std::iter::once(&request))
+								.flat_map(|request| &request.origins)
+								.map(|origin| format!("\n  from {}", origin.display()))
+								.collect();
+							return Err(format!("artifact collision: `{tag_name}` and `{installed_tag}` share `{artifact_key}`{origins}").into());
 						}
 					}
 				}
@@ -191,7 +198,6 @@ impl ToolResolutionGroup {
 	}
 }
 
-#[derive(Clone)]
 pub(crate) enum ToolArchive {
 	Github { path: PathBuf },
 }
@@ -215,6 +221,12 @@ impl ArtifactKey {
 
 	pub(crate) fn as_str(&self) -> &str {
 		&self.0
+	}
+}
+
+impl fmt::Display for ArtifactKey {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter.write_str(&self.0)
 	}
 }
 
@@ -347,9 +359,9 @@ mod download_parallel_tests {
 			})
 			.collect();
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let (archives, rejected) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
+		let (archives, failures) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
 		assert_eq!(archives.len(), 16);
-		assert!(rejected.is_empty());
+		assert!(failures.is_empty());
 		let started = started.lock().unwrap();
 		assert_eq!(started.len(), 16);
 		assert!(started[7] - started[0] < Duration::from_millis(100));
@@ -386,9 +398,9 @@ mod download_parallel_tests {
 			})
 			.collect();
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let (archives, rejected) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
+		let (archives, failures) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
 		assert_eq!(archives.len(), 10);
-		assert!(rejected.is_empty());
+		assert!(failures.is_empty());
 		for (_, tool) in &archives {
 			let ToolArchive::Github { path } = tool;
 			assert!(path.exists(), "{}", path.display());
@@ -434,8 +446,8 @@ mod download_parallel_tests {
 			})
 			.collect();
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let (archives, rejected) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
-		assert!(rejected.is_empty());
+		let (archives, failures) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
+		assert!(failures.is_empty());
 		assert_eq!(archives.len(), 1);
 		assert_eq!(archives[0].0.requests.len(), 2);
 	}
@@ -457,7 +469,7 @@ mod download_parallel_tests {
 		let entries = vec![
 			(
 				ToolRequestGroup {
-					origins: Vec::new(),
+					origins: vec![PathBuf::from("/a/outpost.toml")],
 					tool: ToolRequest::Github {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
@@ -473,7 +485,7 @@ mod download_parallel_tests {
 			),
 			(
 				ToolRequestGroup {
-					origins: Vec::new(),
+					origins: vec![PathBuf::from("/b/outpost.toml")],
 					tool: ToolRequest::Github {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
@@ -487,10 +499,29 @@ mod download_parallel_tests {
 					format: ArchiveFormat::TarGz,
 				},
 			),
+			(
+				ToolRequestGroup {
+					origins: vec![PathBuf::from("/c/outpost.toml")],
+					tool: ToolRequest::Github {
+						full_name: "owner/repo".to_owned(),
+						lane: String::new(),
+						version: Version::parse("latest"),
+					},
+				},
+				ToolResolution::Github {
+					tag_name: "v1.1.0".to_owned(),
+					url: format!("{}/missing", server.uri()),
+					size: 4,
+					format: ArchiveFormat::TarGz,
+				},
+			),
 		];
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let (archives, rejected) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
-		assert_eq!(rejected.len(), 1);
+		let (archives, failures) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
+		assert_eq!(failures.len(), 1);
+		assert_eq!(failures[0].0.requests.len(), 2);
+		let origins: Vec<_> = failures[0].0.requests.iter().flat_map(|request| &request.origins).collect();
+		assert_eq!(origins, vec![&PathBuf::from("/b/outpost.toml"), &PathBuf::from("/c/outpost.toml")]);
 		assert_eq!(archives.len(), 1);
 		let (_, ToolArchive::Github { path }) = &archives[0];
 		assert!(path.exists());
@@ -681,10 +712,10 @@ mod extract_parallel_tests {
 			.zip([archive])
 			.map(|(group, path)| (group, ToolArchive::Github { path }))
 			.collect();
-		let (installed, rejected) = extract_parallel(archives, &tools).unwrap();
+		let (extractions, failures) = extract_parallel(archives, &tools).unwrap();
 		let dest = tools.join("github_owner_repo/1.2.3");
-		assert!(rejected.is_empty());
-		assert_eq!(installed.len(), 1);
+		assert!(failures.is_empty());
+		assert_eq!(extractions.len(), 1);
 		assert_eq!(std::fs::read(dest.join("example-tool")).unwrap(), b"binary");
 
 		let archive = downloads.join("magika.tar.gz");
@@ -711,10 +742,10 @@ mod extract_parallel_tests {
 			.zip([archive])
 			.map(|(group, path)| (group, ToolArchive::Github { path }))
 			.collect();
-		let (installed, rejected) = extract_parallel(archives, &tools).unwrap();
+		let (extractions, failures) = extract_parallel(archives, &tools).unwrap();
 		let dest = tools.join("github_google_magika/cli_v1.0.0");
-		assert!(rejected.is_empty());
-		assert_eq!(installed.len(), 1);
+		assert!(failures.is_empty());
+		assert_eq!(extractions.len(), 1);
 		assert_eq!(std::fs::read(dest.join("example-tool")).unwrap(), b"binary");
 	}
 
@@ -786,9 +817,9 @@ mod extract_parallel_tests {
 			.zip([gz_archive, xz_archive, zip_archive])
 			.map(|(group, path)| (group, ToolArchive::Github { path }))
 			.collect();
-		let (installed, rejected) = extract_parallel(archives, &tools).unwrap();
-		assert!(rejected.is_empty());
-		assert_eq!(installed.len(), 3);
+		let (extractions, failures) = extract_parallel(archives, &tools).unwrap();
+		assert!(failures.is_empty());
+		assert_eq!(extractions.len(), 3);
 		assert_eq!(std::fs::read(tools.join("github_owner_tar_gz/1.0.0/example-tool")).unwrap(), b"one");
 		assert_eq!(std::fs::read(tools.join("github_owner_tar_xz/1.0.0/example-tool")).unwrap(), b"two");
 		assert_eq!(std::fs::read(tools.join("github_owner_zip/1.0.0/example-tool")).unwrap(), b"three");
@@ -844,9 +875,9 @@ mod extract_parallel_tests {
 			.zip([good, bad])
 			.map(|(group, path)| (group, ToolArchive::Github { path }))
 			.collect();
-		let (installed, rejected) = extract_parallel(archives, &tools).unwrap();
-		assert_eq!(rejected.len(), 1);
-		assert_eq!(installed.len(), 1);
+		let (extractions, failures) = extract_parallel(archives, &tools).unwrap();
+		assert_eq!(failures.len(), 1);
+		assert_eq!(extractions.len(), 1);
 		assert_eq!(std::fs::read(tools.join("github_owner_good/1.0.0/example-tool")).unwrap(), b"binary");
 		assert!(!tools.join("github_owner_bad/1.0.0").exists());
 	}
@@ -899,7 +930,7 @@ mod resolution_group_tests {
 	#[test]
 	fn rejects_artifact_collisions() {
 		let first = ToolRequestGroup {
-			origins: Vec::new(),
+			origins: vec![PathBuf::from("/a/outpost.toml")],
 			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
@@ -907,7 +938,7 @@ mod resolution_group_tests {
 			},
 		};
 		let second = ToolRequestGroup {
-			origins: Vec::new(),
+			origins: vec![PathBuf::from("/b/outpost.toml")],
 			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
@@ -931,5 +962,7 @@ mod resolution_group_tests {
 		.err()
 		.unwrap();
 		assert!(error.to_string().contains("artifact collision"), "{error}");
+		assert!(error.to_string().contains("\n  from /a/outpost.toml"), "{error}");
+		assert!(error.to_string().contains("\n  from /b/outpost.toml"), "{error}");
 	}
 }
