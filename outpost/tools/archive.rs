@@ -3,6 +3,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use rayon::iter::Either;
 use rayon::prelude::*;
 use regex::regex;
 use reqwest::Client;
@@ -73,25 +74,14 @@ async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64) -
 
 pub(crate) fn extract_parallel(archives: Vec<DownloadEntry>, tools_dir: &Path) -> Result<(Vec<DownloadEntry>, Vec<GroupFailure>), Error> {
 	let pool = rayon::ThreadPoolBuilder::new().build()?;
-	let results: Vec<Result<DownloadEntry, GroupFailure>> = pool.install(|| {
-		archives
-			.into_par_iter()
-			.map(|(group, tool)| match (&group.resolution, &tool) {
-				(ToolResolution::Github { format, .. }, ToolArchive::Github { path }) => match extract(path, &tools_dir.join(group.artifact_key.as_str()), format) {
-					Ok(()) => Ok((group, tool)),
-					Err(error) => Err((group, error)),
-				},
-			})
-			.collect()
+	let (extractions, failures): (Vec<DownloadEntry>, Vec<GroupFailure>) = pool.install(|| {
+		archives.into_par_iter().partition_map(|(group, tool)| match (&group.resolution, &tool) {
+			(ToolResolution::Github { format, .. }, ToolArchive::Github { path }) => match extract(path, &tools_dir.join(group.artifact_key.as_str()), format) {
+				Ok(()) => Either::Left((group, tool)),
+				Err(error) => Either::Right((group, error)),
+			},
+		})
 	});
-	let mut extractions = Vec::with_capacity(results.len());
-	let mut failures = Vec::new();
-	for result in results {
-		match result {
-			Ok(extraction) => extractions.push(extraction),
-			Err(error) => failures.push(error),
-		}
-	}
 	Ok((extractions, failures))
 }
 
