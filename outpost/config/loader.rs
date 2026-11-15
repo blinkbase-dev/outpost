@@ -7,7 +7,7 @@ use serde::Deserialize;
 use super::locate::ConfigPaths;
 
 pub(crate) fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
-	load_paths(paths.system.iter().chain(&paths.project).chain(&paths.registered))
+	load_paths(paths.system.iter().chain(&paths.project).chain(&paths.state.registered_paths))
 }
 
 pub(crate) fn load_paths<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) -> Result<Vec<ConfigFile>, LoadError> {
@@ -87,6 +87,7 @@ mod tests {
 	use std::fs;
 
 	use super::*;
+	use crate::config::state::State;
 
 	#[test]
 	fn loads_files_from_all_sources() {
@@ -121,7 +122,9 @@ mod tests {
 		let files = load(&ConfigPaths {
 			system: vec![system.clone()],
 			project: vec![project.clone()],
-			registered: vec![registered.clone()],
+			state: State {
+				registered_paths: vec![registered.clone()],
+			},
 			..ConfigPaths::default()
 		})
 		.unwrap();
