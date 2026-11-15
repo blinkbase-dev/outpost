@@ -21,13 +21,13 @@ pub(crate) fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequestEntry>, To
 	Ok(requests)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ToolRequestEntry {
 	pub(crate) origin: PathBuf,
 	pub(crate) tool: ToolRequest,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ToolRequest {
 	Github { full_name: String, lane: String, version: Version },
 }

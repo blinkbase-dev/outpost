@@ -14,12 +14,26 @@ pub(crate) fn exec(args: ExecArgs) -> Result<i32, Error> {
 	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
 	let tools_dir = config_dir.join("tools");
 	let lock = lock::read(config_dir)?;
-	let installed = candidates::installed(candidates::requests(&paths)?, &lock, &tools_dir);
+	let requests = candidates::requests(&paths)?;
+	let installed = candidates::installed(&requests, &lock, &tools_dir);
 	let spec = ToolSpec::parse(&args.tool)?;
-	let tool = installed
-		.iter()
-		.find(|tool| spec.matches(&tool.request))
-		.ok_or_else(|| format!("`{}` is not installed or not requested by the current config", args.tool))?;
+	let Some(request) = requests.iter().find(|entry| spec.matches(&entry.tool)) else {
+		return Err(format!("`{}` is not requested by the current config", args.tool).into());
+	};
+	let identity = request.tool.identity();
+	let tool = match installed.get(&identity) {
+		Some(tool) => tool,
+		None => {
+			return Err(
+				format!(
+					"`{}` is not installed\n  from {}\nrun `op install` to install it",
+					args.tool,
+					request.origin.display()
+				)
+				.into(),
+			);
+		}
+	};
 	let mut command = args.command.into_iter();
 	let binary = command.next().ok_or("missing binary name after `--`")?;
 	let binary = binary.to_str().ok_or("binary name must be valid utf-8")?;

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -22,13 +22,12 @@ pub(crate) struct InstalledTool {
 	pub(crate) installed_version: String,
 }
 
-pub(crate) fn installed(requests: Vec<ToolRequestEntry>, lock: &Lock, tools_dir: &Path) -> Vec<InstalledTool> {
+pub(crate) fn installed(requests: &[ToolRequestEntry], lock: &Lock, tools_dir: &Path) -> HashMap<Identity, InstalledTool> {
 	let locked: HashMap<Identity, &LockedTool> = lock.tools.iter().map(|tool| (tool.identity(), tool)).collect();
-	let mut tools = Vec::new();
-	let mut seen = HashSet::new();
+	let mut tools = HashMap::new();
 	for entry in requests {
 		let identity = entry.tool.identity();
-		if !seen.insert(identity.clone()) {
+		if tools.contains_key(&identity) {
 			continue;
 		}
 		match locked.get(&identity) {
@@ -37,9 +36,9 @@ pub(crate) fn installed(requests: Vec<ToolRequestEntry>, lock: &Lock, tools_dir:
 				if !install_dir.is_dir() {
 					continue;
 				}
-				tools.push(InstalledTool {
-					request: entry.tool,
-					origin: entry.origin,
+				tools.insert(identity, InstalledTool {
+					request: entry.tool.clone(),
+					origin: entry.origin.clone(),
 					install_dir,
 					installed_version: tag_name.clone(),
 				});
@@ -272,7 +271,7 @@ mod tests {
 	}
 
 	#[test]
-	fn installed_dedupes_and_preserves_precedence() {
+	fn installed_dedupes_by_identity() {
 		let dir = tempfile::tempdir().unwrap();
 		let base = write(dir.path(), "system/config.toml", &["github:o/project"]);
 		let env = write(dir.path(), "system/outpost.dev.toml", &["github:o/system"]);
@@ -314,13 +313,34 @@ mod tests {
 			registered: vec![registered],
 			..ConfigPaths::default()
 		};
-		let candidates = installed(requests(&paths).unwrap(), &lock, &tools);
+		let candidates = installed(&requests(&paths).unwrap(), &lock, &tools);
 		assert_eq!(candidates.len(), 2);
-		assert_eq!(candidates[0].origin, project);
-		assert_eq!(candidates[0].installed_version, "v1.0.0");
-		assert_eq!(candidates[1].installed_version, "v2.0.0");
-		assert!(matches!(&candidates[0].request, ToolRequest::Github { full_name, .. } if full_name == "o/project"));
-		assert!(matches!(&candidates[1].request, ToolRequest::Github { full_name, .. } if full_name == "o/system"));
+
+		let project_request = ToolRequest::Github {
+			full_name: "o/project".to_owned(),
+			lane: String::new(),
+			version: Version::parse("1"),
+		};
+		let project_tool = candidates.get(&project_request.identity()).unwrap();
+		assert_eq!(project_tool.origin, project);
+		assert_eq!(project_tool.installed_version, "v1.0.0");
+		assert!(matches!(&project_tool.request, ToolRequest::Github { full_name, .. } if full_name == "o/project"));
+
+		let system_request = ToolRequest::Github {
+			full_name: "o/system".to_owned(),
+			lane: String::new(),
+			version: Version::parse("1"),
+		};
+		let system_tool = candidates.get(&system_request.identity()).unwrap();
+		assert_eq!(system_tool.installed_version, "v2.0.0");
+		assert!(matches!(&system_tool.request, ToolRequest::Github { full_name, .. } if full_name == "o/system"));
+
+		let registered_request = ToolRequest::Github {
+			full_name: "o/registered".to_owned(),
+			lane: String::new(),
+			version: Version::parse("1"),
+		};
+		assert!(candidates.get(&registered_request.identity()).is_none());
 	}
 
 	#[test]
@@ -342,7 +362,7 @@ mod tests {
 			system: vec![system],
 			..ConfigPaths::default()
 		};
-		assert!(installed(requests(&paths).unwrap(), &lock, &tools).is_empty());
+		assert!(installed(&requests(&paths).unwrap(), &lock, &tools).is_empty());
 	}
 
 	#[test]
