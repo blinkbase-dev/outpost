@@ -5,7 +5,7 @@ use std::process::Command;
 use std::{fmt, fs, io};
 
 use super::lock::{Identity, Lock, LockedTool};
-use super::tool_request::{self, ToolRequest, ToolRequestEntry, ToolRequestError};
+use super::tool_request::{self, ToolRequestEntry, ToolRequestError};
 use crate::config::loader;
 use crate::config::loader::LoadError;
 use crate::config::locate::ConfigPaths;
@@ -16,7 +16,6 @@ pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequestEntry>, Can
 }
 
 pub(crate) struct InstalledTool {
-	pub(crate) request: ToolRequest,
 	pub(crate) origin: PathBuf,
 	pub(crate) install_dir: PathBuf,
 	pub(crate) installed_version: String,
@@ -27,17 +26,13 @@ pub(crate) fn installed(requests: &[ToolRequestEntry], lock: &Lock, tools_dir: &
 	let mut tools = HashMap::new();
 	for entry in requests {
 		let identity = entry.tool.identity();
-		if tools.contains_key(&identity) {
-			continue;
-		}
 		match locked.get(&identity) {
 			Some(LockedTool::Github { install_path, tag_name, .. }) => {
 				let install_dir = tools_dir.join(install_path);
 				if !install_dir.is_dir() {
 					continue;
 				}
-				tools.insert(identity, InstalledTool {
-					request: entry.tool.clone(),
+				tools.entry(identity).or_insert(InstalledTool {
 					origin: entry.origin.clone(),
 					install_dir,
 					installed_version: tag_name.clone(),
@@ -51,7 +46,7 @@ pub(crate) fn installed(requests: &[ToolRequestEntry], lock: &Lock, tools_dir: &
 
 pub(crate) fn find_binaries(install_dir: &Path, name: &str) -> io::Result<Vec<PathBuf>> {
 	let mut components = Path::new(name).components();
-	if !(matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()) {
+	if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
 		return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid binary name `{name}`")));
 	}
 	let mut matches = Vec::new();
@@ -324,7 +319,6 @@ mod tests {
 		let project_tool = candidates.get(&project_request.identity()).unwrap();
 		assert_eq!(project_tool.origin, project);
 		assert_eq!(project_tool.installed_version, "v1.0.0");
-		assert!(matches!(&project_tool.request, ToolRequest::Github { full_name, .. } if full_name == "o/project"));
 
 		let system_request = ToolRequest::Github {
 			full_name: "o/system".to_owned(),
@@ -333,14 +327,13 @@ mod tests {
 		};
 		let system_tool = candidates.get(&system_request.identity()).unwrap();
 		assert_eq!(system_tool.installed_version, "v2.0.0");
-		assert!(matches!(&system_tool.request, ToolRequest::Github { full_name, .. } if full_name == "o/system"));
 
 		let registered_request = ToolRequest::Github {
 			full_name: "o/registered".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1"),
 		};
-		assert!(candidates.get(&registered_request.identity()).is_none());
+		assert!(!candidates.contains_key(&registered_request.identity()));
 	}
 
 	#[test]
