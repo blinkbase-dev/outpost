@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::{fmt, fs, io};
 
 use super::lock::{Identity, Lock, LockedTool};
@@ -108,6 +109,76 @@ fn _is_executable(metadata: &fs::Metadata) -> bool {
 #[cfg(not(unix))]
 fn _is_executable(_metadata: &fs::Metadata) -> bool {
 	true
+}
+
+pub(crate) fn run(path: &Path, args: impl IntoIterator<Item = OsString>) -> io::Result<i32> {
+	let args: Vec<OsString> = args.into_iter().collect();
+	let mut command = Command::new(path);
+	#[cfg(windows)]
+	if path
+		.extension()
+		.and_then(OsStr::to_str)
+		.is_some_and(|extension| ["bat", "cmd"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate)))
+	{
+		let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+		let stem = Path::new(&comspec).file_stem().and_then(OsStr::to_str);
+		match stem {
+			Some(stem) if stem.eq_ignore_ascii_case("cmd") => {
+				command = Command::new(comspec);
+				command.arg("/d").arg("/c").arg(path).args(&args);
+			}
+			Some(stem) if ["powershell", "pwsh"].iter().any(|candidate| stem.eq_ignore_ascii_case(candidate)) => {
+				command = Command::new(comspec);
+				command.arg("-NoProfile").arg("-Command").arg(_powershell_command(path, &args));
+			}
+			_ => {
+				return Err(io::Error::new(
+					io::ErrorKind::InvalidInput,
+					format!("COMSPEC `{}` is not supported", comspec.to_string_lossy()),
+				));
+			}
+		}
+	} else {
+		command.args(&args);
+	}
+	#[cfg(not(windows))]
+	command.args(&args);
+	// let the program find sibling binaries
+	if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+		let mut paths = vec![parent.to_path_buf()];
+		if let Some(existing) = std::env::var_os("PATH") {
+			paths.extend(std::env::split_paths(&existing));
+		}
+		if let Ok(value) = std::env::join_paths(paths) {
+			command.env("PATH", value);
+		}
+	}
+	let status = command.status()?;
+	Ok(_exit_code(status))
+}
+
+#[cfg(windows)]
+fn _powershell_command(path: &Path, args: &[OsString]) -> OsString {
+	let mut command = format!("& '{}'", path.to_string_lossy().replace('\'', "''"));
+	for arg in args {
+		command.push_str(&format!(" '{}'", arg.to_string_lossy().replace('\'', "''")));
+	}
+	command.push_str("; exit $LASTEXITCODE");
+	command.into()
+}
+
+#[cfg(unix)]
+fn _exit_code(status: std::process::ExitStatus) -> i32 {
+	if let Some(code) = status.code() {
+		return code;
+	}
+	use std::os::unix::process::ExitStatusExt;
+	status.signal().map_or(1, |signal| 128 + signal)
+}
+
+#[cfg(not(unix))]
+fn _exit_code(status: std::process::ExitStatus) -> i32 {
+	status.code().unwrap_or(1)
 }
 
 #[derive(Debug)]

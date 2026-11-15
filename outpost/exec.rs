@@ -37,8 +37,7 @@ pub(crate) fn exec(args: ExecArgs) -> Result<i32, Error> {
 			return Err(message.into());
 		}
 	};
-	let status = std::process::Command::new(path).args(command).status()?;
-	Ok(_exit_code(status))
+	Ok(candidates::run(path, command)?)
 }
 
 #[derive(Args)]
@@ -46,18 +45,4 @@ pub(crate) struct ExecArgs {
 	tool: String,
 	#[arg(last = true)]
 	command: Vec<OsString>,
-}
-
-#[cfg(unix)]
-fn _exit_code(status: std::process::ExitStatus) -> i32 {
-	if let Some(code) = status.code() {
-		return code;
-	}
-	use std::os::unix::process::ExitStatusExt;
-	status.signal().map_or(1, |signal| 128 + signal)
-}
-
-#[cfg(not(unix))]
-fn _exit_code(status: std::process::ExitStatus) -> i32 {
-	status.code().unwrap_or(1)
 }
