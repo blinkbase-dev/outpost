@@ -7,8 +7,12 @@ use serde::Deserialize;
 use super::locate::ConfigPaths;
 
 pub(crate) fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
-	let mut files = Vec::with_capacity(paths.system.len() + paths.project.len() + paths.registered.len());
-	for path in paths.system.iter().chain(&paths.project).chain(&paths.registered) {
+	load_paths(paths.system.iter().chain(&paths.project).chain(&paths.registered))
+}
+
+pub(crate) fn load_paths<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) -> Result<Vec<ConfigFile>, LoadError> {
+	let mut files = Vec::new();
+	for path in paths {
 		let content = match fs::read_to_string(path) {
 			Ok(content) => content,
 			Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
