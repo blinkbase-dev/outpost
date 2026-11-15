@@ -68,7 +68,12 @@ pub(crate) fn find_binaries(install_dir: &Path, name: &str) -> io::Result<Vec<Pa
 			if !_binary_matches(&entry.file_name(), name) {
 				continue;
 			}
-			let metadata = fs::metadata(entry.path())?;
+			// broken symlinks resolve to nothing
+			let metadata = match fs::metadata(entry.path()) {
+				Ok(metadata) => metadata,
+				Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+				Err(error) => return Err(error),
+			};
 			if metadata.is_file() && _is_executable(&metadata) {
 				matches.push(entry.path());
 			}
@@ -291,6 +296,24 @@ mod tests {
 		for name in ["", "bin/tool", "../tool", "."] {
 			assert_eq!(find_binaries(dir.path(), name).unwrap_err().kind(), std::io::ErrorKind::InvalidInput, "{name}");
 		}
+	}
+
+	#[test]
+	fn skips_broken_symlinks() {
+		let dir = tempfile::tempdir().unwrap();
+		let link = dir.path().join("tool");
+		let missing = dir.path().join("missing");
+		#[cfg(unix)]
+		let created = std::os::unix::fs::symlink(&missing, &link).is_ok();
+		#[cfg(windows)]
+		let created = std::os::windows::fs::symlink_file(&missing, &link).is_ok();
+		#[cfg(not(any(unix, windows)))]
+		let created = false;
+		if !created {
+			eprintln!("skipping: cannot create a file symlink");
+			return;
+		}
+		assert!(find_binaries(dir.path(), "tool").unwrap().is_empty());
 	}
 
 	#[cfg(unix)]
