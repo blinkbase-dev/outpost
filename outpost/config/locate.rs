@@ -12,6 +12,26 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 	let cwd = std::path::absolute(cwd).map_err(|source| (cwd.to_path_buf(), source))?;
 	let (system_dir, system) = system_configs(env.home_config_dir.as_deref(), env.config_dir.as_deref(), env.envs.as_deref())?;
 	let system_dir = system_dir.map(|dir| std::fs::canonicalize(&dir).unwrap_or(dir));
+	let downloads_dir = match env.downloads_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
+		Some(path) if !path.is_absolute() => {
+			return Err(LocateError::RelativeDir {
+				name: "OUTPOST_DOWNLOADS_DIR",
+				path: path.to_path_buf(),
+			});
+		}
+		Some(path) => Some(path.to_path_buf()),
+		None => system_dir.as_ref().map(|dir| dir.join("downloads")),
+	};
+	let tools_dir = match env.tools_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
+		Some(path) if !path.is_absolute() => {
+			return Err(LocateError::RelativeDir {
+				name: "OUTPOST_TOOLS_DIR",
+				path: path.to_path_buf(),
+			});
+		}
+		Some(path) => Some(path.to_path_buf()),
+		None => system_dir.as_ref().map(|dir| dir.join("tools")),
+	};
 	let project = project_configs(&cwd, system_dir.as_deref());
 	let registered = match system_dir.as_deref() {
 		Some(config_dir) if config_dir.is_dir() => registered_configs(config_dir, &project)?,
@@ -19,6 +39,8 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 	};
 	Ok(ConfigPaths {
 		system_dir,
+		downloads_dir,
+		tools_dir,
 		system,
 		project,
 		registered,
@@ -29,7 +51,10 @@ fn system_configs(home_config_dir: Option<&Path>, config_dir: Option<&Path>, env
 	let mut files = Vec::new();
 	let dir = if let Some(path) = config_dir.filter(|path| !path.is_empty()) {
 		if !path.is_absolute() {
-			return Err(LocateError::RelativeConfigDir(path.to_path_buf()));
+			return Err(LocateError::RelativeDir {
+				name: "OUTPOST_CONFIG_DIR",
+				path: path.to_path_buf(),
+			});
 		}
 		files.push(path.join("outpost.toml"));
 		path
@@ -104,6 +129,8 @@ fn _write_state(path: &Path, text: Option<&str>, paths: &[PathBuf]) -> Result<()
 struct ConfigEnv {
 	home_config_dir: Option<PathBuf>,
 	config_dir: Option<PathBuf>,
+	downloads_dir: Option<PathBuf>,
+	tools_dir: Option<PathBuf>,
 	envs: Option<String>,
 }
 
@@ -112,6 +139,8 @@ impl ConfigEnv {
 		Self {
 			home_config_dir: std::env::home_dir().map(|home| home.join(".outpost")),
 			config_dir: std::env::var_os("OUTPOST_CONFIG_DIR").map(PathBuf::from),
+			downloads_dir: std::env::var_os("OUTPOST_DOWNLOADS_DIR").map(PathBuf::from),
+			tools_dir: std::env::var_os("OUTPOST_TOOLS_DIR").map(PathBuf::from),
 			envs: std::env::var("OUTPOST_ENV").ok(),
 		}
 	}
@@ -120,6 +149,8 @@ impl ConfigEnv {
 #[derive(Default)]
 pub(crate) struct ConfigPaths {
 	pub(crate) system_dir: Option<PathBuf>,
+	pub(crate) downloads_dir: Option<PathBuf>,
+	pub(crate) tools_dir: Option<PathBuf>,
 	pub(crate) system: Vec<PathBuf>,
 	pub(crate) project: Vec<PathBuf>,
 	pub(crate) registered: Vec<PathBuf>,
@@ -139,7 +170,7 @@ struct StateRef<'a> {
 #[derive(Debug)]
 pub(crate) enum LocateError {
 	Io { path: PathBuf, source: std::io::Error },
-	RelativeConfigDir(PathBuf),
+	RelativeDir { name: &'static str, path: PathBuf },
 	StateParse { path: PathBuf, source: toml::de::Error },
 	StateSerialize(toml::ser::Error),
 }
@@ -166,9 +197,7 @@ impl fmt::Display for LocateError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
 			Self::Io { path, source } => write!(f, "failed to access `{}`: {source}", path.display()),
-			Self::RelativeConfigDir(path) => {
-				write!(f, "OUTPOST_CONFIG_DIR must be absolute, got `{}`", path.display())
-			}
+			Self::RelativeDir { name, path } => write!(f, "{name} must be absolute, got `{}`", path.display()),
 			Self::StateParse { path, source } => write!(f, "failed to parse state `{}`: {source}", path.display()),
 			Self::StateSerialize(error) => write!(f, "failed to serialize state: {error}"),
 		}
@@ -179,7 +208,7 @@ impl std::error::Error for LocateError {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		match self {
 			Self::Io { source, .. } => Some(source),
-			Self::RelativeConfigDir(_) => None,
+			Self::RelativeDir { .. } => None,
 			Self::StateParse { source, .. } => Some(source),
 			Self::StateSerialize(error) => Some(error),
 		}
@@ -211,6 +240,8 @@ mod tests {
 		};
 		let locations = locate_with(&flat, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
+		assert_eq!(locations.downloads_dir, Some(home_config_dir.join("downloads")));
+		assert_eq!(locations.tools_dir, Some(home_config_dir.join("tools")));
 		assert_eq!(locations.system, vec![home_config_dir.join("config.toml")]);
 		assert_eq!(locations.project, vec![std::fs::canonicalize(flat.join("outpost.toml")).unwrap()]);
 
@@ -276,7 +307,7 @@ mod tests {
 		};
 		assert!(matches!(
 			locate_with(&cwd, &env),
-			Err(LocateError::RelativeConfigDir(path)) if path == Path::new("relative")
+			Err(LocateError::RelativeDir { name: "OUTPOST_CONFIG_DIR", path }) if path == Path::new("relative")
 		));
 
 		// config + envs
@@ -284,6 +315,7 @@ mod tests {
 			home_config_dir: Some(home_config_dir),
 			config_dir: Some(config_dir.clone()),
 			envs: Some("dev".to_owned()),
+			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
@@ -298,6 +330,42 @@ mod tests {
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
 		assert_eq!(locations.system, vec![config_dir.join("outpost.toml"), config_dir.join("outpost.dev.toml"),]);
+	}
+
+	#[test]
+	fn locates_custom_tools_and_downloads_with_env() {
+		let tmp = tempfile::tempdir().unwrap();
+		let cwd = tmp.path().join("cwd");
+		let home = tmp.path().join("home").join(".outpost");
+		let downloads = tmp.path().join("downloads");
+		let tools = tmp.path().join("tools");
+		let env = ConfigEnv {
+			home_config_dir: Some(home.clone()),
+			downloads_dir: Some(downloads.clone()),
+			tools_dir: Some(tools.clone()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.system_dir.as_ref(), Some(&home));
+		assert_eq!(locations.downloads_dir, Some(downloads));
+		assert_eq!(locations.tools_dir, Some(tools));
+
+		let env = ConfigEnv {
+			home_config_dir: Some(home.clone()),
+			downloads_dir: Some(PathBuf::new()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.downloads_dir, Some(home.join("downloads")));
+
+		let env = ConfigEnv {
+			tools_dir: Some(PathBuf::from("relative")),
+			..ConfigEnv::default()
+		};
+		assert!(matches!(
+			locate_with(&cwd, &env),
+			Err(LocateError::RelativeDir { name: "OUTPOST_TOOLS_DIR", path }) if path == Path::new("relative")
+		));
 	}
 
 	#[test]
