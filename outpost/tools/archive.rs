@@ -19,13 +19,13 @@ type DownloadEntry = (ToolResolutionGroup, ToolArchive);
 type GroupFailure = (ToolResolutionGroup, Error);
 
 pub(crate) async fn download_parallel(
-	resolutions: Vec<ToolResolutionGroup>, http: Client, downloads_dir: PathBuf,
+	resolutions: Vec<ToolResolutionGroup>, http: Client, downloads_dir: &Path,
 ) -> Result<(Vec<DownloadEntry>, Vec<GroupFailure>), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(resolutions.len());
 	for group in resolutions {
 		let semaphore = Arc::clone(&semaphore);
-		let downloads_dir = downloads_dir.clone();
+		let downloads_dir = downloads_dir.to_path_buf();
 		let http = http.clone();
 		handles.push(tokio::spawn(async move {
 			match &group.resolution {
@@ -349,7 +349,7 @@ mod download_parallel_tests {
 			})
 			.collect();
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let (archives, failures) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
+		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(archives.len(), 16);
 		assert!(failures.is_empty());
 		let started = started.lock().unwrap();
@@ -388,7 +388,7 @@ mod download_parallel_tests {
 			})
 			.collect();
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let (archives, failures) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
+		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(archives.len(), 10);
 		assert!(failures.is_empty());
 		for (_, tool) in &archives {
@@ -436,7 +436,7 @@ mod download_parallel_tests {
 			})
 			.collect();
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let (archives, failures) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
+		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert!(failures.is_empty());
 		assert_eq!(archives.len(), 1);
 		assert_eq!(archives[0].0.requests.len(), 2);
@@ -507,7 +507,7 @@ mod download_parallel_tests {
 			),
 		];
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let (archives, failures) = download_parallel(resolutions, http(), dir.path().to_owned()).await.unwrap();
+		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(failures.len(), 1);
 		assert_eq!(failures[0].0.requests.len(), 2);
 		let origins: Vec<_> = failures[0].0.requests.iter().flat_map(|request| &request.origins).collect();

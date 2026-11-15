@@ -40,7 +40,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(requests, http.clone()))?;
 	// group resolutions by artifact so each tool downloads once
 	let resolutions = ToolResolutionGroup::from_entries(resolutions)?;
-	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir.to_path_buf()))?;
+	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
 	let installed_artifacts = _update_lock_entries(&mut lock, extractions);
