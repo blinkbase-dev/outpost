@@ -1,5 +1,6 @@
 mod backend;
 mod config;
+mod exec;
 mod install;
 mod list;
 mod tools;
@@ -8,12 +9,16 @@ use clap::{Parser, Subcommand};
 
 fn main() {
 	let result = match Args::parse().command {
-		Command::Install => install::install(),
-		Command::List => list::list(),
+		Command::Install => install::install().map(|()| 0),
+		Command::List => list::list().map(|()| 0),
+		Command::Exec(args) => exec::exec(args),
 	};
-	if let Err(error) = result {
-		eprintln!("{error}");
-		std::process::exit(1);
+	match result {
+		Ok(code) => std::process::exit(code),
+		Err(error) => {
+			eprintln!("{error}");
+			std::process::exit(1);
+		}
 	}
 }
 
@@ -28,4 +33,5 @@ struct Args {
 enum Command {
 	Install,
 	List,
+	Exec(exec::ExecArgs),
 }
