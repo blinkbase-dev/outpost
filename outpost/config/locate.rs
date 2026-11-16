@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use super::state::{self, State, StateError};
 
 pub(crate) fn locate(cwd: &Path) -> Result<ConfigPaths, LocateError> {
 	locate_with(cwd, &ConfigEnv::from_process())
@@ -12,16 +12,43 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 	let cwd = std::path::absolute(cwd).map_err(|source| (cwd.to_path_buf(), source))?;
 	let (system_dir, system) = system_configs(env.home_config_dir.as_deref(), env.config_dir.as_deref(), env.envs.as_deref())?;
 	let system_dir = system_dir.map(|dir| std::fs::canonicalize(&dir).unwrap_or(dir));
+	let downloads_dir = match env.downloads_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
+		Some(path) if !path.is_absolute() => {
+			return Err(LocateError::RelativeDir {
+				name: "OUTPOST_DOWNLOADS_DIR",
+				path: path.to_path_buf(),
+			});
+		}
+		Some(path) => Some(path.to_path_buf()),
+		None => system_dir.as_ref().map(|dir| dir.join("downloads")),
+	};
+	let tools_dir = match env.tools_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
+		Some(path) if !path.is_absolute() => {
+			return Err(LocateError::RelativeDir {
+				name: "OUTPOST_TOOLS_DIR",
+				path: path.to_path_buf(),
+			});
+		}
+		Some(path) => Some(path.to_path_buf()),
+		None => system_dir.as_ref().map(|dir| dir.join("tools")),
+	};
 	let project = project_configs(&cwd, system_dir.as_deref());
-	let registered = match system_dir.as_deref() {
-		Some(config_dir) if config_dir.is_dir() => registered_configs(config_dir, &project)?,
-		_ => Vec::new(),
+	let state = match system_dir.as_deref().filter(|dir| dir.is_dir()) {
+		Some(config_dir) => {
+			let _lock = state::acquire(config_dir)?;
+			let (mut state, text) = state::read(config_dir)?;
+			registered_configs(config_dir, &project, &mut state, text.as_deref())?;
+			state
+		}
+		None => State::default(),
 	};
 	Ok(ConfigPaths {
 		system_dir,
+		downloads_dir,
+		tools_dir,
 		system,
 		project,
-		registered,
+		state,
 	})
 }
 
@@ -29,7 +56,10 @@ fn system_configs(home_config_dir: Option<&Path>, config_dir: Option<&Path>, env
 	let mut files = Vec::new();
 	let dir = if let Some(path) = config_dir.filter(|path| !path.is_empty()) {
 		if !path.is_absolute() {
-			return Err(LocateError::RelativeConfigDir(path.to_path_buf()));
+			return Err(LocateError::RelativeDir {
+				name: "OUTPOST_CONFIG_DIR",
+				path: path.to_path_buf(),
+			});
 		}
 		files.push(path.join("outpost.toml"));
 		path
@@ -64,39 +94,19 @@ fn project_configs(cwd: &Path, config_dir: Option<&Path>) -> Vec<PathBuf> {
 	configs
 }
 
-fn registered_configs(config_dir: &Path, project_configs: &[PathBuf]) -> Result<Vec<PathBuf>, LocateError> {
-	let state = config_dir.join("state.toml");
-	let (text, registered) = match std::fs::read_to_string(&state) {
-		Ok(text) if text.trim().is_empty() => (Some(text), Vec::new()),
-		Ok(text) => {
-			let data = toml::from_str::<State>(&text).map_err(|source| (state.clone(), source))?;
-			(Some(text), data.registered_paths)
-		}
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, Vec::new()),
-		Err(source) => return Err((state.clone(), source).into()),
-	};
+fn registered_configs(config_dir: &Path, project_configs: &[PathBuf], state: &mut State, text: Option<&str>) -> Result<(), StateError> {
 	// registered paths are written canonical
-	let mut paths: Vec<_> = registered
+	let mut paths: Vec<_> = std::mem::take(&mut state.registered_paths)
 		.into_iter()
 		.chain(project_configs.iter().cloned())
 		.filter(|path| path.parent() != Some(config_dir))
 		.collect();
 	paths.sort();
 	paths.dedup();
-	_write_state(&state, text.as_deref(), &paths)?;
+	state.registered_paths = paths;
+	state::write(config_dir, state, text)?;
 	let project: HashSet<_> = project_configs.iter().collect();
-	paths.retain(|path| !project.contains(path));
-	Ok(paths)
-}
-
-fn _write_state(path: &Path, text: Option<&str>, paths: &[PathBuf]) -> Result<(), LocateError> {
-	let serialized = toml::to_string_pretty(&StateRef { registered_paths: paths })?;
-	if text == Some(serialized.as_str()) {
-		return Ok(());
-	}
-	let temp = path.with_extension("toml.tmp");
-	std::fs::write(&temp, serialized).map_err(|source| (temp.clone(), source))?;
-	std::fs::rename(&temp, path).map_err(|source| (path.to_path_buf(), source))?;
+	state.registered_paths.retain(|path| !project.contains(path));
 	Ok(())
 }
 
@@ -104,6 +114,8 @@ fn _write_state(path: &Path, text: Option<&str>, paths: &[PathBuf]) -> Result<()
 struct ConfigEnv {
 	home_config_dir: Option<PathBuf>,
 	config_dir: Option<PathBuf>,
+	downloads_dir: Option<PathBuf>,
+	tools_dir: Option<PathBuf>,
 	envs: Option<String>,
 }
 
@@ -112,6 +124,8 @@ impl ConfigEnv {
 		Self {
 			home_config_dir: std::env::home_dir().map(|home| home.join(".outpost")),
 			config_dir: std::env::var_os("OUTPOST_CONFIG_DIR").map(PathBuf::from),
+			downloads_dir: std::env::var_os("OUTPOST_DOWNLOADS_DIR").map(PathBuf::from),
+			tools_dir: std::env::var_os("OUTPOST_TOOLS_DIR").map(PathBuf::from),
 			envs: std::env::var("OUTPOST_ENV").ok(),
 		}
 	}
@@ -120,28 +134,18 @@ impl ConfigEnv {
 #[derive(Default)]
 pub(crate) struct ConfigPaths {
 	pub(crate) system_dir: Option<PathBuf>,
+	pub(crate) downloads_dir: Option<PathBuf>,
+	pub(crate) tools_dir: Option<PathBuf>,
 	pub(crate) system: Vec<PathBuf>,
 	pub(crate) project: Vec<PathBuf>,
-	pub(crate) registered: Vec<PathBuf>,
-}
-
-#[derive(Deserialize)]
-struct State {
-	#[serde(default)]
-	registered_paths: Vec<PathBuf>,
-}
-
-#[derive(Serialize)]
-struct StateRef<'a> {
-	registered_paths: &'a [PathBuf],
+	pub(crate) state: State,
 }
 
 #[derive(Debug)]
 pub(crate) enum LocateError {
 	Io { path: PathBuf, source: std::io::Error },
-	RelativeConfigDir(PathBuf),
-	StateParse { path: PathBuf, source: toml::de::Error },
-	StateSerialize(toml::ser::Error),
+	RelativeDir { name: &'static str, path: PathBuf },
+	State(StateError),
 }
 
 impl From<(PathBuf, std::io::Error)> for LocateError {
@@ -150,15 +154,9 @@ impl From<(PathBuf, std::io::Error)> for LocateError {
 	}
 }
 
-impl From<(PathBuf, toml::de::Error)> for LocateError {
-	fn from((path, source): (PathBuf, toml::de::Error)) -> Self {
-		Self::StateParse { path, source }
-	}
-}
-
-impl From<toml::ser::Error> for LocateError {
-	fn from(source: toml::ser::Error) -> Self {
-		Self::StateSerialize(source)
+impl From<StateError> for LocateError {
+	fn from(error: StateError) -> Self {
+		Self::State(error)
 	}
 }
 
@@ -166,11 +164,8 @@ impl fmt::Display for LocateError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
 			Self::Io { path, source } => write!(f, "failed to access `{}`: {source}", path.display()),
-			Self::RelativeConfigDir(path) => {
-				write!(f, "OUTPOST_CONFIG_DIR must be absolute, got `{}`", path.display())
-			}
-			Self::StateParse { path, source } => write!(f, "failed to parse state `{}`: {source}", path.display()),
-			Self::StateSerialize(error) => write!(f, "failed to serialize state: {error}"),
+			Self::RelativeDir { name, path } => write!(f, "{name} must be absolute, got `{}`", path.display()),
+			Self::State(error) => fmt::Display::fmt(error, f),
 		}
 	}
 }
@@ -179,9 +174,8 @@ impl std::error::Error for LocateError {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		match self {
 			Self::Io { source, .. } => Some(source),
-			Self::RelativeConfigDir(_) => None,
-			Self::StateParse { source, .. } => Some(source),
-			Self::StateSerialize(error) => Some(error),
+			Self::RelativeDir { .. } => None,
+			Self::State(error) => Some(error),
 		}
 	}
 }
@@ -211,6 +205,8 @@ mod tests {
 		};
 		let locations = locate_with(&flat, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
+		assert_eq!(locations.downloads_dir, Some(home_config_dir.join("downloads")));
+		assert_eq!(locations.tools_dir, Some(home_config_dir.join("tools")));
 		assert_eq!(locations.system, vec![home_config_dir.join("config.toml")]);
 		assert_eq!(locations.project, vec![std::fs::canonicalize(flat.join("outpost.toml")).unwrap()]);
 
@@ -276,7 +272,7 @@ mod tests {
 		};
 		assert!(matches!(
 			locate_with(&cwd, &env),
-			Err(LocateError::RelativeConfigDir(path)) if path == Path::new("relative")
+			Err(LocateError::RelativeDir { name: "OUTPOST_CONFIG_DIR", path }) if path == Path::new("relative")
 		));
 
 		// config + envs
@@ -284,6 +280,7 @@ mod tests {
 			home_config_dir: Some(home_config_dir),
 			config_dir: Some(config_dir.clone()),
 			envs: Some("dev".to_owned()),
+			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
@@ -298,6 +295,42 @@ mod tests {
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
 		assert_eq!(locations.system, vec![config_dir.join("outpost.toml"), config_dir.join("outpost.dev.toml"),]);
+	}
+
+	#[test]
+	fn locates_custom_tools_and_downloads_with_env() {
+		let tmp = tempfile::tempdir().unwrap();
+		let cwd = tmp.path().join("cwd");
+		let home = tmp.path().join("home").join(".outpost");
+		let downloads = tmp.path().join("downloads");
+		let tools = tmp.path().join("tools");
+		let env = ConfigEnv {
+			home_config_dir: Some(home.clone()),
+			downloads_dir: Some(downloads.clone()),
+			tools_dir: Some(tools.clone()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.system_dir.as_ref(), Some(&home));
+		assert_eq!(locations.downloads_dir, Some(downloads));
+		assert_eq!(locations.tools_dir, Some(tools));
+
+		let env = ConfigEnv {
+			home_config_dir: Some(home.clone()),
+			downloads_dir: Some(PathBuf::new()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.downloads_dir, Some(home.join("downloads")));
+
+		let env = ConfigEnv {
+			tools_dir: Some(PathBuf::from("relative")),
+			..ConfigEnv::default()
+		};
+		assert!(matches!(
+			locate_with(&cwd, &env),
+			Err(LocateError::RelativeDir { name: "OUTPOST_TOOLS_DIR", path }) if path == Path::new("relative")
+		));
 	}
 
 	#[test]
@@ -381,19 +414,20 @@ mod state_tests {
 			config_dir: Some(config_dir.clone()),
 			..ConfigEnv::default()
 		};
+		let config = std::fs::canonicalize(&config).unwrap();
 		let locations = locate_with(&project, &env).unwrap();
-		assert_eq!(locations.project, vec![std::fs::canonicalize(&config).unwrap()]);
-		assert!(locations.registered.is_empty());
+		assert_eq!(locations.project, vec![config.clone()]);
+		assert!(locations.state.registered_paths.is_empty());
 
 		let other = tmp.path().join("other");
 		fs::create_dir_all(&other).unwrap();
 		let locations = locate_with(&other, &env).unwrap();
 		assert!(locations.project.is_empty());
-		assert_eq!(locations.registered, vec![std::fs::canonicalize(&config).unwrap()]);
+		assert_eq!(locations.state.registered_paths, vec![config.clone()]);
 
 		let text = fs::read_to_string(config_dir.join("state.toml")).unwrap();
 		let state: State = toml::from_str(&text).unwrap();
-		assert_eq!(state.registered_paths, vec![std::fs::canonicalize(&config).unwrap()]);
+		assert_eq!(state.registered_paths, vec![config]);
 	}
 
 	#[test]
@@ -411,11 +445,11 @@ mod state_tests {
 		let config = std::fs::canonicalize(&config).unwrap();
 		let locations = locate_with(&project, &env).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
-		assert!(locations.registered.is_empty());
+		assert!(locations.state.registered_paths.is_empty());
 
 		let locations = locate_with(&project, &env).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
-		assert!(locations.registered.is_empty());
+		assert!(locations.state.registered_paths.is_empty());
 
 		let text = fs::read_to_string(config_dir.join("state.toml")).unwrap();
 		let state: State = toml::from_str(&text).unwrap();
@@ -429,7 +463,7 @@ mod state_tests {
 		touch(&project.join("outpost.toml"));
 		let locations = locate_with(&project, &ConfigEnv::default()).unwrap();
 		assert!(locations.system_dir.is_none());
-		assert!(locations.registered.is_empty());
+		assert!(locations.state.registered_paths.is_empty());
 	}
 
 	#[test]
@@ -444,6 +478,6 @@ mod state_tests {
 		};
 		let project = tmp.path().join("project");
 		touch(&project.join("outpost.toml"));
-		assert!(matches!(locate_with(&project, &env), Err(LocateError::StateParse { .. })));
+		assert!(matches!(locate_with(&project, &env), Err(LocateError::State(StateError::Parse { .. }))));
 	}
 }

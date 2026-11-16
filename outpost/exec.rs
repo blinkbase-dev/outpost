@@ -12,10 +12,10 @@ pub(crate) fn exec(args: ExecArgs) -> Result<i32, Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
-	let tools_dir = config_dir.join("tools");
+	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
 	let lock = lock::read(config_dir)?;
 	let requests = candidates::requests(&paths)?;
-	let installed = candidates::installed(&requests, &lock, &tools_dir);
+	let installed = candidates::installed(&requests, &lock, tools_dir);
 	let spec = ToolSpec::parse(&args.tool)?;
 	let Some(request) = requests.iter().find(|entry| spec.matches(&entry.tool)) else {
 		return Err(format!("`{}` is not requested by the current config", args.tool).into());

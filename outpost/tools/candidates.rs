@@ -216,6 +216,7 @@ mod tests {
 	use std::path::{Path, PathBuf};
 
 	use super::*;
+	use crate::config::state::State;
 	use crate::tools::lock::{Lock, LockedTool};
 	use crate::tools::tool_request::ToolRequest;
 	use crate::tools::version::Version;
@@ -252,7 +253,9 @@ mod tests {
 		let paths = ConfigPaths {
 			system: vec![base, dev, prod],
 			project: vec![outer, inner],
-			registered: vec![registered],
+			state: State {
+				registered_paths: vec![registered],
+			},
 			..ConfigPaths::default()
 		};
 		let requests = requests(&paths).unwrap();
@@ -305,7 +308,9 @@ mod tests {
 		let paths = ConfigPaths {
 			system: vec![base, env],
 			project: vec![project.clone()],
-			registered: vec![registered],
+			state: State {
+				registered_paths: vec![registered],
+			},
 			..ConfigPaths::default()
 		};
 		let candidates = installed(&requests(&paths).unwrap(), &lock, &tools);

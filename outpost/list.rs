@@ -11,9 +11,9 @@ pub(crate) fn list() -> Result<(), Error> {
 	let configs = loader::load(&paths)?;
 	let requests = tool_request::requests(&configs)?;
 	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
-	let tools_dir = config_dir.join("tools");
+	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
 	let lock = lock::read(config_dir)?;
-	let report = status::report(requests, &lock, &tools_dir);
+	let report = status::report(requests, &lock, tools_dir);
 	let mut rows = Vec::with_capacity(report.requested.len() + report.unrequested.len());
 	for entry in &report.requested {
 		let (tool, requested) = match &entry.tool {

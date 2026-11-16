@@ -21,17 +21,17 @@ pub(crate) fn install() -> Result<(), Error> {
 	let paths = locate::locate(&cwd)?;
 	let configs = loader::load(&paths)?;
 	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
-	let downloads_dir = config_dir.join("downloads");
-	let tools_dir = config_dir.join("tools");
-	std::fs::create_dir_all(&downloads_dir)?;
-	std::fs::create_dir_all(&tools_dir)?;
+	let downloads_dir = paths.downloads_dir.as_deref().ok_or("no downloads directory")?;
+	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
+	std::fs::create_dir_all(downloads_dir)?;
+	std::fs::create_dir_all(tools_dir)?;
 	let _install_lock = lock::acquire(config_dir)?;
 	let requests = tool_request::requests(&configs)?;
 	// group requests by identity so each tool resolves once
 	let requests = ToolRequestGroup::from_entries(requests);
 	// skip tools already recorded in the lock
 	let mut lock = lock::read(config_dir)?;
-	let requests = status::missing_from_lock(requests, &lock, &tools_dir);
+	let requests = status::missing_from_lock(requests, &lock, tools_dir);
 	if requests.is_empty() {
 		return Ok(());
 	}
@@ -42,7 +42,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	let resolutions = ToolResolutionGroup::from_entries(resolutions)?;
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
-	let (extractions, extract_err) = archive::extract_parallel(archives, &tools_dir)?;
+	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
 	let installed_artifacts = _update_lock_entries(&mut lock, extractions);
 	lock::write(config_dir, &lock)?;
 	// representative rows are appended after duplicate rows
