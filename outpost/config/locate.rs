@@ -32,6 +32,16 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 		Some(path) => Some(path.to_path_buf()),
 		None => system_dir.as_ref().map(|dir| dir.join("tools")),
 	};
+	let shims_dir = match env.shims_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
+		Some(path) if !path.is_absolute() => {
+			return Err(LocateError::RelativeDir {
+				name: "OUTPOST_SHIMS_DIR",
+				path: path.to_path_buf(),
+			});
+		}
+		Some(path) => Some(path.to_path_buf()),
+		None => system_dir.as_ref().map(|dir| dir.join("shims")),
+	};
 	let project = project_configs(&cwd, system_dir.as_deref());
 	let state = match system_dir.as_deref().filter(|dir| dir.is_dir()) {
 		Some(config_dir) => {
@@ -46,6 +56,7 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 		system_dir,
 		downloads_dir,
 		tools_dir,
+		shims_dir,
 		system,
 		project,
 		state,
@@ -100,6 +111,7 @@ struct ConfigEnv {
 	config_dir: Option<PathBuf>,
 	downloads_dir: Option<PathBuf>,
 	tools_dir: Option<PathBuf>,
+	shims_dir: Option<PathBuf>,
 	envs: Option<String>,
 }
 
@@ -110,6 +122,7 @@ impl ConfigEnv {
 			config_dir: std::env::var_os("OUTPOST_CONFIG_DIR").map(PathBuf::from),
 			downloads_dir: std::env::var_os("OUTPOST_DOWNLOADS_DIR").map(PathBuf::from),
 			tools_dir: std::env::var_os("OUTPOST_TOOLS_DIR").map(PathBuf::from),
+			shims_dir: std::env::var_os("OUTPOST_SHIMS_DIR").map(PathBuf::from),
 			envs: std::env::var("OUTPOST_ENV").ok(),
 		}
 	}
@@ -120,6 +133,7 @@ pub(crate) struct ConfigPaths {
 	pub(crate) system_dir: Option<PathBuf>,
 	pub(crate) downloads_dir: Option<PathBuf>,
 	pub(crate) tools_dir: Option<PathBuf>,
+	pub(crate) shims_dir: Option<PathBuf>,
 	pub(crate) system: Vec<PathBuf>,
 	pub(crate) project: Vec<PathBuf>,
 	pub(crate) state: State,
@@ -191,6 +205,7 @@ mod tests {
 		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
 		assert_eq!(locations.downloads_dir, Some(home_config_dir.join("downloads")));
 		assert_eq!(locations.tools_dir, Some(home_config_dir.join("tools")));
+		assert_eq!(locations.shims_dir, Some(home_config_dir.join("shims")));
 		assert_eq!(locations.system, vec![home_config_dir.join("config.toml")]);
 		assert_eq!(locations.project, vec![std::fs::canonicalize(flat.join("outpost.toml")).unwrap()]);
 
@@ -282,23 +297,21 @@ mod tests {
 	}
 
 	#[test]
-	fn locates_custom_tools_and_downloads_with_env() {
+	fn locates_custom_downloads_with_env() {
 		let tmp = tempfile::tempdir().unwrap();
 		let cwd = tmp.path().join("cwd");
 		let home = tmp.path().join("home").join(".outpost");
 		let downloads = tmp.path().join("downloads");
-		let tools = tmp.path().join("tools");
+		// explicit directory
 		let env = ConfigEnv {
 			home_config_dir: Some(home.clone()),
 			downloads_dir: Some(downloads.clone()),
-			tools_dir: Some(tools.clone()),
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&home));
 		assert_eq!(locations.downloads_dir, Some(downloads));
-		assert_eq!(locations.tools_dir, Some(tools));
-
+		// empty value falls back to the default
 		let env = ConfigEnv {
 			home_config_dir: Some(home.clone()),
 			downloads_dir: Some(PathBuf::new()),
@@ -306,7 +319,41 @@ mod tests {
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.downloads_dir, Some(home.join("downloads")));
+		// relative value is rejected
+		let env = ConfigEnv {
+			downloads_dir: Some(PathBuf::from("relative")),
+			..ConfigEnv::default()
+		};
+		assert!(matches!(
+			locate_with(&cwd, &env),
+			Err(LocateError::RelativeDir { name: "OUTPOST_DOWNLOADS_DIR", path }) if path == Path::new("relative")
+		));
+	}
 
+	#[test]
+	fn locates_custom_tools_with_env() {
+		let tmp = tempfile::tempdir().unwrap();
+		let cwd = tmp.path().join("cwd");
+		let home = tmp.path().join("home").join(".outpost");
+		let tools = tmp.path().join("tools");
+		// explicit directory
+		let env = ConfigEnv {
+			home_config_dir: Some(home.clone()),
+			tools_dir: Some(tools.clone()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.system_dir.as_ref(), Some(&home));
+		assert_eq!(locations.tools_dir, Some(tools));
+		// empty value falls back to the default
+		let env = ConfigEnv {
+			home_config_dir: Some(home.clone()),
+			tools_dir: Some(PathBuf::new()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.tools_dir, Some(home.join("tools")));
+		// relative value is rejected
 		let env = ConfigEnv {
 			tools_dir: Some(PathBuf::from("relative")),
 			..ConfigEnv::default()
@@ -314,6 +361,40 @@ mod tests {
 		assert!(matches!(
 			locate_with(&cwd, &env),
 			Err(LocateError::RelativeDir { name: "OUTPOST_TOOLS_DIR", path }) if path == Path::new("relative")
+		));
+	}
+
+	#[test]
+	fn locates_custom_shims_with_env() {
+		let tmp = tempfile::tempdir().unwrap();
+		let cwd = tmp.path().join("cwd");
+		let home = tmp.path().join("home").join(".outpost");
+		let shims = tmp.path().join("shims");
+		// explicit directory
+		let env = ConfigEnv {
+			home_config_dir: Some(home.clone()),
+			shims_dir: Some(shims.clone()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.system_dir.as_ref(), Some(&home));
+		assert_eq!(locations.shims_dir, Some(shims));
+		// empty value falls back to the default
+		let env = ConfigEnv {
+			home_config_dir: Some(home.clone()),
+			shims_dir: Some(PathBuf::new()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.shims_dir, Some(home.join("shims")));
+		// relative value is rejected
+		let env = ConfigEnv {
+			shims_dir: Some(PathBuf::from("relative")),
+			..ConfigEnv::default()
+		};
+		assert!(matches!(
+			locate_with(&cwd, &env),
+			Err(LocateError::RelativeDir { name: "OUTPOST_SHIMS_DIR", path }) if path == Path::new("relative")
 		));
 	}
 

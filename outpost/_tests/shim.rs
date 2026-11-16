@@ -34,6 +34,7 @@ impl Fixture {
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
 			.env_remove("OUTPOST_ENV")
 			.env_remove("OUTPOST_TOOLS_DIR")
+			.env_remove("OUTPOST_SHIMS_DIR")
 			.env_remove("OUTPOST_DOWNLOADS_DIR")
 			.output()
 			.unwrap()
