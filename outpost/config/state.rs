@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
@@ -48,6 +49,9 @@ pub(crate) fn acquire(config_dir: &Path) -> Result<File, StateError> {
 pub(crate) struct State {
 	#[serde(default)]
 	pub(crate) registered_paths: Vec<PathBuf>,
+	// executable paths relative to the install directory, keyed by install path
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub(crate) binaries: BTreeMap<String, Vec<PathBuf>>,
 }
 
 #[derive(Debug)]
@@ -95,5 +99,43 @@ impl std::error::Error for StateError {
 			Self::Serialize(error) => Some(error),
 			Self::Busy => None,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::collections::BTreeMap;
+	use std::path::PathBuf;
+
+	use super::*;
+
+	#[test]
+	fn round_trips_binaries() {
+		let dir = tempfile::tempdir().unwrap();
+		let state = State {
+			registered_paths: vec![PathBuf::from("project/outpost.toml")],
+			binaries: BTreeMap::from([("github_owner_repo/1.2.3".to_owned(), vec![PathBuf::from("rg"), PathBuf::from("doc/rg")])]),
+		};
+		write(dir.path(), &state, None).unwrap();
+		let (read, _) = read(dir.path()).unwrap();
+		assert_eq!(read.registered_paths, state.registered_paths);
+		assert_eq!(read.binaries, state.binaries);
+	}
+
+	#[test]
+	fn omits_empty_binaries() {
+		let dir = tempfile::tempdir().unwrap();
+		write(dir.path(), &State::default(), None).unwrap();
+		let text = std::fs::read_to_string(dir.path().join("state.toml")).unwrap();
+		assert!(!text.contains("binaries"));
+	}
+
+	#[test]
+	fn reads_state_without_binaries() {
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("state.toml"), "registered_paths = [\"project/outpost.toml\"]\n").unwrap();
+		let (state, _) = read(dir.path()).unwrap();
+		assert_eq!(state.registered_paths, vec![PathBuf::from("project/outpost.toml")]);
+		assert!(state.binaries.is_empty());
 	}
 }

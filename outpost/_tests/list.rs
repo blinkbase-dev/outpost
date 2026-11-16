@@ -22,7 +22,12 @@ impl Fixture {
 
 	fn run(&self, cwd: &Path, envs: Option<&str>) -> Output {
 		let mut command = Command::new(env!("CARGO_BIN_EXE_op"));
-		command.arg("list").current_dir(cwd).env("OUTPOST_CONFIG_DIR", &self.config_dir);
+		command
+			.arg("list")
+			.current_dir(cwd)
+			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
+			.env_remove("OUTPOST_TOOLS_DIR")
+			.env_remove("OUTPOST_DOWNLOADS_DIR");
 		if let Some(envs) = envs {
 			command.env("OUTPOST_ENV", envs);
 		} else {
