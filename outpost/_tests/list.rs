@@ -138,7 +138,11 @@ fn lists_registered_versions_and_origins() {
 		.map(|(project, _)| std::fs::canonicalize(project.join("outpost.toml")).unwrap().display().to_string())
 		.collect();
 	let registered = sources.iter().map(|source| format!("{source:?}")).collect::<Vec<_>>().join(", ");
-	std::fs::write(fixture.config_dir.join("state.toml"), format!("registered_paths = [{registered}]\n")).unwrap();
+	std::fs::write(
+		fixture.config_dir.join("state.toml"),
+		format!("version = 1\nregistered_paths = [{registered}]\n"),
+	)
+	.unwrap();
 	let elsewhere = root.join("elsewhere");
 	std::fs::create_dir_all(&elsewhere).unwrap();
 	let output = fixture.run(&elsewhere, None);

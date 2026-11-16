@@ -88,7 +88,8 @@ install_path = "github_owner_repo/1.2.3"
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
 	fixture.script(name);
-	let template = r#"[binaries]
+	let template = r#"version = 1
+[binaries]
 "github_owner_repo/1.2.3" = ["{name}"]
 "#;
 	std::fs::write(fixture.config_dir.join("state.toml"), template.replace("{name}", name)).unwrap();
@@ -118,7 +119,8 @@ install_path = "github_owner_repo/1.2.3"
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
 	fixture.script(&format!("bin/{}", name));
-	let template = r#"[binaries]
+	let template = r#"version = 1
+[binaries]
 "github_owner_repo/1.2.3" = ["{name}"]
 "#;
 	std::fs::write(fixture.config_dir.join("state.toml"), template.replace("{name}", name)).unwrap();
@@ -172,7 +174,8 @@ install_path = "github_owner_repo/1.2.3"
 	fixture.script("tool.cmd");
 	std::fs::write(
 		fixture.config_dir.join("state.toml"),
-		r#"[[shims.tool]]
+		r#"version = 1
+[[shims.tool]]
 backend = "github"
 full_name = "owner/repo"
 lane = ""
@@ -210,7 +213,8 @@ install_path = "github_owner_repo/1.2.3"
 	fixture.script("tool.cmd");
 	std::fs::write(
 		fixture.config_dir.join("state.toml"),
-		r#"[[shims.other]]
+		r#"version = 1
+[[shims.other]]
 backend = "github"
 full_name = "owner/repo"
 lane = ""

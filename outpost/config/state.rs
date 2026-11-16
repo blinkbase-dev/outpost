@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::version::Version;
 
+pub(crate) const VERSION: u32 = 1;
+
 pub(crate) fn read(config_dir: &Path) -> Result<(State, Option<String>), StateError> {
 	let path = config_dir.join("state.toml");
 	match std::fs::read_to_string(&path) {
@@ -66,8 +68,9 @@ pub(crate) fn register_config(config_dir: Option<&Path>, project_configs: &[Path
 	write(config_dir, &state, text.as_deref())
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub(crate) struct State {
+	pub(crate) version: u32,
 	#[serde(default)]
 	pub(crate) registered_paths: Vec<PathBuf>,
 	// executable paths relative to the install directory, keyed by install path
@@ -76,6 +79,17 @@ pub(crate) struct State {
 	// shim name -> requests that provide it (windows only)
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub(crate) shims: BTreeMap<String, Vec<ShimEntry>>,
+}
+
+impl Default for State {
+	fn default() -> Self {
+		Self {
+			version: VERSION,
+			registered_paths: Vec::new(),
+			binaries: BTreeMap::new(),
+			shims: BTreeMap::new(),
+		}
+	}
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
@@ -149,6 +163,7 @@ mod tests {
 	fn round_trips_binaries_and_shims() {
 		let dir = tempfile::tempdir().unwrap();
 		let state = State {
+			version: VERSION,
 			registered_paths: vec![PathBuf::from("project/outpost.toml")],
 			binaries: BTreeMap::from([(PathBuf::from("github_owner_repo/1.2.3"), vec![PathBuf::from("rg"), PathBuf::from("doc/rg")])]),
 			shims: BTreeMap::from([("rg".to_owned(), vec![ShimEntry::Github {
@@ -178,8 +193,9 @@ mod tests {
 	#[test]
 	fn reads_state_without_indexes() {
 		let dir = tempfile::tempdir().unwrap();
-		std::fs::write(dir.path().join("state.toml"), "registered_paths = [\"project/outpost.toml\"]\n").unwrap();
+		std::fs::write(dir.path().join("state.toml"), "version = 1\nregistered_paths = [\"project/outpost.toml\"]\n").unwrap();
 		let (state, _) = read(dir.path()).unwrap();
+		assert_eq!(state.version, VERSION);
 		assert_eq!(state.registered_paths, vec![PathBuf::from("project/outpost.toml")]);
 		assert!(state.binaries.is_empty());
 		assert!(state.shims.is_empty());
