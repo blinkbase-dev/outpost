@@ -10,6 +10,9 @@ use crate::config::loader;
 use crate::config::loader::LoadError;
 use crate::config::locate::ConfigPaths;
 
+// binaries live at the install root or one directory below
+const MAX_BINARY_DEPTH: usize = 1;
+
 pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequestEntry>, CandidatesError> {
 	let configs = loader::load_paths(paths.project.iter().rev().chain(paths.system.iter().rev()))?;
 	Ok(tool_request::requests(&configs)?)
@@ -49,14 +52,16 @@ pub(crate) fn find_binaries(install_dir: &Path, name: &str) -> io::Result<Vec<Pa
 		return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid binary name `{name}`")));
 	}
 	let mut matches = Vec::new();
-	let mut directories = VecDeque::from([install_dir.to_path_buf()]);
-	while let Some(directory) = directories.pop_front() {
+	let mut directories = VecDeque::from([(install_dir.to_path_buf(), 0)]);
+	while let Some((directory, depth)) = directories.pop_front() {
 		let mut entries = fs::read_dir(&directory)?.collect::<io::Result<Vec<_>>>()?;
 		// read_dir order is filesystem-dependent
 		entries.sort_by_key(|entry| entry.file_name());
 		for entry in entries {
 			if entry.file_type()?.is_dir() {
-				directories.push_back(entry.path());
+				if depth < MAX_BINARY_DEPTH {
+					directories.push_back((entry.path(), depth + 1));
+				}
 				continue;
 			}
 			if !_binary_matches(&entry.file_name(), name) {
@@ -127,15 +132,17 @@ pub(crate) fn find_binaries_by_tool<'a>(tools_dir: &Path, install_paths: impl In
 		}
 		let mut matches = Vec::new();
 		// walk relative to the install dir so cached paths stay relative
-		let mut directories = VecDeque::from([PathBuf::new()]);
-		while let Some(directory) = directories.pop_front() {
+		let mut directories = VecDeque::from([(PathBuf::new(), 0)]);
+		while let Some((directory, depth)) = directories.pop_front() {
 			let mut entries = fs::read_dir(install_dir.join(&directory))?.collect::<io::Result<Vec<_>>>()?;
 			// read_dir order is filesystem-dependent
 			entries.sort_by_key(|entry| entry.file_name());
 			for entry in entries {
 				let path = directory.join(entry.file_name());
 				if entry.file_type()?.is_dir() {
-					directories.push_back(path);
+					if depth < MAX_BINARY_DEPTH {
+						directories.push_back((path, depth + 1));
+					}
 					continue;
 				}
 				if !_binary_matches_any(&entry.file_name()) {
@@ -449,8 +456,10 @@ mod tests {
 	#[test]
 	fn finds_binaries_at_root_and_nested() {
 		let dir = tempfile::tempdir().unwrap();
-		let root = binary(dir.path(), if cfg!(windows) { "tool.exe" } else { "tool" });
-		let nested = binary(dir.path(), if cfg!(windows) { "bin/tool.exe" } else { "bin/tool" });
+		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let root = binary(dir.path(), name);
+		let nested = binary(dir.path(), &format!("bin/{name}"));
+		binary(dir.path(), &format!("a/b/{name}"));
 		let matches = find_binaries(dir.path(), "tool").unwrap();
 		assert_eq!(matches, vec![root, nested]);
 	}
@@ -582,6 +591,7 @@ mod tests {
 		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
 		binary(&tools, &format!("github_a/1/{root}"));
 		binary(&tools, &format!("github_a/1/bin/{nested}"));
+		binary(&tools, &format!("github_a/1/a/b/{nested}"));
 		binary(&tools, &format!("github_b/1/{tool}"));
 		let index = find_binaries_by_tool(&tools, ["github_a/1", "github_b/1", "missing/1"]).unwrap();
 		assert_eq!(index.len(), 2);
