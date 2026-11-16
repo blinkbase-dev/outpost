@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::{fmt, fs, io};
@@ -24,16 +24,13 @@ pub(crate) struct InstalledTool {
 	pub(crate) installed_version: String,
 }
 
-pub(crate) fn installed(requests: &[ToolRequestEntry], lock: &Lock, tools_dir: &Path) -> HashMap<Identity, InstalledTool> {
+pub(crate) fn installed(requests: &[ToolRequestEntry], lock: &Lock) -> HashMap<Identity, InstalledTool> {
 	let locked: HashMap<Identity, &LockedTool> = lock.tools.iter().map(|tool| (tool.identity(), tool)).collect();
 	let mut tools = HashMap::new();
 	for entry in requests {
 		let identity = entry.tool.identity();
 		match locked.get(&identity) {
 			Some(LockedTool::Github { install_path, tag_name, .. }) => {
-				if !tools_dir.join(install_path).is_dir() {
-					continue;
-				}
 				tools.entry(identity).or_insert(InstalledTool {
 					origin: entry.origin.clone(),
 					install_path: install_path.clone(),
@@ -54,7 +51,11 @@ pub(crate) fn find_binaries(install_dir: &Path, name: &str) -> io::Result<Vec<Pa
 	let mut matches = Vec::new();
 	let mut directories = VecDeque::from([(install_dir.to_path_buf(), 0)]);
 	while let Some((directory, depth)) = directories.pop_front() {
-		let mut entries = fs::read_dir(&directory)?.collect::<io::Result<Vec<_>>>()?;
+		let mut entries = match fs::read_dir(&directory) {
+			Ok(entries) => entries.collect::<io::Result<Vec<_>>>()?,
+			Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+			Err(error) => return Err(error),
+		};
 		// read_dir order is filesystem-dependent
 		entries.sort_by_key(|entry| entry.file_name());
 		for entry in entries {
@@ -206,8 +207,7 @@ fn _is_executable(_metadata: &fs::Metadata) -> bool {
 	true
 }
 
-pub(crate) fn run(path: &Path, args: impl IntoIterator<Item = OsString>) -> io::Result<i32> {
-	let args: Vec<OsString> = args.into_iter().collect();
+pub(crate) fn run(path: &Path, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> io::Result<i32> {
 	let mut command = Command::new(path);
 	#[cfg(windows)]
 	if path
@@ -216,12 +216,12 @@ pub(crate) fn run(path: &Path, args: impl IntoIterator<Item = OsString>) -> io::
 		.is_some_and(|extension| ["bat", "cmd"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate)))
 	{
 		command = Command::new("cmd.exe");
-		command.arg("/d").arg("/c").arg(_strip_verbatim(path)).args(&args);
+		command.arg("/d").arg("/c").arg(_strip_verbatim(path)).args(args);
 	} else {
-		command.args(&args);
+		command.args(args);
 	}
 	#[cfg(not(windows))]
-	command.args(&args);
+	command.args(args);
 	// let the program find sibling binaries
 	if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
 		let mut paths = vec![parent.to_path_buf()];
@@ -343,7 +343,7 @@ mod tests {
 			project: vec![outer, inner],
 			state: State {
 				registered_paths: vec![registered],
-				binaries: Default::default(),
+				..State::default()
 			},
 			..ConfigPaths::default()
 		};
@@ -364,10 +364,6 @@ mod tests {
 		let env = write(dir.path(), "system/outpost.dev.toml", &["github:o/system"]);
 		let project = write(dir.path(), "inner/outpost.toml", &["github:o/project"]);
 		let registered = write(dir.path(), "other/outpost.toml", &["github:o/registered"]);
-		let tools = dir.path().join("tools");
-		for path in ["github_o_project/1", "github_o_system/1", "github_o_registered/1"] {
-			std::fs::create_dir_all(tools.join(path)).unwrap();
-		}
 		let lock = Lock {
 			version: 1,
 			tools: vec![
@@ -399,11 +395,11 @@ mod tests {
 			project: vec![project.clone()],
 			state: State {
 				registered_paths: vec![registered],
-				binaries: Default::default(),
+				..State::default()
 			},
 			..ConfigPaths::default()
 		};
-		let candidates = installed(&requests(&paths).unwrap(), &lock, &tools);
+		let candidates = installed(&requests(&paths).unwrap(), &lock);
 		assert_eq!(candidates.len(), 2);
 
 		let project_request = ToolRequest::Github {
@@ -432,25 +428,31 @@ mod tests {
 	}
 
 	#[test]
-	fn installed_skips_missing_lock_entries_and_directories() {
+	fn installed_does_not_check_install_dirs() {
 		let dir = tempfile::tempdir().unwrap();
-		let system = write(dir.path(), "system/config.toml", &["github:o/missing", "github:o/gone"]);
+		let system = write(dir.path(), "system/config.toml", &["github:o/missing", "github:o/locked"]);
 		let lock = Lock {
 			version: 1,
 			tools: vec![LockedTool::Github {
-				full_name: "o/gone".to_owned(),
+				full_name: "o/locked".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1"),
 				tag_name: "v1.0.0".to_owned(),
-				install_path: "github_o_gone/1".to_owned(),
+				install_path: "github_o_locked/1".to_owned(),
 			}],
 		};
-		let tools = dir.path().join("tools");
 		let paths = ConfigPaths {
 			system: vec![system],
 			..ConfigPaths::default()
 		};
-		assert!(installed(&requests(&paths).unwrap(), &lock, &tools).is_empty());
+		let candidates = installed(&requests(&paths).unwrap(), &lock);
+		assert_eq!(candidates.len(), 1);
+		let locked = ToolRequest::Github {
+			full_name: "o/locked".to_owned(),
+			lane: String::new(),
+			version: Version::parse("1"),
+		};
+		assert!(candidates.contains_key(&locked.identity()));
 	}
 
 	#[test]
@@ -462,6 +464,12 @@ mod tests {
 		binary(dir.path(), &format!("a/b/{name}"));
 		let matches = find_binaries(dir.path(), "tool").unwrap();
 		assert_eq!(matches, vec![root, nested]);
+	}
+
+	#[test]
+	fn missing_directory_has_no_binaries() {
+		let dir = tempfile::tempdir().unwrap();
+		assert!(find_binaries(&dir.path().join("missing"), "tool").unwrap().is_empty());
 	}
 
 	#[test]

@@ -52,6 +52,9 @@ pub(crate) struct State {
 	// executable paths relative to the install directory, keyed by install path
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub(crate) binaries: BTreeMap<String, Vec<PathBuf>>,
+	// install paths that provide a shim name, keyed by lowercased name (windows)
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub(crate) shims: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -110,32 +113,36 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn round_trips_binaries() {
+	fn round_trips_binaries_and_shims() {
 		let dir = tempfile::tempdir().unwrap();
 		let state = State {
 			registered_paths: vec![PathBuf::from("project/outpost.toml")],
 			binaries: BTreeMap::from([("github_owner_repo/1.2.3".to_owned(), vec![PathBuf::from("rg"), PathBuf::from("doc/rg")])]),
+			shims: BTreeMap::from([("rg".to_owned(), vec!["github_owner_repo/1.2.3".to_owned()])]),
 		};
 		write(dir.path(), &state, None).unwrap();
 		let (read, _) = read(dir.path()).unwrap();
 		assert_eq!(read.registered_paths, state.registered_paths);
 		assert_eq!(read.binaries, state.binaries);
+		assert_eq!(read.shims, state.shims);
 	}
 
 	#[test]
-	fn omits_empty_binaries() {
+	fn omits_empty_indexes() {
 		let dir = tempfile::tempdir().unwrap();
 		write(dir.path(), &State::default(), None).unwrap();
 		let text = std::fs::read_to_string(dir.path().join("state.toml")).unwrap();
 		assert!(!text.contains("binaries"));
+		assert!(!text.contains("shims"));
 	}
 
 	#[test]
-	fn reads_state_without_binaries() {
+	fn reads_state_without_indexes() {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("state.toml"), "registered_paths = [\"project/outpost.toml\"]\n").unwrap();
 		let (state, _) = read(dir.path()).unwrap();
 		assert_eq!(state.registered_paths, vec![PathBuf::from("project/outpost.toml")]);
 		assert!(state.binaries.is_empty());
+		assert!(state.shims.is_empty());
 	}
 }
