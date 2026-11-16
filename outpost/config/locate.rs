@@ -400,7 +400,7 @@ mod state_tests {
 		};
 		let config = std::fs::canonicalize(&config).unwrap();
 		let locations = locate_with(&project, &env).unwrap();
-		let _ = state::register_config(Some(&config_dir), &[config.clone()]).unwrap();
+		state::register_config(Some(&config_dir), std::slice::from_ref(&config)).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 
@@ -425,12 +425,12 @@ mod state_tests {
 		};
 		let config = std::fs::canonicalize(&config).unwrap();
 		let locations = locate_with(&project, &env).unwrap();
-		let _ = state::register_config(Some(&config_dir), &[config.clone()]).unwrap();
+		state::register_config(Some(&config_dir), std::slice::from_ref(&config)).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 
 		let locations = locate_with(&project, &env).unwrap();
-		let _ = state::register_config(Some(&config_dir), &[config.clone()]).unwrap();
+		state::register_config(Some(&config_dir), std::slice::from_ref(&config)).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 

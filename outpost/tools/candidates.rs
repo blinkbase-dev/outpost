@@ -20,7 +20,7 @@ pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequestEntry>, Can
 
 pub(crate) struct InstalledTool {
 	pub(crate) origin: PathBuf,
-	pub(crate) install_path: String,
+	pub(crate) install_path: PathBuf,
 	pub(crate) installed_version: String,
 }
 
@@ -124,7 +124,7 @@ pub(crate) fn find_binaries_cached(install_dir: &Path, name: &str, cached: Optio
 	find_binaries(install_dir, name)
 }
 
-pub(crate) fn find_binaries_by_tool<'a>(tools_dir: &Path, install_paths: impl IntoIterator<Item = &'a str>) -> io::Result<BTreeMap<String, Vec<PathBuf>>> {
+pub(crate) fn find_binaries_by_tool<'a>(tools_dir: &Path, install_paths: impl IntoIterator<Item = &'a Path>) -> io::Result<BTreeMap<PathBuf, Vec<PathBuf>>> {
 	let mut index = BTreeMap::new();
 	for install_path in install_paths {
 		let install_dir = tools_dir.join(install_path);
@@ -372,21 +372,21 @@ mod tests {
 					lane: String::new(),
 					requested: Version::parse("1"),
 					tag_name: "v1.0.0".to_owned(),
-					install_path: "github_o_project/1".to_owned(),
+					install_path: PathBuf::from("github_o_project/1"),
 				},
 				LockedTool::Github {
 					full_name: "o/system".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("1"),
 					tag_name: "v2.0.0".to_owned(),
-					install_path: "github_o_system/1".to_owned(),
+					install_path: PathBuf::from("github_o_system/1"),
 				},
 				LockedTool::Github {
 					full_name: "o/registered".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("1"),
 					tag_name: "v3.0.0".to_owned(),
-					install_path: "github_o_registered/1".to_owned(),
+					install_path: PathBuf::from("github_o_registered/1"),
 				},
 			],
 		};
@@ -438,7 +438,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1"),
 				tag_name: "v1.0.0".to_owned(),
-				install_path: "github_o_locked/1".to_owned(),
+				install_path: PathBuf::from("github_o_locked/1"),
 			}],
 		};
 		let paths = ConfigPaths {
@@ -601,10 +601,10 @@ mod tests {
 		binary(&tools, &format!("github_a/1/bin/{nested}"));
 		binary(&tools, &format!("github_a/1/a/b/{nested}"));
 		binary(&tools, &format!("github_b/1/{tool}"));
-		let index = find_binaries_by_tool(&tools, ["github_a/1", "github_b/1", "missing/1"]).unwrap();
+		let index = find_binaries_by_tool(&tools, [Path::new("github_a/1"), Path::new("github_b/1"), Path::new("missing/1")]).unwrap();
 		assert_eq!(index.len(), 2);
-		assert_eq!(index["github_a/1"], vec![PathBuf::from(root), PathBuf::from("bin").join(nested)]);
-		assert_eq!(index["github_b/1"], vec![PathBuf::from(tool)]);
+		assert_eq!(index[Path::new("github_a/1")], vec![PathBuf::from(root), PathBuf::from("bin").join(nested)]);
+		assert_eq!(index[Path::new("github_b/1")], vec![PathBuf::from(tool)]);
 	}
 
 	#[test]
@@ -616,8 +616,8 @@ mod tests {
 		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
 		binary(&tools, &format!("github_a/1/{tool}"));
 		std::fs::write(install.join(if cfg!(windows) { "readme.md" } else { "readme" }), b"text").unwrap();
-		let index = find_binaries_by_tool(&tools, ["github_a/1"]).unwrap();
-		assert_eq!(index["github_a/1"], vec![PathBuf::from(tool)]);
+		let index = find_binaries_by_tool(&tools, [Path::new("github_a/1")]).unwrap();
+		assert_eq!(index[Path::new("github_a/1")], vec![PathBuf::from(tool)]);
 	}
 
 	#[test]
@@ -639,7 +639,7 @@ mod tests {
 			eprintln!("skipping: cannot create a file symlink");
 			return;
 		}
-		let index = find_binaries_by_tool(&tools, ["github_a/1"]).unwrap();
-		assert!(index["github_a/1"].is_empty());
+		let index = find_binaries_by_tool(&tools, [Path::new("github_a/1")]).unwrap();
+		assert!(index[Path::new("github_a/1")].is_empty());
 	}
 }

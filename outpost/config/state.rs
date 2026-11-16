@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::tools::version::Version;
+
 pub(crate) fn read(config_dir: &Path) -> Result<(State, Option<String>), StateError> {
 	let path = config_dir.join("state.toml");
 	match std::fs::read_to_string(&path) {
@@ -70,10 +72,22 @@ pub(crate) struct State {
 	pub(crate) registered_paths: Vec<PathBuf>,
 	// executable paths relative to the install directory, keyed by install path
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-	pub(crate) binaries: BTreeMap<String, Vec<PathBuf>>,
-	// install paths that provide a shim name, keyed by lowercased name (windows)
+	pub(crate) binaries: BTreeMap<PathBuf, Vec<PathBuf>>,
+	// shim name -> requests that provide it (windows only)
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-	pub(crate) shims: BTreeMap<String, Vec<String>>,
+	pub(crate) shims: BTreeMap<String, Vec<ShimEntry>>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "backend", rename_all = "lowercase")]
+pub(crate) enum ShimEntry {
+	Github {
+		full_name: String,
+		lane: String,
+		requested: Version,
+		install_path: PathBuf,
+		binaries: Vec<PathBuf>,
+	},
 }
 
 #[derive(Debug)]
@@ -136,8 +150,14 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let state = State {
 			registered_paths: vec![PathBuf::from("project/outpost.toml")],
-			binaries: BTreeMap::from([("github_owner_repo/1.2.3".to_owned(), vec![PathBuf::from("rg"), PathBuf::from("doc/rg")])]),
-			shims: BTreeMap::from([("rg".to_owned(), vec!["github_owner_repo/1.2.3".to_owned()])]),
+			binaries: BTreeMap::from([(PathBuf::from("github_owner_repo/1.2.3"), vec![PathBuf::from("rg"), PathBuf::from("doc/rg")])]),
+			shims: BTreeMap::from([("rg".to_owned(), vec![ShimEntry::Github {
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: Version::parse("1.2.3"),
+				install_path: PathBuf::from("github_owner_repo/1.2.3"),
+				binaries: vec![PathBuf::from("rg"), PathBuf::from("doc/rg")],
+			}])]),
 		};
 		write(dir.path(), &state, None).unwrap();
 		let (read, _) = read(dir.path()).unwrap();

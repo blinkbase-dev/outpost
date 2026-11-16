@@ -77,49 +77,61 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 
 #[cfg(windows)]
 fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
-	use std::collections::{HashMap, HashSet};
-	use std::path::Path;
+	use std::path::{Component, Path};
+
+	use crate::config::state::ShimEntry;
+	use crate::tools::tool_request::ToolRequest;
 
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
-	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
-	let lock = lock::read(config_dir)?;
-	let requests = candidates::requests(&paths)?;
 	let name = Path::new(shim).file_stem().and_then(OsStr::to_str).ok_or("invalid shim name")?;
-	let shims = paths.state.shims.get(&name.to_ascii_lowercase());
-	if !paths.state.shims.is_empty() && shims.is_none() {
+	let Some(shims) = paths.state.shims.get(&name.to_ascii_lowercase()) else {
 		return Err(format!("no installed tool provides `{name}`").into());
-	}
-	let locked: HashMap<_, _> = lock.tools.iter().map(|tool| (tool.key(), tool)).collect();
-	let mut seen = HashSet::new();
+	};
+	let requests = candidates::requests(&paths)?;
 	for request in &requests {
-		let Some(tool) = locked.get(&request.tool.key()) else {
+		let Some((install_path, binaries)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
+			(
+				ToolRequest::Github {
+					full_name: request_name,
+					lane: request_lane,
+					version,
+				},
+				ShimEntry::Github {
+					full_name,
+					lane,
+					requested,
+					install_path,
+					binaries,
+				},
+			) => (full_name == request_name && lane == request_lane && requested == version).then_some((install_path, binaries)),
+		}) else {
 			continue;
 		};
-		let install_path = match tool {
-			lock::LockedTool::Github { install_path, .. } => install_path,
-		};
-		if !seen.insert(install_path) {
-			continue;
-		}
-		if shims.is_some_and(|shims| !shims.contains(install_path)) {
+		if !install_path.components().all(|component| matches!(component, Component::Normal(_))) {
 			continue;
 		}
 		let install_dir = tools_dir.join(install_path);
-		let cached = paths.state.binaries.get(install_path).map(Vec::as_slice);
-		let matches = candidates::find_binaries_cached(&install_dir, name, cached)?;
-		match matches.as_slice() {
-			[path] => return Ok(candidates::run(path, args)?),
+		let binary = match binaries.as_slice() {
+			[binary] => binary,
 			[] => continue,
-			paths => {
+			binaries => {
 				let mut message = format!("multiple `{name}` binaries found in {}:", install_dir.display());
-				for path in paths {
-					message.push_str(&format!("\n  {}", path.display()));
+				for binary in binaries {
+					message.push_str(&format!("\n  {}", install_dir.join(binary).display()));
 				}
 				return Err(message.into());
 			}
+		};
+		if !binary.components().all(|component| matches!(component, Component::Normal(_))) {
+			continue;
 		}
+		let path = install_dir.join(binary);
+		if !path.is_file() {
+			continue;
+		}
+		return Ok(candidates::run(&path, args)?);
 	}
 	Err(format!("no installed tool provides `{name}`").into())
 }
