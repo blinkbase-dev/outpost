@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -17,7 +17,7 @@ pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequestEntry>, Can
 
 pub(crate) struct InstalledTool {
 	pub(crate) origin: PathBuf,
-	pub(crate) install_dir: PathBuf,
+	pub(crate) install_path: String,
 	pub(crate) installed_version: String,
 }
 
@@ -28,13 +28,12 @@ pub(crate) fn installed(requests: &[ToolRequestEntry], lock: &Lock, tools_dir: &
 		let identity = entry.tool.identity();
 		match locked.get(&identity) {
 			Some(LockedTool::Github { install_path, tag_name, .. }) => {
-				let install_dir = tools_dir.join(install_path);
-				if !install_dir.is_dir() {
+				if !tools_dir.join(install_path).is_dir() {
 					continue;
 				}
 				tools.entry(identity).or_insert(InstalledTool {
 					origin: entry.origin.clone(),
-					install_dir,
+					install_path: install_path.clone(),
 					installed_version: tag_name.clone(),
 				});
 			}
@@ -77,6 +76,87 @@ pub(crate) fn find_binaries(install_dir: &Path, name: &str) -> io::Result<Vec<Pa
 	Ok(matches)
 }
 
+pub(crate) fn find_binaries_cached(install_dir: &Path, name: &str, cached: Option<&[PathBuf]>) -> io::Result<Vec<PathBuf>> {
+	if let Some(cached) = cached {
+		let mut components = Path::new(name).components();
+		if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+			return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid binary name `{name}`")));
+		}
+		let mut invalid = false;
+		let matches: Vec<PathBuf> = cached
+			.iter()
+			.filter_map(|path| {
+				if path.as_os_str().is_empty() || !path.components().all(|component| matches!(component, Component::Normal(_))) {
+					invalid = true;
+					return None;
+				}
+				path
+					.file_name()
+					.is_some_and(|file_name| _binary_matches(file_name, name))
+					.then(|| install_dir.join(path.as_path()))
+			})
+			.collect();
+		for path in &matches {
+			match fs::metadata(path) {
+				Ok(metadata) if metadata.is_file() && _is_executable(&metadata) => {}
+				Ok(_) => {
+					invalid = true;
+					break;
+				}
+				Err(error) if error.kind() == io::ErrorKind::NotFound => {
+					invalid = true;
+					break;
+				}
+				Err(error) => return Err(error),
+			}
+		}
+		if !invalid {
+			return Ok(matches);
+		}
+	}
+	// no cache entry or a cached match is no longer valid
+	find_binaries(install_dir, name)
+}
+
+pub(crate) fn find_binaries_by_tool<'a>(tools_dir: &Path, install_paths: impl IntoIterator<Item = &'a str>) -> io::Result<BTreeMap<String, Vec<PathBuf>>> {
+	let mut index = BTreeMap::new();
+	for install_path in install_paths {
+		let install_dir = tools_dir.join(install_path);
+		if !install_dir.is_dir() {
+			continue;
+		}
+		let mut matches = Vec::new();
+		// walk relative to the install dir so cached paths stay relative
+		let mut directories = VecDeque::from([PathBuf::new()]);
+		while let Some(directory) = directories.pop_front() {
+			let mut entries = fs::read_dir(install_dir.join(&directory))?.collect::<io::Result<Vec<_>>>()?;
+			// read_dir order is filesystem-dependent
+			entries.sort_by_key(|entry| entry.file_name());
+			for entry in entries {
+				let path = directory.join(entry.file_name());
+				if entry.file_type()?.is_dir() {
+					directories.push_back(path);
+					continue;
+				}
+				if !_binary_matches_any(&entry.file_name()) {
+					continue;
+				}
+				// broken symlinks resolve to nothing
+				let metadata = match fs::metadata(install_dir.join(&path)) {
+					Ok(metadata) => metadata,
+					Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+					Err(error) => return Err(error),
+				};
+				if metadata.is_file() && _is_executable(&metadata) {
+					matches.push(path);
+				}
+			}
+		}
+		index.insert(install_path.to_owned(), matches);
+	}
+	Ok(index)
+}
+
 fn _binary_matches(file_name: &OsStr, name: &str) -> bool {
 	let Some(file_name) = file_name.to_str() else {
 		return false;
@@ -91,6 +171,20 @@ fn _binary_matches(file_name: &OsStr, name: &str) -> bool {
 		["exe", "bat", "cmd"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate))
 	} else {
 		file_name == name
+	}
+}
+
+fn _binary_matches_any(file_name: &OsStr) -> bool {
+	let Some(file_name) = file_name.to_str() else {
+		return false;
+	};
+	if cfg!(windows) {
+		let Some((_, extension)) = file_name.rsplit_once('.') else {
+			return false;
+		};
+		["exe", "bat", "cmd"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate))
+	} else {
+		true
 	}
 }
 
@@ -114,24 +208,8 @@ pub(crate) fn run(path: &Path, args: impl IntoIterator<Item = OsString>) -> io::
 		.and_then(OsStr::to_str)
 		.is_some_and(|extension| ["bat", "cmd"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate)))
 	{
-		let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
-		let stem = Path::new(&comspec).file_stem().and_then(OsStr::to_str);
-		match stem {
-			Some(stem) if stem.eq_ignore_ascii_case("cmd") => {
-				command = Command::new(comspec);
-				command.arg("/d").arg("/c").arg(path).args(&args);
-			}
-			Some(stem) if ["powershell", "pwsh"].iter().any(|candidate| stem.eq_ignore_ascii_case(candidate)) => {
-				command = Command::new(comspec);
-				command.arg("-NoProfile").arg("-Command").arg(_powershell_command(path, &args));
-			}
-			_ => {
-				return Err(io::Error::new(
-					io::ErrorKind::InvalidInput,
-					format!("COMSPEC `{}` is not supported", comspec.to_string_lossy()),
-				));
-			}
-		}
+		command = Command::new("cmd.exe");
+		command.arg("/d").arg("/c").arg(_strip_verbatim(path)).args(&args);
 	} else {
 		command.args(&args);
 	}
@@ -151,14 +229,17 @@ pub(crate) fn run(path: &Path, args: impl IntoIterator<Item = OsString>) -> io::
 	Ok(_exit_code(status))
 }
 
+// cmd.exe does not accept canonicalized `\\?\` paths
 #[cfg(windows)]
-fn _powershell_command(path: &Path, args: &[OsString]) -> OsString {
-	let mut command = format!("& '{}'", path.to_string_lossy().replace('\'', "''"));
-	for arg in args {
-		command.push_str(&format!(" '{}'", arg.to_string_lossy().replace('\'', "''")));
+fn _strip_verbatim(path: &Path) -> PathBuf {
+	let text = path.to_string_lossy();
+	if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+		return PathBuf::from(format!(r"\\{rest}"));
 	}
-	command.push_str("; exit $LASTEXITCODE");
-	command.into()
+	if let Some(rest) = text.strip_prefix(r"\\?\") {
+		return PathBuf::from(rest);
+	}
+	PathBuf::from(text.as_ref())
 }
 
 #[cfg(unix)]
@@ -255,6 +336,7 @@ mod tests {
 			project: vec![outer, inner],
 			state: State {
 				registered_paths: vec![registered],
+				binaries: Default::default(),
 			},
 			..ConfigPaths::default()
 		};
@@ -310,6 +392,7 @@ mod tests {
 			project: vec![project.clone()],
 			state: State {
 				registered_paths: vec![registered],
+				binaries: Default::default(),
 			},
 			..ConfigPaths::default()
 		};
@@ -419,5 +502,126 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let cmd = binary(dir.path(), "tool.cmd");
 		assert_eq!(find_binaries(dir.path(), "tool").unwrap(), vec![cmd]);
+	}
+
+	#[test]
+	fn cached_binaries_returns_indexed_path() {
+		let dir = tempfile::tempdir().unwrap();
+		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let path = binary(dir.path(), tool);
+		let cached = vec![PathBuf::from(tool)];
+		assert_eq!(find_binaries_cached(dir.path(), "tool", Some(&cached)).unwrap(), vec![path]);
+	}
+
+	#[test]
+	fn cached_binaries_falls_back_when_missing() {
+		let dir = tempfile::tempdir().unwrap();
+		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let nested = binary(dir.path(), &format!("bin/{tool}"));
+		let cached = vec![PathBuf::from(tool)];
+		assert_eq!(find_binaries_cached(dir.path(), "tool", Some(&cached)).unwrap(), vec![nested]);
+	}
+
+	#[test]
+	fn cached_binaries_returns_empty_when_name_absent() {
+		let dir = tempfile::tempdir().unwrap();
+		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
+		binary(dir.path(), tool);
+		let other = if cfg!(windows) { "other.exe" } else { "other" };
+		let cached = vec![PathBuf::from(other)];
+		assert!(find_binaries_cached(dir.path(), "tool", Some(&cached)).unwrap().is_empty());
+	}
+
+	#[test]
+	fn cached_binaries_rejects_non_relative() {
+		let dir = tempfile::tempdir().unwrap();
+		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let path = binary(dir.path(), tool);
+		let cached = vec![PathBuf::from("..").join(tool)];
+		assert_eq!(find_binaries_cached(dir.path(), "tool", Some(&cached)).unwrap(), vec![path]);
+	}
+
+	#[test]
+	fn cached_binaries_returns_ambiguous_matches() {
+		let dir = tempfile::tempdir().unwrap();
+		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let root = binary(dir.path(), tool);
+		let nested = binary(dir.path(), &format!("bin/{tool}"));
+		let cached = vec![PathBuf::from(tool), PathBuf::from("bin").join(tool)];
+		assert_eq!(find_binaries_cached(dir.path(), "tool", Some(&cached)).unwrap(), vec![root, nested]);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn cached_binaries_falls_back_when_not_executable() {
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("tool"), b"binary").unwrap();
+		let cached = vec![PathBuf::from("tool")];
+		assert!(find_binaries_cached(dir.path(), "tool", Some(&cached)).unwrap().is_empty());
+	}
+
+	#[test]
+	fn cached_binaries_rejects_invalid_names() {
+		let dir = tempfile::tempdir().unwrap();
+		let cached = vec![PathBuf::from("tool")];
+		for name in ["", "bin/tool", "../tool", "."] {
+			assert_eq!(
+				find_binaries_cached(dir.path(), name, Some(&cached)).unwrap_err().kind(),
+				std::io::ErrorKind::InvalidInput,
+				"{name}"
+			);
+		}
+	}
+
+	#[test]
+	fn indexes_binaries_by_tool() {
+		let dir = tempfile::tempdir().unwrap();
+		let tools = dir.path().join("tools");
+		let root = if cfg!(windows) { "root.exe" } else { "root" };
+		let nested = if cfg!(windows) { "nested.exe" } else { "nested" };
+		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
+		binary(&tools, &format!("github_a/1/{root}"));
+		binary(&tools, &format!("github_a/1/bin/{nested}"));
+		binary(&tools, &format!("github_b/1/{tool}"));
+		let index = find_binaries_by_tool(&tools, ["github_a/1", "github_b/1", "missing/1"]).unwrap();
+		assert_eq!(index.len(), 2);
+		assert_eq!(index["github_a/1"], vec![PathBuf::from(root), PathBuf::from("bin").join(nested)]);
+		assert_eq!(index["github_b/1"], vec![PathBuf::from(tool)]);
+	}
+
+	#[test]
+	fn indexes_binaries_ignores_non_binaries() {
+		let dir = tempfile::tempdir().unwrap();
+		let tools = dir.path().join("tools");
+		let install = tools.join("github_a/1");
+		std::fs::create_dir_all(&install).unwrap();
+		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
+		binary(&tools, &format!("github_a/1/{tool}"));
+		std::fs::write(install.join(if cfg!(windows) { "readme.md" } else { "readme" }), b"text").unwrap();
+		let index = find_binaries_by_tool(&tools, ["github_a/1"]).unwrap();
+		assert_eq!(index["github_a/1"], vec![PathBuf::from(tool)]);
+	}
+
+	#[test]
+	fn indexes_binaries_skips_broken_symlinks() {
+		let dir = tempfile::tempdir().unwrap();
+		let tools = dir.path().join("tools");
+		let install = tools.join("github_a/1");
+		std::fs::create_dir_all(&install).unwrap();
+		let tool = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let link = install.join(tool);
+		let missing = install.join("missing");
+		#[cfg(unix)]
+		let created = std::os::unix::fs::symlink(&missing, &link).is_ok();
+		#[cfg(windows)]
+		let created = std::os::windows::fs::symlink_file(&missing, &link).is_ok();
+		#[cfg(not(any(unix, windows)))]
+		let created = false;
+		if !created {
+			eprintln!("skipping: cannot create a file symlink");
+			return;
+		}
+		let index = find_binaries_by_tool(&tools, ["github_a/1"]).unwrap();
+		assert!(index["github_a/1"].is_empty());
 	}
 }

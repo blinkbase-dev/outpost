@@ -37,14 +37,15 @@ pub(crate) fn exec(args: ExecArgs) -> Result<i32, Error> {
 	let mut command = args.command.into_iter();
 	let binary = command.next().ok_or("missing binary name after `--`")?;
 	let binary = binary.to_str().ok_or("binary name must be valid utf-8")?;
-	let matches = candidates::find_binaries(&tool.install_dir, binary)?;
+	let install_dir = tools_dir.join(&tool.install_path);
+	let matches = candidates::find_binaries_cached(&install_dir, binary, paths.state.binaries.get(&tool.install_path).map(Vec::as_slice))?;
 	let path = match matches.as_slice() {
 		[path] => path,
 		[] => {
 			return Err(format!("`{binary}` was not found in {} ({})", tool.origin.display(), tool.installed_version).into());
 		}
 		paths => {
-			let mut message = format!("multiple `{binary}` binaries found in {}:", tool.install_dir.display());
+			let mut message = format!("multiple `{binary}` binaries found in {}:", install_dir.display());
 			for path in paths {
 				message.push_str(&format!("\n  {}", path.display()));
 			}

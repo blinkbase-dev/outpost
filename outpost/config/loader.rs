@@ -124,6 +124,7 @@ mod tests {
 			project: vec![project.clone()],
 			state: State {
 				registered_paths: vec![registered.clone()],
+				binaries: Default::default(),
 			},
 			..ConfigPaths::default()
 		})

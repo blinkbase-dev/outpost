@@ -12,6 +12,14 @@ path = "main.rs"
 name = "list"
 path = "_tests/list.rs"
 
+[[test]]
+name = "exec"
+path = "_tests/exec.rs"
+
+[[test]]
+name = "shim"
+path = "_tests/shim.rs"
+
 [dependencies]
 clap.workspace = true
 flate2.workspace = true
