@@ -33,13 +33,6 @@ pub(crate) enum ToolRequest {
 }
 
 impl ToolRequest {
-	#[cfg(windows)]
-	pub(crate) fn key(&self) -> (&'static str, &str, &str, &Version) {
-		match self {
-			Self::Github { full_name, lane, version } => ("github", full_name, lane, version),
-		}
-	}
-
 	pub(crate) fn identity(&self) -> Identity {
 		match self {
 			Self::Github { full_name, lane, version } => ("github", full_name.clone(), lane.clone(), version.clone()),

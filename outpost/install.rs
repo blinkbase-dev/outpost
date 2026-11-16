@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -133,7 +134,7 @@ fn _update_lock_entries(lock: &mut Lock, installed: Vec<DownloadEntry>) -> usize
 			lane: lane.clone(),
 			requested: version.clone(),
 			tag_name: tag_name.clone(),
-			install_path: group.artifact_key.as_str().to_owned(),
+			install_path: PathBuf::from(group.artifact_key.as_str()),
 		},
 	};
 	let mut rows = Vec::new();
@@ -197,7 +198,7 @@ mod tests {
 			lane: String::new(),
 			requested: Version::parse("1.0.0"),
 			tag_name: "v1.2.3".to_owned(),
-			install_path: "github_owner_repo/1.2.3".to_owned(),
+			install_path: PathBuf::from("github_owner_repo/1.2.3"),
 		}]);
 	}
 
@@ -209,7 +210,7 @@ mod tests {
 			lane: String::new(),
 			requested: Version::parse("latest"),
 			tag_name: "v1.0.0".to_owned(),
-			install_path: "github_owner_repo/1.0.0".to_owned(),
+			install_path: PathBuf::from("github_owner_repo/1.0.0"),
 		});
 		let request = ToolRequestGroup {
 			origins: Vec::new(),
@@ -241,7 +242,7 @@ mod tests {
 			lane: String::new(),
 			requested: Version::parse("latest"),
 			tag_name: "v2.0.0".to_owned(),
-			install_path: "github_owner_repo/2.0.0".to_owned(),
+			install_path: PathBuf::from("github_owner_repo/2.0.0"),
 		}]);
 	}
 
@@ -253,7 +254,7 @@ mod tests {
 			lane: "cli/".to_owned(),
 			requested: Version::parse("1"),
 			tag_name: "cli/v1.0.0".to_owned(),
-			install_path: "github_owner_repo/cli_v1.0.0".to_owned(),
+			install_path: PathBuf::from("github_owner_repo/cli_v1.0.0"),
 		});
 		let request = ToolRequestGroup {
 			origins: Vec::new(),
@@ -286,14 +287,14 @@ mod tests {
 				lane: "cli/".to_owned(),
 				requested: Version::parse("1"),
 				tag_name: "cli/v1.0.0".to_owned(),
-				install_path: "github_owner_repo/cli_v1.0.0".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/cli_v1.0.0"),
 			},
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
-				install_path: "github_owner_repo/1.0.0".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.0.0"),
 			}
 		]);
 	}
@@ -305,7 +306,7 @@ mod tests {
 			lane: String::new(),
 			requested: Version::parse("1.0.0"),
 			tag_name: "v1.0.0".to_owned(),
-			install_path: "github_other_repo/1.0.0".to_owned(),
+			install_path: PathBuf::from("github_other_repo/1.0.0"),
 		};
 		let mut lock = Lock {
 			version: 1,
@@ -341,7 +342,7 @@ mod tests {
 			lane: String::new(),
 			requested: Version::parse("1.0.0"),
 			tag_name: "v1.0.0".to_owned(),
-			install_path: "github_owner_repo/1.0.0".to_owned(),
+			install_path: PathBuf::from("github_owner_repo/1.0.0"),
 		}]);
 	}
 
@@ -393,14 +394,14 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
-				install_path: "github_owner_repo/1.0.0".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.0.0"),
 			},
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("latest"),
 				tag_name: "v1.0.0".to_owned(),
-				install_path: "github_owner_repo/1.0.0".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.0.0"),
 			}
 		]);
 	}

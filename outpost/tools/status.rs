@@ -69,7 +69,7 @@ pub(crate) fn missing_from_lock(requests: Vec<ToolRequestGroup>, lock: &Lock, to
 	requests.into_iter().filter(|group| !installed.contains(&group.tool.identity())).collect()
 }
 
-fn _installed(install_path: &str, tools_dir: &Path) -> bool {
+fn _installed(install_path: &Path, tools_dir: &Path) -> bool {
 	tools_dir.join(install_path).exists()
 }
 
@@ -90,7 +90,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
 		let requests = vec![
@@ -149,7 +149,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
 		let requests = vec![ToolRequestEntry {
@@ -185,7 +185,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("9.0.0"),
 				tag_name: "v9.0.0".to_owned(),
-				install_path: "github_old_repo/9.0.0".to_owned(),
+				install_path: PathBuf::from("github_old_repo/9.0.0"),
 			}],
 		};
 		let report = report(Vec::new(), &lock, &tools);
@@ -205,7 +205,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
 		let requests = vec![
@@ -263,7 +263,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
 		let requests = ToolRequestGroup::from_entries(vec![ToolRequestEntry {
@@ -288,7 +288,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
 		let requests = ToolRequestGroup::from_entries(vec![ToolRequestEntry {
@@ -314,7 +314,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
 		let other_lane = ToolRequest::Github {
@@ -352,7 +352,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
-				install_path: "github_owner_repo/1.2.3".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
 		let installed = ToolRequest::Github {

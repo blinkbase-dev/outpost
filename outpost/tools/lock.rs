@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,8 +23,7 @@ pub(crate) fn read(config_dir: &Path) -> Result<Lock, LockError> {
 				match tool {
 					LockedTool::Github { full_name, install_path, .. } => {
 						full_name.make_ascii_lowercase();
-						let path = Path::new(install_path.as_str());
-						let relative = !path.as_os_str().is_empty() && path.components().all(|component| matches!(component, Component::Normal(_)));
+						let relative = !install_path.as_os_str().is_empty() && install_path.components().all(|component| matches!(component, Component::Normal(_)));
 						if !relative {
 							return Err(LockError::InvalidPath(install_path.clone()));
 						}
@@ -91,7 +90,7 @@ pub(crate) enum LockedTool {
 		lane: String,
 		requested: Version,
 		tag_name: String,
-		install_path: String,
+		install_path: PathBuf,
 	},
 }
 
@@ -121,7 +120,7 @@ pub(crate) enum LockError {
 	Busy,
 	UnsupportedVersion(u32),
 	DuplicateIdentity(Identity),
-	InvalidPath(String),
+	InvalidPath(PathBuf),
 }
 
 impl From<std::io::Error> for LockError {
@@ -153,7 +152,7 @@ impl fmt::Display for LockError {
 			Self::DuplicateIdentity((backend, full_name, lane, version)) => {
 				write!(f, "duplicate {backend} tool `{full_name}` (lane `{lane}`, version `{version}`) in lock")
 			}
-			Self::InvalidPath(path) => write!(f, "invalid install path `{path}` in lock"),
+			Self::InvalidPath(path) => write!(f, "invalid install path `{}` in lock", path.display()),
 		}
 	}
 }
@@ -269,7 +268,7 @@ install_path = "C:"
 				lane: String::new(),
 				requested: Version::parse("2.20"),
 				tag_name: "2.20".to_owned(),
-				install_path: "github_owner_repo/2.20".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/2.20"),
 			}],
 		};
 		write(dir.path(), &lock).unwrap();
@@ -287,21 +286,21 @@ install_path = "C:"
 					lane: String::new(),
 					requested: Version::parse("1"),
 					tag_name: "1".to_owned(),
-					install_path: "github_z_repo/1".to_owned(),
+					install_path: PathBuf::from("github_z_repo/1"),
 				},
 				LockedTool::Github {
 					full_name: "a/repo".to_owned(),
 					lane: "cli/".to_owned(),
 					requested: Version::parse("1"),
 					tag_name: "1".to_owned(),
-					install_path: "github_a_repo/1".to_owned(),
+					install_path: PathBuf::from("github_a_repo/1"),
 				},
 				LockedTool::Github {
 					full_name: "a/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("2"),
 					tag_name: "2".to_owned(),
-					install_path: "github_a_repo/2".to_owned(),
+					install_path: PathBuf::from("github_a_repo/2"),
 				},
 			],
 		};
@@ -327,7 +326,7 @@ install_path = "C:"
 				lane: String::new(),
 				requested: Version::parse("2.20"),
 				tag_name: "2.20".to_owned(),
-				install_path: "github_owner_repo/2.20".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/2.20"),
 			}],
 		};
 		write(dir.path(), &lock).unwrap();

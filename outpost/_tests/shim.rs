@@ -66,8 +66,13 @@ install_path = "github_a/1"
 [binaries]
 "github_a/1" = ["{name}"]
 
-[shims]
-tool = ["github_a/1"]
+[[shims.tool]]
+backend = "github"
+full_name = "a/repo"
+lane = ""
+requested = "1"
+install_path = "github_a/1"
+binaries = ["{name}"]
 "#;
 	#[cfg(not(windows))]
 	let template = r#"registered_paths = []
@@ -108,8 +113,13 @@ install_path = "github_a/1"
 [binaries]
 "github_a/1" = ["{name}"]
 
-[shims]
-tool = ["github_a/1"]
+[[shims.tool]]
+backend = "github"
+full_name = "a/repo"
+lane = ""
+requested = "1"
+install_path = "github_a/1"
+binaries = ["{name}"]
 "#;
 	#[cfg(not(windows))]
 	let template = r#"registered_paths = []
@@ -154,8 +164,13 @@ install_path = "github_b/1"
 [binaries]
 "github_a/1" = ["{name}"]
 
-[shims]
-tool = ["github_a/1"]
+[[shims.tool]]
+backend = "github"
+full_name = "a/repo"
+lane = ""
+requested = "1"
+install_path = "github_a/1"
+binaries = ["{name}"]
 "#;
 	#[cfg(not(windows))]
 	let template = r#"registered_paths = []

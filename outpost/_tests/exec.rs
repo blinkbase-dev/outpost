@@ -169,7 +169,18 @@ install_path = "github_owner_repo/1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	fixture.script("tool.cmd");
-	std::fs::write(fixture.config_dir.join("state.toml"), "[shims]\ntool = [\"github_owner_repo/1.2.3\"]\n").unwrap();
+	std::fs::write(
+		fixture.config_dir.join("state.toml"),
+		r#"[[shims.tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.2.3"
+install_path = "github_owner_repo/1.2.3"
+binaries = ["tool.cmd"]
+"#,
+	)
+	.unwrap();
 	let output = fixture.run(&["exec", "--shim", "--", "tool", "shimmed"]);
 	let stdout = String::from_utf8(output.stdout).unwrap();
 	let stderr = String::from_utf8(output.stderr).unwrap();
@@ -196,7 +207,18 @@ install_path = "github_owner_repo/1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	fixture.script("tool.cmd");
-	std::fs::write(fixture.config_dir.join("state.toml"), "[shims]\nother = [\"github_owner_repo/1.2.3\"]\n").unwrap();
+	std::fs::write(
+		fixture.config_dir.join("state.toml"),
+		r#"[[shims.other]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.2.3"
+install_path = "github_owner_repo/1.2.3"
+binaries = ["tool.cmd"]
+"#,
+	)
+	.unwrap();
 	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success());
