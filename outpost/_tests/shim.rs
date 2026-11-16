@@ -82,6 +82,13 @@ binaries = ["{name}"]
 "github_a/1" = ["{name}"]
 "#;
 	assert_eq!(state, template.replace("{name}", name));
+	let shim = fixture.config_dir.join("shims").join(name);
+	assert!(shim.exists());
+	#[cfg(not(windows))]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o111, 0o111);
+	}
 }
 
 #[test]
@@ -129,6 +136,13 @@ binaries = ["{name}"]
 "github_a/1" = ["{name}"]
 "#;
 	assert_eq!(state, template.replace("{name}", name));
+	let shim = fixture.config_dir.join("shims").join(name);
+	assert!(shim.exists());
+	#[cfg(not(windows))]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o111, 0o111);
+	}
 }
 
 #[test]
@@ -180,4 +194,11 @@ binaries = ["{name}"]
 "github_a/1" = ["{name}"]
 "#;
 	assert_eq!(state, template.replace("{name}", name));
+	let shim = fixture.config_dir.join("shims").join(name);
+	assert!(shim.exists());
+	#[cfg(not(windows))]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o111, 0o111);
+	}
 }
