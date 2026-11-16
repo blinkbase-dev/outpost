@@ -63,22 +63,21 @@ pub(crate) fn find_binaries_cached(install_dir: &Path, name: &str, cached: Optio
 			return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid binary name `{name}`")));
 		}
 		let mut invalid = false;
-		let matches: Vec<PathBuf> = cached
-			.iter()
-			.filter_map(|path| {
-				if path.as_os_str().is_empty() || !path.components().all(|component| matches!(component, Component::Normal(_))) {
-					invalid = true;
-					return None;
-				}
-				path
-					.file_name()
-					.is_some_and(|file_name| _binary_matches(file_name, name))
-					.then(|| install_dir.join(path.as_path()))
-			})
-			.collect();
-		for path in &matches {
-			match fs::metadata(path) {
-				Ok(metadata) if metadata.is_file() && _is_executable(&metadata) => {}
+		let mut matches = Vec::new();
+		for path in cached {
+			if path.as_os_str().is_empty() || !path.components().all(|component| matches!(component, Component::Normal(_))) {
+				invalid = true;
+				continue;
+			}
+			let Some(file_name) = path.file_name() else {
+				continue;
+			};
+			if !_binary_matches(file_name, name) {
+				continue;
+			}
+			let path = install_dir.join(path);
+			match fs::metadata(&path) {
+				Ok(metadata) if metadata.is_file() && _is_executable(&metadata) => matches.push(path),
 				Ok(_) => {
 					invalid = true;
 					break;
