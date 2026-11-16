@@ -132,20 +132,17 @@ fn lists_registered_versions_and_origins() {
 		std::fs::create_dir_all(project).unwrap();
 		std::fs::write(project.join("outpost.toml"), template.replace("{version}", version)).unwrap();
 	}
-	for (project, _) in &projects {
-		let output = fixture.run(project, None);
-		let stderr = String::from_utf8(output.stderr).unwrap();
-		assert!(output.status.success(), "{stderr}");
-	}
+	let sources: Vec<_> = projects
+		.iter()
+		.map(|(project, _)| std::fs::canonicalize(project.join("outpost.toml")).unwrap().display().to_string())
+		.collect();
+	let registered = sources.iter().map(|source| format!("{source:?}")).collect::<Vec<_>>().join(", ");
+	std::fs::write(fixture.config_dir.join("state.toml"), format!("registered_paths = [{registered}]\n")).unwrap();
 	let elsewhere = root.join("elsewhere");
 	std::fs::create_dir_all(&elsewhere).unwrap();
 	let output = fixture.run(&elsewhere, None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
-	let sources: Vec<_> = projects
-		.iter()
-		.map(|(project, _)| std::fs::canonicalize(project.join("outpost.toml")).unwrap().display().to_string())
-		.collect();
 	let template = r#"TOOL               REQUESTED  VERSION  SOURCE
 github:owner/repo  1.0.0      missing  {source1}
 github:owner/repo  2.0.0      missing  {source2}

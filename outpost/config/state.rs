@@ -45,6 +45,25 @@ pub(crate) fn acquire(config_dir: &Path) -> Result<File, StateError> {
 	}
 }
 
+pub(crate) fn register_config(config_dir: Option<&Path>, project_configs: &[PathBuf]) -> Result<(), StateError> {
+	let Some(config_dir) = config_dir.filter(|dir| dir.is_dir()) else {
+		return Ok(());
+	};
+	let _guard = acquire(config_dir)?;
+	let (mut state, text) = read(config_dir)?;
+	// registered paths are written canonical
+	let mut registered: Vec<_> = state
+		.registered_paths
+		.into_iter()
+		.chain(project_configs.iter().cloned())
+		.filter(|path| path.parent() != Some(config_dir))
+		.collect();
+	registered.sort();
+	registered.dedup();
+	state.registered_paths = registered;
+	write(config_dir, &state, text.as_deref())
+}
+
 #[derive(Default, Deserialize, Serialize)]
 pub(crate) struct State {
 	#[serde(default)]

@@ -35,9 +35,9 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 	let project = project_configs(&cwd, system_dir.as_deref());
 	let state = match system_dir.as_deref().filter(|dir| dir.is_dir()) {
 		Some(config_dir) => {
-			let _lock = state::acquire(config_dir)?;
-			let (mut state, text) = state::read(config_dir)?;
-			registered_configs(config_dir, &project, &mut state, text.as_deref())?;
+			let (mut state, _) = state::read(config_dir)?;
+			let project: HashSet<_> = project.iter().collect();
+			state.registered_paths.retain(|path| !project.contains(path));
 			state
 		}
 		None => State::default(),
@@ -92,22 +92,6 @@ fn project_configs(cwd: &Path, config_dir: Option<&Path>) -> Vec<PathBuf> {
 		.collect();
 	configs.reverse();
 	configs
-}
-
-fn registered_configs(config_dir: &Path, project_configs: &[PathBuf], state: &mut State, text: Option<&str>) -> Result<(), StateError> {
-	// registered paths are written canonical
-	let mut paths: Vec<_> = std::mem::take(&mut state.registered_paths)
-		.into_iter()
-		.chain(project_configs.iter().cloned())
-		.filter(|path| path.parent() != Some(config_dir))
-		.collect();
-	paths.sort();
-	paths.dedup();
-	state.registered_paths = paths;
-	state::write(config_dir, state, text)?;
-	let project: HashSet<_> = project_configs.iter().collect();
-	state.registered_paths.retain(|path| !project.contains(path));
-	Ok(())
 }
 
 #[derive(Default)]
@@ -416,6 +400,7 @@ mod state_tests {
 		};
 		let config = std::fs::canonicalize(&config).unwrap();
 		let locations = locate_with(&project, &env).unwrap();
+		let _ = state::register_config(Some(&config_dir), &[config.clone()]).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 
@@ -423,11 +408,7 @@ mod state_tests {
 		fs::create_dir_all(&other).unwrap();
 		let locations = locate_with(&other, &env).unwrap();
 		assert!(locations.project.is_empty());
-		assert_eq!(locations.state.registered_paths, vec![config.clone()]);
-
-		let text = fs::read_to_string(config_dir.join("state.toml")).unwrap();
-		let state: State = toml::from_str(&text).unwrap();
-		assert_eq!(state.registered_paths, vec![config]);
+		assert_eq!(locations.state.registered_paths, vec![config]);
 	}
 
 	#[test]
@@ -444,10 +425,12 @@ mod state_tests {
 		};
 		let config = std::fs::canonicalize(&config).unwrap();
 		let locations = locate_with(&project, &env).unwrap();
+		let _ = state::register_config(Some(&config_dir), &[config.clone()]).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 
 		let locations = locate_with(&project, &env).unwrap();
+		let _ = state::register_config(Some(&config_dir), &[config.clone()]).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 

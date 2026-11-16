@@ -5,7 +5,7 @@ use reqwest::Client;
 use tokio::sync::Semaphore;
 
 use crate::backend::github::{GithubBackend, GithubOptions};
-use crate::config::{loader, locate};
+use crate::config::{loader, locate, state};
 use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionGroup};
 use crate::tools::lock::{self, Identity, Lock, LockedTool};
 use crate::tools::status;
@@ -20,6 +20,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let configs = loader::load(&paths)?;
+	state::register_config(paths.system_dir.as_deref(), &paths.project)?;
 	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
 	let downloads_dir = paths.downloads_dir.as_deref().ok_or("no downloads directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
