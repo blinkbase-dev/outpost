@@ -85,11 +85,11 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
-	let requests = candidates::requests(&paths)?;
 	let name = Path::new(shim).file_stem().and_then(OsStr::to_str).ok_or("invalid shim name")?;
 	let Some(shims) = paths.state.shims.get(&name.to_ascii_lowercase()) else {
 		return Err(format!("no installed tool provides `{name}`").into());
 	};
+	let requests = candidates::requests(&paths)?;
 	for request in &requests {
 		let Some((install_path, binaries)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
 			(
