@@ -65,17 +65,17 @@ fn project_configs(cwd: &Path, config_dir: Option<&Path>) -> Vec<PathBuf> {
 }
 
 fn registered_configs(config_dir: &Path, project_configs: &[PathBuf]) -> Result<Vec<PathBuf>, LocateError> {
-	let registry = config_dir.join("configs.toml");
-	let (text, registered) = match std::fs::read_to_string(&registry) {
+	let state = config_dir.join("state.toml");
+	let (text, registered) = match std::fs::read_to_string(&state) {
 		Ok(text) if text.trim().is_empty() => (Some(text), Vec::new()),
 		Ok(text) => {
-			let data = toml::from_str::<Registry>(&text).map_err(|source| (registry.clone(), source))?;
-			(Some(text), data.paths)
+			let data = toml::from_str::<State>(&text).map_err(|source| (state.clone(), source))?;
+			(Some(text), data.registered_paths)
 		}
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, Vec::new()),
-		Err(source) => return Err((registry.clone(), source).into()),
+		Err(source) => return Err((state.clone(), source).into()),
 	};
-	// registry paths are written canonical
+	// registered paths are written canonical
 	let mut paths: Vec<_> = registered
 		.into_iter()
 		.chain(project_configs.iter().cloned())
@@ -83,14 +83,14 @@ fn registered_configs(config_dir: &Path, project_configs: &[PathBuf]) -> Result<
 		.collect();
 	paths.sort();
 	paths.dedup();
-	_write_registry(&registry, text.as_deref(), &paths)?;
+	_write_state(&state, text.as_deref(), &paths)?;
 	let project: HashSet<_> = project_configs.iter().collect();
 	paths.retain(|path| !project.contains(path));
 	Ok(paths)
 }
 
-fn _write_registry(path: &Path, text: Option<&str>, paths: &[PathBuf]) -> Result<(), LocateError> {
-	let serialized = toml::to_string_pretty(&RegistryRef { paths })?;
+fn _write_state(path: &Path, text: Option<&str>, paths: &[PathBuf]) -> Result<(), LocateError> {
+	let serialized = toml::to_string_pretty(&StateRef { registered_paths: paths })?;
 	if text == Some(serialized.as_str()) {
 		return Ok(());
 	}
@@ -126,22 +126,22 @@ pub(crate) struct ConfigPaths {
 }
 
 #[derive(Deserialize)]
-struct Registry {
+struct State {
 	#[serde(default)]
-	paths: Vec<PathBuf>,
+	registered_paths: Vec<PathBuf>,
 }
 
 #[derive(Serialize)]
-struct RegistryRef<'a> {
-	paths: &'a [PathBuf],
+struct StateRef<'a> {
+	registered_paths: &'a [PathBuf],
 }
 
 #[derive(Debug)]
 pub(crate) enum LocateError {
 	Io { path: PathBuf, source: std::io::Error },
 	RelativeConfigDir(PathBuf),
-	RegistryParse { path: PathBuf, source: toml::de::Error },
-	RegistrySerialize(toml::ser::Error),
+	StateParse { path: PathBuf, source: toml::de::Error },
+	StateSerialize(toml::ser::Error),
 }
 
 impl From<(PathBuf, std::io::Error)> for LocateError {
@@ -152,13 +152,13 @@ impl From<(PathBuf, std::io::Error)> for LocateError {
 
 impl From<(PathBuf, toml::de::Error)> for LocateError {
 	fn from((path, source): (PathBuf, toml::de::Error)) -> Self {
-		Self::RegistryParse { path, source }
+		Self::StateParse { path, source }
 	}
 }
 
 impl From<toml::ser::Error> for LocateError {
 	fn from(source: toml::ser::Error) -> Self {
-		Self::RegistrySerialize(source)
+		Self::StateSerialize(source)
 	}
 }
 
@@ -169,8 +169,8 @@ impl fmt::Display for LocateError {
 			Self::RelativeConfigDir(path) => {
 				write!(f, "OUTPOST_CONFIG_DIR must be absolute, got `{}`", path.display())
 			}
-			Self::RegistryParse { path, source } => write!(f, "failed to parse config registry `{}`: {source}", path.display()),
-			Self::RegistrySerialize(error) => write!(f, "failed to serialize config registry: {error}"),
+			Self::StateParse { path, source } => write!(f, "failed to parse state `{}`: {source}", path.display()),
+			Self::StateSerialize(error) => write!(f, "failed to serialize state: {error}"),
 		}
 	}
 }
@@ -180,8 +180,8 @@ impl std::error::Error for LocateError {
 		match self {
 			Self::Io { source, .. } => Some(source),
 			Self::RelativeConfigDir(_) => None,
-			Self::RegistryParse { source, .. } => Some(source),
-			Self::RegistrySerialize(error) => Some(error),
+			Self::StateParse { source, .. } => Some(source),
+			Self::StateSerialize(error) => Some(error),
 		}
 	}
 }
@@ -363,7 +363,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod registry_tests {
+mod state_tests {
 	use std::fs;
 
 	use super::tests::touch;
@@ -391,9 +391,9 @@ mod registry_tests {
 		assert!(locations.project.is_empty());
 		assert_eq!(locations.registered, vec![std::fs::canonicalize(&config).unwrap()]);
 
-		let registry = fs::read_to_string(config_dir.join("configs.toml")).unwrap();
-		let registry: Registry = toml::from_str(&registry).unwrap();
-		assert_eq!(registry.paths, vec![std::fs::canonicalize(&config).unwrap()]);
+		let text = fs::read_to_string(config_dir.join("state.toml")).unwrap();
+		let state: State = toml::from_str(&text).unwrap();
+		assert_eq!(state.registered_paths, vec![std::fs::canonicalize(&config).unwrap()]);
 	}
 
 	#[test]
@@ -417,13 +417,13 @@ mod registry_tests {
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.registered.is_empty());
 
-		let registry = fs::read_to_string(config_dir.join("configs.toml")).unwrap();
-		let registry: Registry = toml::from_str(&registry).unwrap();
-		assert_eq!(registry.paths, vec![config]);
+		let text = fs::read_to_string(config_dir.join("state.toml")).unwrap();
+		let state: State = toml::from_str(&text).unwrap();
+		assert_eq!(state.registered_paths, vec![config]);
 	}
 
 	#[test]
-	fn skips_registry_without_system_dir() {
+	fn skips_state_without_system_dir() {
 		let tmp = tempfile::tempdir().unwrap();
 		let project = tmp.path().join("project");
 		touch(&project.join("outpost.toml"));
@@ -433,17 +433,17 @@ mod registry_tests {
 	}
 
 	#[test]
-	fn rejects_invalid_registry() {
+	fn rejects_invalid_state() {
 		let tmp = tempfile::tempdir().unwrap();
 		let config_dir = tmp.path().join("config");
 		fs::create_dir_all(&config_dir).unwrap();
-		fs::write(config_dir.join("configs.toml"), "[paths\n").unwrap();
+		fs::write(config_dir.join("state.toml"), "[registered_paths\n").unwrap();
 		let env = ConfigEnv {
 			config_dir: Some(config_dir),
 			..ConfigEnv::default()
 		};
 		let project = tmp.path().join("project");
 		touch(&project.join("outpost.toml"));
-		assert!(matches!(locate_with(&project, &env), Err(LocateError::RegistryParse { .. })));
+		assert!(matches!(locate_with(&project, &env), Err(LocateError::StateParse { .. })));
 	}
 }
