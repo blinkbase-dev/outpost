@@ -149,3 +149,56 @@ install_path = "github_owner_repo/1.2.3"
 	assert!(!output.status.success());
 	assert!(stderr.contains("is not requested by the current config"), "{stderr}");
 }
+
+#[cfg(windows)]
+#[test]
+fn runs_shim_from_shims() {
+	let lock = r#"
+version = 1
+
+[[tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.2.3"
+tag_name = "v1.2.3"
+install_path = "github_owner_repo/1.2.3"
+"#;
+	let config = r#"[tools]
+"github:owner/repo" = "1.2.3"
+"#;
+	let fixture = Fixture::new(config, lock);
+	fixture.script("tool.cmd");
+	std::fs::write(fixture.config_dir.join("state.toml"), "[shims]\ntool = [\"github_owner_repo/1.2.3\"]\n").unwrap();
+	let output = fixture.run(&["exec", "--shim", "--", "tool", "shimmed"]);
+	let stdout = String::from_utf8(output.stdout).unwrap();
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert_eq!(output.status.code(), Some(7), "{stderr}");
+	assert!(stdout.contains("shimmed"), "{stdout}");
+}
+
+#[cfg(windows)]
+#[test]
+fn reports_shim_missing_from_shims() {
+	let lock = r#"
+version = 1
+
+[[tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.2.3"
+tag_name = "v1.2.3"
+install_path = "github_owner_repo/1.2.3"
+"#;
+	let config = r#"[tools]
+"github:owner/repo" = "1.2.3"
+"#;
+	let fixture = Fixture::new(config, lock);
+	fixture.script("tool.cmd");
+	std::fs::write(fixture.config_dir.join("state.toml"), "[shims]\nother = [\"github_owner_repo/1.2.3\"]\n").unwrap();
+	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success());
+	assert!(stderr.contains("no installed tool provides `tool`"), "{stderr}");
+}

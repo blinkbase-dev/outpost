@@ -60,6 +60,16 @@ install_path = "github_a/1"
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+	#[cfg(windows)]
+	let template = r#"registered_paths = []
+
+[binaries]
+"github_a/1" = ["{name}"]
+
+[shims]
+tool = ["github_a/1"]
+"#;
+	#[cfg(not(windows))]
 	let template = r#"registered_paths = []
 
 [binaries]
@@ -92,6 +102,16 @@ install_path = "github_a/1"
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+	#[cfg(windows)]
+	let template = r#"registered_paths = []
+
+[binaries]
+"github_a/1" = ["{name}"]
+
+[shims]
+tool = ["github_a/1"]
+"#;
+	#[cfg(not(windows))]
 	let template = r#"registered_paths = []
 
 [binaries]
@@ -128,6 +148,16 @@ install_path = "github_b/1"
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+	#[cfg(windows)]
+	let template = r#"registered_paths = []
+
+[binaries]
+"github_a/1" = ["{name}"]
+
+[shims]
+tool = ["github_a/1"]
+"#;
+	#[cfg(not(windows))]
 	let template = r#"registered_paths = []
 
 [binaries]
