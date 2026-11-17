@@ -100,6 +100,7 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
+					api_url: None,
 				},
 			},
 			ToolRequestEntry {
@@ -108,6 +109,7 @@ mod tests {
 					full_name: "owner/other".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
+					api_url: None,
 				},
 			},
 		];
@@ -121,6 +123,7 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
+					api_url: None,
 				},
 			},
 			ToolStatus {
@@ -131,6 +134,7 @@ mod tests {
 					full_name: "owner/other".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
+					api_url: None,
 				},
 			},
 		]);
@@ -158,6 +162,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
+				api_url: None,
 			},
 		}];
 		let report = report(requests, &lock, &tools);
@@ -169,6 +174,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
+				api_url: None,
 			},
 		}]);
 		assert!(report.unrequested.is_empty());
@@ -215,6 +221,7 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
+					api_url: None,
 				},
 			},
 			ToolRequestEntry {
@@ -223,6 +230,7 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
+					api_url: None,
 				},
 			},
 		];
@@ -236,6 +244,7 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
+					api_url: None,
 				},
 			},
 			ToolStatus {
@@ -246,6 +255,7 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
+					api_url: None,
 				},
 			},
 		]);
@@ -272,6 +282,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
+				api_url: None,
 			},
 		}]);
 		assert!(missing_from_lock(requests, &lock, &tools).is_empty());
@@ -297,6 +308,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
+				api_url: None,
 			},
 		}]);
 		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 1);
@@ -321,11 +333,13 @@ mod tests {
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			version: Version::parse("1.2.3"),
+			api_url: None,
 		};
 		let other_version = ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
+			api_url: None,
 		};
 		let requests = ToolRequestGroup::from_entries(vec![
 			ToolRequestEntry {
@@ -359,11 +373,13 @@ mod tests {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
+			api_url: None,
 		};
 		let missing = ToolRequest::Github {
 			full_name: "owner/other".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
+			api_url: None,
 		};
 		let requests = missing_from_lock(
 			ToolRequestGroup::from_entries(vec![

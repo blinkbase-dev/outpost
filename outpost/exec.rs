@@ -38,6 +38,7 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 				full_name: request_name,
 				lane: request_lane,
 				version,
+				..
 			},
 			lock::LockedTool::Github {
 				full_name,
@@ -108,6 +109,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 					full_name: request_name,
 					lane: request_lane,
 					version,
+					..
 				},
 				ShimEntry::Github {
 					full_name,

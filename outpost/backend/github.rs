@@ -186,6 +186,13 @@ impl GithubOptions {
 			.filter(|token| !token.is_empty());
 		Self { token, ..Self::default() }
 	}
+
+	pub(crate) fn with_api_url(mut self, api_url: Option<&str>) -> Self {
+		if let Some(api_url) = api_url {
+			self.api_url = api_url.to_owned();
+		}
+		self
+	}
 }
 
 impl Default for GithubOptions {

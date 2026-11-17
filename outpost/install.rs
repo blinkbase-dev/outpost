@@ -83,7 +83,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	for (requests, error) in &failures {
 		for request in requests {
 			match &request.tool {
-				ToolRequest::Github { full_name, lane, version } => {
+				ToolRequest::Github { full_name, lane, version, .. } => {
 					eprintln!("{full_name} {lane}{version}: {error}");
 				}
 			}
@@ -132,8 +132,13 @@ async fn resolve_parallel(requests: Vec<ToolRequestGroup>, http: Client) -> Resu
 
 async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, Error> {
 	match request {
-		ToolRequest::Github { full_name, lane, version } => {
-			let backend = GithubBackend::new(http, GithubOptions::from_process());
+		ToolRequest::Github {
+			full_name,
+			lane,
+			version,
+			api_url,
+		} => {
+			let backend = GithubBackend::new(http, GithubOptions::from_process().with_api_url(api_url.as_deref()));
 			let release = backend.select_release(full_name, lane, version).await?;
 			let (url, size, format) = backend.select_asset(full_name, &release)?;
 			Ok(ToolResolution::Github {
@@ -150,7 +155,7 @@ fn _update_lock_entries(lock: &mut Lock, installed: &[DownloadEntry]) -> usize {
 	let installed_artifacts = installed.len();
 	let groups: Vec<&ToolResolutionGroup> = installed.iter().map(|(group, _)| group).collect();
 	let row = |group: &ToolResolutionGroup, request: &ToolRequestGroup| match (&request.tool, &group.resolution) {
-		(ToolRequest::Github { full_name, lane, version }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
+		(ToolRequest::Github { full_name, lane, version, .. }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
 			full_name: full_name.clone(),
 			lane: lane.clone(),
 			requested: version.clone(),
@@ -194,6 +199,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
+				api_url: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -239,6 +245,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
+				api_url: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -283,6 +290,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
+				api_url: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -339,6 +347,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
+				api_url: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -375,6 +384,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
+				api_url: None,
 			},
 		};
 		let exact = ToolRequestGroup {
@@ -383,6 +393,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
+				api_url: None,
 			},
 		};
 		let requests = vec![latest, exact];

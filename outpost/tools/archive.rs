@@ -338,6 +338,7 @@ mod download_parallel_tests {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse(&format!("1.0.{index}")),
+						api_url: None,
 					},
 				};
 				(request, ToolResolution::Github {
@@ -377,6 +378,7 @@ mod download_parallel_tests {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse(&format!("1.0.{index}")),
+						api_url: None,
 					},
 				};
 				(request, ToolResolution::Github {
@@ -413,6 +415,7 @@ mod download_parallel_tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("latest"),
+					api_url: None,
 				},
 			},
 			ToolRequestGroup {
@@ -421,6 +424,7 @@ mod download_parallel_tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
+					api_url: None,
 				},
 			},
 		];
@@ -464,6 +468,7 @@ mod download_parallel_tests {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
+						api_url: None,
 					},
 				},
 				ToolResolution::Github {
@@ -480,6 +485,7 @@ mod download_parallel_tests {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.1.0"),
+						api_url: None,
 					},
 				},
 				ToolResolution::Github {
@@ -496,6 +502,7 @@ mod download_parallel_tests {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("latest"),
+						api_url: None,
 					},
 				},
 				ToolResolution::Github {
@@ -687,6 +694,7 @@ mod extract_parallel_tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
+					api_url: None,
 				},
 			},
 			ToolResolution::Github {
@@ -717,6 +725,7 @@ mod extract_parallel_tests {
 					full_name: "google/magika".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
+					api_url: None,
 				},
 			},
 			ToolResolution::Github {
@@ -759,6 +768,7 @@ mod extract_parallel_tests {
 						full_name: "owner/tar-gz".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
+						api_url: None,
 					},
 				},
 				ToolResolution::Github {
@@ -775,6 +785,7 @@ mod extract_parallel_tests {
 						full_name: "owner/tar-xz".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
+						api_url: None,
 					},
 				},
 				ToolResolution::Github {
@@ -791,6 +802,7 @@ mod extract_parallel_tests {
 						full_name: "owner/zip".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
+						api_url: None,
 					},
 				},
 				ToolResolution::Github {
@@ -833,6 +845,7 @@ mod extract_parallel_tests {
 						full_name: "owner/good".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
+						api_url: None,
 					},
 				},
 				ToolResolution::Github {
@@ -849,6 +862,7 @@ mod extract_parallel_tests {
 						full_name: "owner/bad".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
+						api_url: None,
 					},
 				},
 				ToolResolution::Github {
@@ -886,6 +900,7 @@ mod resolution_group_tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
+				api_url: None,
 			},
 		};
 		let exact = ToolRequestGroup {
@@ -894,6 +909,7 @@ mod resolution_group_tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
+				api_url: None,
 			},
 		};
 		let artifact_key = ArtifactKey::new(&latest.tool, "v1.0.0");
@@ -925,6 +941,7 @@ mod resolution_group_tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
+				api_url: None,
 			},
 		};
 		let second = ToolRequestGroup {
@@ -933,6 +950,7 @@ mod resolution_group_tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
+				api_url: None,
 			},
 		};
 		let error = ToolResolutionGroup::from_entries(vec![

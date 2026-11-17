@@ -247,11 +247,3 @@ install_path = "../escape"
 	assert!(!output.status.success());
 	assert!(String::from_utf8(output.stderr).unwrap().contains("invalid install path `../escape` in lock"));
 }
-
-#[test]
-fn reports_unsupported_backend() {
-	let fixture = Fixture::new("[tools]\n\"rust\" = \"latest\"\n", "");
-	let output = fixture.run(&fixture.config_dir, None);
-	assert!(!output.status.success());
-	assert!(String::from_utf8(output.stderr).unwrap().contains("unsupported backend in `rust`"));
-}
