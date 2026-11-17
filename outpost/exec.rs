@@ -103,7 +103,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 	};
 	let requests = candidates::requests(&paths)?;
 	for request in &requests {
-		let Some((install_path, binaries)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
+		let Some((install_path, binary)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
 			(
 				ToolRequest::Github {
 					full_name: request_name,
@@ -116,9 +116,9 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 					lane,
 					requested,
 					install_path,
-					binaries,
+					binary,
 				},
-			) => (full_name == request_name && lane == request_lane && requested == version).then_some((install_path, binaries)),
+			) => (full_name == request_name && lane == request_lane && requested == version).then_some((install_path, binary)),
 		}) else {
 			continue;
 		};
@@ -126,17 +126,6 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 			continue;
 		}
 		let install_dir = tools_dir.join(install_path);
-		let binary = match binaries.as_slice() {
-			[binary] => binary,
-			[] => continue,
-			binaries => {
-				let mut message = format!("multiple `{name}` binaries found in {}:", install_dir.display());
-				for binary in binaries {
-					message.push_str(&format!("\n  {}", install_dir.join(binary).display()));
-				}
-				return Err(message.into());
-			}
-		};
 		if !binary.components().all(|component| matches!(component, Component::Normal(_))) {
 			continue;
 		}

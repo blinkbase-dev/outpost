@@ -14,14 +14,18 @@ pub(crate) fn shim(args: ShimArgs) -> Result<(), Error> {
 	let lock = lock::read(config_dir)?;
 	let (mut state, text) = state::read(config_dir)?;
 	shims::index_binaries(&mut state, tools_dir, &lock)?;
-	shims::index_shims(&mut state, &lock);
+	let index_err = shims::index_shims(&mut state, &lock).err();
 	state::write(config_dir, &state, text.as_deref())?;
 	let shims_dir = paths.shims_dir.as_deref().ok_or("no shims directory")?;
 	if args.force {
 		shims::purge(shims_dir)?;
 	}
-	shims::generate(&state, shims_dir, &lock)?;
-	Ok(())
+	let generate_err = shims::generate(&state, shims_dir, &lock).err();
+	// conflicts surface while indexing on windows and while generating on unix
+	match index_err.or(generate_err) {
+		Some(error) => Err(error.into()),
+		None => Ok(()),
+	}
 }
 
 #[derive(Args)]

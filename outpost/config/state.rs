@@ -77,7 +77,7 @@ pub(crate) enum ShimEntry {
 		lane: String,
 		requested: Version,
 		install_path: PathBuf,
-		binaries: Vec<PathBuf>,
+		binary: PathBuf,
 	},
 }
 
@@ -145,7 +145,7 @@ mod tests {
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
-				binaries: vec![PathBuf::from("rg"), PathBuf::from("doc/rg")],
+				binary: PathBuf::from("rg"),
 			}])]),
 		};
 		write(dir.path(), &state, None).unwrap();

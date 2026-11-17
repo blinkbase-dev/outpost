@@ -55,7 +55,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	state::register_config(&mut state, config_dir, &paths.project);
 	let install_paths: Vec<PathBuf> = extractions.iter().map(|(group, _)| PathBuf::from(group.artifact_key.as_str())).collect();
 	shims::index_installed_binaries(&mut state, tools_dir, &lock, &install_paths)?;
-	shims::index_shims(&mut state, &lock);
+	let index_err = shims::index_shims(&mut state, &lock).err();
 	state::write(config_dir, &state, text.as_deref())?;
 	let generate_err: Option<Error> = paths
 		.shims_dir
@@ -94,7 +94,8 @@ pub(crate) fn install() -> Result<(), Error> {
 	}
 	let failed = failures.iter().map(|(requests, _)| requests.len()).sum::<usize>();
 	let mut message = (failed > 0).then(|| format!("failed to install {failed} tool(s)"));
-	if let Some(error) = generate_err {
+	// conflicts surface while indexing on windows and while generating on unix
+	if let Some(error) = index_err.map(Error::from).or(generate_err) {
 		let error = error.to_string();
 		match &mut message {
 			Some(message) => message.push_str(&format!("\n{error}")),
