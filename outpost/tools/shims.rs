@@ -1,6 +1,7 @@
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::lock::{Lock, LockedTool};
 use crate::config::state::{State, StateError};
@@ -9,11 +10,17 @@ use crate::tools::candidates;
 #[cfg(windows)]
 mod windows_import {
 	pub(super) use std::collections::BTreeMap;
-	pub(super) use std::ffi::OsStr;
 
 	pub(super) use crate::config::state::ShimEntry;
 }
 
+#[cfg(not(windows))]
+mod unix_import {
+	pub(super) use std::os::unix::fs::PermissionsExt;
+}
+
+#[cfg(not(windows))]
+use unix_import::*;
 #[cfg(windows)]
 use windows_import::*;
 
@@ -83,10 +90,84 @@ pub(crate) fn index_shims(state: &mut State, lock: &Lock) {
 #[cfg(not(windows))]
 pub(crate) fn index_shims(_state: &mut State, _lock: &Lock) {}
 
+#[cfg(windows)]
+pub(crate) fn generate(state: &State, shims_dir: &Path, _lock: &Lock) -> Result<(), ShimError> {
+	let trampoline = std::env::current_exe()?.with_file_name("op_shim.exe");
+	let bytes = std::fs::read(&trampoline).map_err(|source| ShimError::Trampoline { path: trampoline, source })?;
+	std::fs::create_dir_all(shims_dir)?;
+	for name in state.shims.keys().map(String::as_str) {
+		if !_is_plain_file_name(name) {
+			continue;
+		}
+		let target = shims_dir.join(format!("{name}.exe"));
+		if std::fs::read(&target).is_ok_and(|existing| existing == bytes) {
+			continue;
+		}
+		let temp = target.with_extension("exe.tmp");
+		match std::fs::rename(&target, &temp) {
+			Ok(()) => {}
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => return Err(error.into()),
+		}
+		std::fs::write(&target, &bytes)?;
+	}
+	Ok(())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(), ShimError> {
+	std::fs::create_dir_all(shims_dir)?;
+	for tool in &lock.tools {
+		match tool {
+			LockedTool::Github { full_name, install_path, .. } => {
+				let Some(binaries) = state.binaries.get(install_path) else {
+					continue;
+				};
+				for binary in binaries {
+					let Some(name) = binary.file_name().and_then(OsStr::to_str) else {
+						continue;
+					};
+					if !_is_plain_file_name(name) {
+						continue;
+					}
+					let script = format!(
+						"#!/bin/sh\nexec op exec 'github:{}' -- '{}' \"$@\"\n",
+						full_name.replace('\'', "'\\''"),
+						name.replace('\'', "'\\''")
+					);
+					let target = shims_dir.join(name);
+					if std::fs::read_to_string(&target).is_ok_and(|existing| existing == script) {
+						continue;
+					}
+					let temp = shims_dir.join(format!("{name}.tmp"));
+					match std::fs::rename(&target, &temp) {
+						Ok(()) => {}
+						Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+						Err(error) => return Err(error.into()),
+					}
+					std::fs::write(&target, &script)?;
+					std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
+				}
+			}
+		}
+	}
+	Ok(())
+}
+
+fn _is_plain_file_name(name: &str) -> bool {
+	let mut components = Path::new(name).components();
+	matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
 #[derive(Debug)]
 pub(crate) enum ShimError {
 	Io(std::io::Error),
 	State(StateError),
+	#[cfg(windows)]
+	Trampoline {
+		path: PathBuf,
+		source: std::io::Error,
+	},
 }
 
 impl From<std::io::Error> for ShimError {
@@ -106,6 +187,8 @@ impl fmt::Display for ShimError {
 		match self {
 			Self::Io(error) => fmt::Display::fmt(error, f),
 			Self::State(error) => fmt::Display::fmt(error, f),
+			#[cfg(windows)]
+			Self::Trampoline { path, source } => write!(f, "failed to read trampoline `{}`: {source}", path.display()),
 		}
 	}
 }
@@ -115,6 +198,8 @@ impl std::error::Error for ShimError {
 		match self {
 			Self::Io(error) => Some(error),
 			Self::State(error) => Some(error),
+			#[cfg(windows)]
+			Self::Trampoline { source, .. } => Some(source),
 		}
 	}
 }

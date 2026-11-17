@@ -57,6 +57,8 @@ pub(crate) fn install() -> Result<(), Error> {
 	shims::index_installed_binaries(&mut state, tools_dir, &lock, &install_paths)?;
 	shims::index_shims(&mut state, &lock);
 	state::write(config_dir, &state, text.as_deref())?;
+	let shims_dir = paths.shims_dir.as_deref().ok_or("no shims directory")?;
+	shims::generate(&state, shims_dir, &lock)?;
 	// representative rows are appended after duplicate rows
 	for tool in &lock.tools[lock.tools.len() - installed_artifacts..] {
 		match tool {
