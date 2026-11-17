@@ -26,7 +26,7 @@ impl Fixture {
 			.arg("install")
 			.current_dir(&self.config_dir)
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
-			.env_remove("OUTPOST_ENV")
+			.env("OUTPOST_ENV", "dev")
 			.env_remove("OUTPOST_TOOLS_DIR")
 			.env_remove("OUTPOST_SHIMS_DIR")
 			.env_remove("OUTPOST_DOWNLOADS_DIR")
@@ -48,28 +48,29 @@ fn _tarball(name: &str, bytes: &[u8]) -> Vec<u8> {
 	builder.into_inner().unwrap().finish().unwrap()
 }
 
-async fn _mock_release(server: &MockServer) -> (String, &'static str) {
+async fn _mock_release(server: &MockServer, version: &str) -> (String, &'static str) {
 	// pick an asset name that the selector accepts on this host
 	let libc = if cfg!(windows) { "msvc" } else { "gnu" };
 	let asset = format!("tool-{}-{}-{libc}.tar.gz", std::env::consts::OS, std::env::consts::ARCH);
 	let binary = if cfg!(windows) { "tool.exe" } else { "tool" };
-	let bytes = _tarball(binary, b"binary");
+	let content = format!("binary {version}");
+	let bytes = _tarball(binary, content.as_bytes());
 	Mock::given(method("GET"))
-		.and(path("/repos/owner/repo/releases/tags/1.0.0"))
+		.and(path(format!("/repos/owner/repo/releases/tags/{version}")))
 		.respond_with(ResponseTemplate::new(200).set_body_json(json!({
-			"tag_name": "v1.0.0",
+			"tag_name": format!("v{version}"),
 			"draft": false,
 			"prerelease": false,
 			"assets": [{
 				"name": asset,
-				"browser_download_url": format!("{}/download/{asset}", server.uri()),
+				"browser_download_url": format!("{}/download/{version}/{asset}", server.uri()),
 				"size": bytes.len(),
 			}],
 		})))
 		.mount(server)
 		.await;
 	Mock::given(method("GET"))
-		.and(path(format!("/download/{asset}")))
+		.and(path(format!("/download/{version}/{asset}")))
 		.respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
 		.mount(server)
 		.await;
@@ -77,33 +78,10 @@ async fn _mock_release(server: &MockServer) -> (String, &'static str) {
 }
 
 #[test]
-fn resolves_against_api_url() {
-	let runtime = tokio::runtime::Runtime::new().unwrap();
-	let server = runtime.block_on(MockServer::start());
-	let config = r#"[tools]
-"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
-"#
-	.replace("{api_url}", &server.uri());
-	let fixture = Fixture::new(&config);
-	let output = fixture.run();
-	let stderr = String::from_utf8(output.stderr).unwrap();
-	assert!(!output.status.success(), "{stderr}");
-	assert!(stderr.contains("owner/repo 1.0.0: no release found"), "{stderr}");
-	// exact versions are tried with and without the "v" prefix
-	let requests = runtime.block_on(server.received_requests()).unwrap();
-	let paths: Vec<&str> = requests.iter().map(|request| request.url.path()).collect();
-	assert_eq!(paths, vec!["/repos/owner/repo/releases/tags/1.0.0", "/repos/owner/repo/releases/tags/v1.0.0"]);
-	// the lock is rewritten, but nothing is installed
-	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
-	assert!(!lock.contains("[[tool]]"), "{lock}");
-	assert_eq!(std::fs::read_dir(fixture.config_dir.join("tools")).unwrap().count(), 0);
-}
-
-#[test]
 fn skips_installed_tools() {
 	let runtime = tokio::runtime::Runtime::new().unwrap();
 	let server = runtime.block_on(MockServer::start());
-	let (asset, _) = runtime.block_on(_mock_release(&server));
+	let (asset, _) = runtime.block_on(_mock_release(&server, "1.0.0"));
 	let config = r#"[tools]
 "github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
 "#
@@ -117,14 +95,17 @@ fn skips_installed_tools() {
 	assert!(second.stdout.is_empty(), "{}", String::from_utf8_lossy(&second.stdout));
 	let requests = runtime.block_on(server.received_requests()).unwrap();
 	let paths: Vec<String> = requests.iter().map(|request| request.url.path().to_owned()).collect();
-	assert_eq!(paths, vec!["/repos/owner/repo/releases/tags/1.0.0".to_owned(), format!("/download/{asset}"),]);
+	assert_eq!(paths, vec![
+		"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+		format!("/download/1.0.0/{asset}"),
+	]);
 }
 
 #[test]
 fn installs_github_release_asset() {
 	let runtime = tokio::runtime::Runtime::new().unwrap();
 	let server = runtime.block_on(MockServer::start());
-	let (asset, binary) = runtime.block_on(_mock_release(&server));
+	let (asset, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
 	// install against the mock server
 	let config = r#"[tools]
 "github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
@@ -138,7 +119,7 @@ fn installs_github_release_asset() {
 	assert!(stdout.contains("owner/repo v1.0.0"), "{stdout}");
 	// the binary is extracted into the repo/tag directory
 	let installed = fixture.config_dir.join("tools").join("github_owner_repo/1.0.0").join(binary);
-	assert_eq!(std::fs::read(&installed).unwrap(), b"binary".as_slice());
+	assert_eq!(std::fs::read(&installed).unwrap(), b"binary 1.0.0".as_slice());
 	// the lock records the resolved tag and install path
 	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
 	let expected_lock = r#"version = 1
@@ -182,5 +163,155 @@ registered_paths = []
 	// the first tag candidate resolves, so the fallback is never requested
 	let requests = runtime.block_on(server.received_requests()).unwrap();
 	let paths: Vec<String> = requests.iter().map(|request| request.url.path().to_owned()).collect();
-	assert_eq!(paths, vec!["/repos/owner/repo/releases/tags/1.0.0".to_owned(), format!("/download/{asset}"),]);
+	assert_eq!(paths, vec![
+		"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+		format!("/download/1.0.0/{asset}"),
+	]);
+}
+
+#[test]
+fn installs_two_versions_of_same_tool() {
+	let runtime = tokio::runtime::Runtime::new().unwrap();
+	let server = runtime.block_on(MockServer::start());
+	let (asset, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+	runtime.block_on(_mock_release(&server, "2.0.0"));
+	let one = r#"[tools]
+"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
+"#
+	.replace("{api_url}", &server.uri());
+	let two = r#"[tools]
+"github:owner/repo" = { version = "2.0.0", api_url = "{api_url}" }
+"#
+	.replace("{api_url}", &server.uri());
+	let fixture = Fixture::new(&one);
+	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
+	let output = fixture.run();
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(output.status.success(), "{stderr}");
+	let stdout = String::from_utf8(output.stdout).unwrap();
+	assert!(stdout.contains("owner/repo v1.0.0"), "{stdout}");
+	assert!(stdout.contains("owner/repo v2.0.0"), "{stdout}");
+	// each version is extracted into its own directory
+	let tools = fixture.config_dir.join("tools").join("github_owner_repo");
+	assert_eq!(std::fs::read(tools.join("1.0.0").join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+	assert_eq!(std::fs::read(tools.join("2.0.0").join(binary)).unwrap(), b"binary 2.0.0".as_slice());
+	// the lock carries a row per requested version
+	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
+	let expected_lock = r#"version = 1
+
+[[tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+tag_name = "v1.0.0"
+install_path = "github_owner_repo/1.0.0"
+
+[[tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "2.0.0"
+tag_name = "v2.0.0"
+install_path = "github_owner_repo/2.0.0"
+"#;
+	assert_eq!(lock, expected_lock);
+	// both releases are resolved and downloaded
+	let mut paths: Vec<String> = runtime
+		.block_on(server.received_requests())
+		.unwrap()
+		.iter()
+		.map(|request| request.url.path().to_owned())
+		.collect();
+	paths.sort();
+	assert_eq!(paths, vec![
+		format!("/download/1.0.0/{asset}"),
+		format!("/download/2.0.0/{asset}"),
+		"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+		"/repos/owner/repo/releases/tags/2.0.0".to_owned(),
+	]);
+}
+
+#[test]
+fn installs_same_version_from_two_origins() {
+	let runtime = tokio::runtime::Runtime::new().unwrap();
+	let server = runtime.block_on(MockServer::start());
+	let (asset, _) = runtime.block_on(_mock_release(&server, "1.0.0"));
+	let one = r#"[tools]
+"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
+"#
+	.replace("{api_url}", &server.uri());
+	let two = r#"[tools]
+"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
+"#
+	.replace("{api_url}", &server.uri());
+	let fixture = Fixture::new(&one);
+	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
+	let output = fixture.run();
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(output.status.success(), "{stderr}");
+	// both origins merge into one request, so one artifact is installed
+	let stdout = String::from_utf8(output.stdout).unwrap();
+	assert_eq!(stdout.lines().count(), 1, "{stdout}");
+	assert!(stdout.contains("owner/repo v1.0.0"), "{stdout}");
+	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
+	let expected_lock = r#"version = 1
+
+[[tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+tag_name = "v1.0.0"
+install_path = "github_owner_repo/1.0.0"
+"#;
+	assert_eq!(lock, expected_lock);
+	// the tool is resolved and downloaded once
+	let mut paths: Vec<String> = runtime
+		.block_on(server.received_requests())
+		.unwrap()
+		.iter()
+		.map(|request| request.url.path().to_owned())
+		.collect();
+	paths.sort();
+	assert_eq!(paths, vec![
+		format!("/download/1.0.0/{asset}"),
+		"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+	]);
+}
+
+#[test]
+fn reports_failed_install_per_origin() {
+	let runtime = tokio::runtime::Runtime::new().unwrap();
+	let server = runtime.block_on(MockServer::start());
+	let config = r#"[tools]
+"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
+"#
+	.replace("{api_url}", &server.uri());
+	let fixture = Fixture::new(&config);
+	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), config).unwrap();
+	let output = fixture.run();
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success(), "{stderr}");
+	assert!(stderr.contains("owner/repo 1.0.0: no release found"), "{stderr}");
+	// a failed resolve names every config that requested the tool
+	let system = fixture.config_dir.join("outpost.toml").display().to_string();
+	let dev = fixture.config_dir.join("outpost.dev.toml").display().to_string();
+	assert!(stderr.contains(&format!("  from {system}")), "{stderr}");
+	assert!(stderr.contains(&format!("  from {dev}")), "{stderr}");
+	// both tag candidates are tried, and nothing is installed
+	let mut paths: Vec<String> = runtime
+		.block_on(server.received_requests())
+		.unwrap()
+		.iter()
+		.map(|request| request.url.path().to_owned())
+		.collect();
+	paths.sort();
+	assert_eq!(paths, vec![
+		"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+		"/repos/owner/repo/releases/tags/v1.0.0".to_owned(),
+	]);
+	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
+	assert!(!lock.contains("[[tool]]"), "{lock}");
+	assert_eq!(std::fs::read_dir(fixture.config_dir.join("tools")).unwrap().count(), 0);
 }
