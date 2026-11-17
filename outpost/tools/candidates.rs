@@ -1,10 +1,9 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::{fmt, fs, io};
 
-use super::lock::{Identity, Lock, LockedTool};
 use super::tool_request::{self, ToolRequestEntry, ToolRequestError};
 use crate::config::loader;
 use crate::config::loader::LoadError;
@@ -16,31 +15,6 @@ const MAX_BINARY_DEPTH: usize = 1;
 pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequestEntry>, CandidatesError> {
 	let configs = loader::load_paths(paths.project.iter().rev().chain(paths.system.iter().rev()))?;
 	Ok(tool_request::requests(&configs)?)
-}
-
-pub(crate) struct InstalledTool {
-	pub(crate) origin: PathBuf,
-	pub(crate) install_path: PathBuf,
-	pub(crate) installed_version: String,
-}
-
-pub(crate) fn installed(requests: &[ToolRequestEntry], lock: &Lock) -> HashMap<Identity, InstalledTool> {
-	let locked: HashMap<Identity, &LockedTool> = lock.tools.iter().map(|tool| (tool.identity(), tool)).collect();
-	let mut tools = HashMap::new();
-	for entry in requests {
-		let identity = entry.tool.identity();
-		match locked.get(&identity) {
-			Some(LockedTool::Github { install_path, tag_name, .. }) => {
-				tools.entry(identity).or_insert(InstalledTool {
-					origin: entry.origin.clone(),
-					install_path: install_path.clone(),
-					installed_version: tag_name.clone(),
-				});
-			}
-			_ => continue,
-		}
-	}
-	tools
 }
 
 pub(crate) fn find_binaries(install_dir: &Path, name: &str) -> io::Result<Vec<PathBuf>> {
@@ -305,9 +279,7 @@ mod tests {
 
 	use super::*;
 	use crate::config::state::State;
-	use crate::tools::lock::{Lock, LockedTool};
 	use crate::tools::tool_request::ToolRequest;
-	use crate::tools::version::Version;
 
 	fn write(root: &Path, relative: &str, keys: &[&str]) -> PathBuf {
 		let path = root.join(relative);
@@ -355,104 +327,6 @@ mod tests {
 			})
 			.collect();
 		assert_eq!(names, vec!["o/inner", "o/outer", "o/prod", "o/dev", "o/base"]);
-	}
-
-	#[test]
-	fn installed_dedupes_by_identity() {
-		let dir = tempfile::tempdir().unwrap();
-		let base = write(dir.path(), "system/config.toml", &["github:o/project"]);
-		let env = write(dir.path(), "system/outpost.dev.toml", &["github:o/system"]);
-		let project = write(dir.path(), "inner/outpost.toml", &["github:o/project"]);
-		let registered = write(dir.path(), "other/outpost.toml", &["github:o/registered"]);
-		let lock = Lock {
-			version: 1,
-			tools: vec![
-				LockedTool::Github {
-					full_name: "o/project".to_owned(),
-					lane: String::new(),
-					requested: Version::parse("1"),
-					tag_name: "v1.0.0".to_owned(),
-					install_path: PathBuf::from("github_o_project/1"),
-				},
-				LockedTool::Github {
-					full_name: "o/system".to_owned(),
-					lane: String::new(),
-					requested: Version::parse("1"),
-					tag_name: "v2.0.0".to_owned(),
-					install_path: PathBuf::from("github_o_system/1"),
-				},
-				LockedTool::Github {
-					full_name: "o/registered".to_owned(),
-					lane: String::new(),
-					requested: Version::parse("1"),
-					tag_name: "v3.0.0".to_owned(),
-					install_path: PathBuf::from("github_o_registered/1"),
-				},
-			],
-		};
-		let paths = ConfigPaths {
-			system: vec![base, env],
-			project: vec![project.clone()],
-			state: State {
-				registered_paths: vec![registered],
-				..State::default()
-			},
-			..ConfigPaths::default()
-		};
-		let candidates = installed(&requests(&paths).unwrap(), &lock);
-		assert_eq!(candidates.len(), 2);
-
-		let project_request = ToolRequest::Github {
-			full_name: "o/project".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1"),
-		};
-		let project_tool = candidates.get(&project_request.identity()).unwrap();
-		assert_eq!(project_tool.origin, project);
-		assert_eq!(project_tool.installed_version, "v1.0.0");
-
-		let system_request = ToolRequest::Github {
-			full_name: "o/system".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1"),
-		};
-		let system_tool = candidates.get(&system_request.identity()).unwrap();
-		assert_eq!(system_tool.installed_version, "v2.0.0");
-
-		let registered_request = ToolRequest::Github {
-			full_name: "o/registered".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1"),
-		};
-		assert!(!candidates.contains_key(&registered_request.identity()));
-	}
-
-	#[test]
-	fn installed_does_not_check_install_dirs() {
-		let dir = tempfile::tempdir().unwrap();
-		let system = write(dir.path(), "system/config.toml", &["github:o/missing", "github:o/locked"]);
-		let lock = Lock {
-			version: 1,
-			tools: vec![LockedTool::Github {
-				full_name: "o/locked".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1"),
-				tag_name: "v1.0.0".to_owned(),
-				install_path: PathBuf::from("github_o_locked/1"),
-			}],
-		};
-		let paths = ConfigPaths {
-			system: vec![system],
-			..ConfigPaths::default()
-		};
-		let candidates = installed(&requests(&paths).unwrap(), &lock);
-		assert_eq!(candidates.len(), 1);
-		let locked = ToolRequest::Github {
-			full_name: "o/locked".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1"),
-		};
-		assert!(candidates.contains_key(&locked.identity()));
 	}
 
 	#[test]
