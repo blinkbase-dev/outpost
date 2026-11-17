@@ -27,6 +27,7 @@ impl Fixture {
 			.current_dir(cwd)
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
 			.env_remove("OUTPOST_TOOLS_DIR")
+			.env_remove("OUTPOST_SHIMS_DIR")
 			.env_remove("OUTPOST_DOWNLOADS_DIR");
 		if let Some(envs) = envs {
 			command.env("OUTPOST_ENV", envs);

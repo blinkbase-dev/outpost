@@ -60,6 +60,9 @@ jobs:
         with:
           cache-dir: ${{ runner.temp }}/kache
           pr-comment: false
+      - name: build_trampoline
+        if: matrix.os == 'windows'
+        run: cargo rustc --locked -p outpost --features trampoline --bin op_shim -- -C panic=abort
       - name: test
         run: cargo nextest run --workspace --locked --profile ci
 
