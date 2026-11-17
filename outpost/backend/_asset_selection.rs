@@ -1,6 +1,6 @@
 use regex::regex;
 
-use super::ArchiveFormat;
+use super::_backend::ArchiveFormat;
 
 pub(crate) fn select<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(usize, &'a str, ArchiveFormat)> {
 	select_with(names, &Target::current())

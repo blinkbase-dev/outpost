@@ -1,3 +1,24 @@
+use percent_encoding::{AsciiSet, CONTROLS};
+
+// only characters that cannot appear literally in a path segment are encoded
+pub(crate) const PATH_SEGMENT: &AsciiSet = &CONTROLS
+	.add(b' ')
+	.add(b'"')
+	.add(b'#')
+	.add(b'%')
+	.add(b'/')
+	.add(b'<')
+	.add(b'>')
+	.add(b'?')
+	.add(b'[')
+	.add(b'\\')
+	.add(b']')
+	.add(b'^')
+	.add(b'`')
+	.add(b'{')
+	.add(b'|')
+	.add(b'}');
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ArchiveFormat {
 	TarGz,

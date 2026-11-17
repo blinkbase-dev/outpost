@@ -22,6 +22,10 @@ name = "list"
 path = "_tests/list.rs"
 
 [[test]]
+name = "install"
+path = "_tests/install.rs"
+
+[[test]]
 name = "exec"
 path = "_tests/exec.rs"
 
