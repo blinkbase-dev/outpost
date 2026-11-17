@@ -100,7 +100,8 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, _lock: &Lock) -> Result<
 			continue;
 		}
 		let target = shims_dir.join(format!("{name}.exe"));
-		if std::fs::read(&target).is_ok_and(|existing| existing == bytes) {
+		let size_matches = std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() == bytes.len() as u64);
+		if size_matches && std::fs::read(&target).is_ok_and(|existing| existing == bytes) {
 			continue;
 		}
 		let temp = target.with_extension("exe.tmp");
@@ -136,7 +137,8 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(
 						name.replace('\'', "'\\''")
 					);
 					let target = shims_dir.join(name);
-					if std::fs::read_to_string(&target).is_ok_and(|existing| existing == script) {
+					let size_matches = std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() == script.len() as u64);
+					if size_matches && std::fs::read_to_string(&target).is_ok_and(|existing| existing == script) {
 						continue;
 					}
 					let temp = shims_dir.join(format!("{name}.tmp"));
