@@ -62,7 +62,8 @@ install_path = "github_a/1"
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	#[cfg(windows)]
-	let template = r#"registered_paths = []
+	let template = r#"version = 1
+registered_paths = []
 
 [binaries]
 "github_a/1" = ["{name}"]
@@ -76,7 +77,8 @@ install_path = "github_a/1"
 binaries = ["{name}"]
 "#;
 	#[cfg(not(windows))]
-	let template = r#"registered_paths = []
+	let template = r#"version = 1
+registered_paths = []
 
 [binaries]
 "github_a/1" = ["{name}"]
@@ -107,7 +109,8 @@ install_path = "github_a/1"
 	let fixture = Fixture::new(lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	fixture.tool("github_a/1", name);
-	let initial = r#"[binaries]
+	let initial = r#"version = 1
+[binaries]
 "stale/1" = ["old"]
 "#;
 	std::fs::write(fixture.config_dir.join("state.toml"), initial).unwrap();
@@ -116,7 +119,8 @@ install_path = "github_a/1"
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	#[cfg(windows)]
-	let template = r#"registered_paths = []
+	let template = r#"version = 1
+registered_paths = []
 
 [binaries]
 "github_a/1" = ["{name}"]
@@ -130,7 +134,8 @@ install_path = "github_a/1"
 binaries = ["{name}"]
 "#;
 	#[cfg(not(windows))]
-	let template = r#"registered_paths = []
+	let template = r#"version = 1
+registered_paths = []
 
 [binaries]
 "github_a/1" = ["{name}"]
@@ -174,7 +179,8 @@ install_path = "github_b/1"
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	#[cfg(windows)]
-	let template = r#"registered_paths = []
+	let template = r#"version = 1
+registered_paths = []
 
 [binaries]
 "github_a/1" = ["{name}"]
@@ -188,7 +194,8 @@ install_path = "github_a/1"
 binaries = ["{name}"]
 "#;
 	#[cfg(not(windows))]
-	let template = r#"registered_paths = []
+	let template = r#"version = 1
+registered_paths = []
 
 [binaries]
 "github_a/1" = ["{name}"]
