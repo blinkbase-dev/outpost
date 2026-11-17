@@ -200,6 +200,7 @@ fn _is_plain_file_name(name: &str) -> bool {
 pub(crate) enum ShimError {
 	Io(std::io::Error),
 	State(StateError),
+	#[cfg(windows)]
 	InUse(Vec<PathBuf>),
 	#[cfg(windows)]
 	Trampoline {
@@ -225,6 +226,7 @@ impl fmt::Display for ShimError {
 		match self {
 			Self::Io(error) => fmt::Display::fmt(error, f),
 			Self::State(error) => fmt::Display::fmt(error, f),
+			#[cfg(windows)]
 			Self::InUse(paths) => {
 				f.write_str("cannot regenerate shims, in use:")?;
 				for path in paths {
@@ -243,6 +245,7 @@ impl std::error::Error for ShimError {
 		match self {
 			Self::Io(error) => Some(error),
 			Self::State(error) => Some(error),
+			#[cfg(windows)]
 			Self::InUse(_) => None,
 			#[cfg(windows)]
 			Self::Trampoline { source, .. } => Some(source),
