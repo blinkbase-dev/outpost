@@ -10,7 +10,7 @@ use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
-use crate::backend::ArchiveFormat;
+use crate::backend::_backend::ArchiveFormat;
 use crate::tools::tool_request::{ToolRequest, ToolRequestGroup};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;

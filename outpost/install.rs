@@ -188,7 +188,7 @@ mod tests {
 	use std::path::PathBuf;
 
 	use super::*;
-	use crate::backend::ArchiveFormat;
+	use crate::backend::_backend::ArchiveFormat;
 	use crate::tools::version::Version;
 
 	#[test]

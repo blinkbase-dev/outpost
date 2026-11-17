@@ -1,12 +1,12 @@
 use std::{env, fmt};
 
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::utf8_percent_encode;
 use reqwest::{Client, Response, StatusCode};
 use semver::Version as Semver;
 use serde::Deserialize;
 
 use super::_asset_selection::select;
-use super::_backend::ArchiveFormat;
+use super::_backend::{ArchiveFormat, PATH_SEGMENT};
 use crate::tools::version::{Prefix, Version, split_lane, tag_version};
 
 pub(crate) struct GithubBackend {
@@ -220,7 +220,7 @@ impl GithubClient {
 	}
 
 	fn release_by_tag_path(full_name: &str, tag: &str) -> String {
-		format!("/repos/{full_name}/releases/tags/{}", utf8_percent_encode(tag, NON_ALPHANUMERIC))
+		format!("/repos/{full_name}/releases/tags/{}", utf8_percent_encode(tag, PATH_SEGMENT))
 	}
 
 	fn new(http: Client, options: GithubOptions) -> Self {
