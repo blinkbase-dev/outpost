@@ -31,6 +31,18 @@ pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock
 	Ok(())
 }
 
+pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, lock: &Lock) -> Result<(), ShimError> {
+	let install_paths: Vec<&Path> = lock
+		.tools
+		.iter()
+		.map(|tool| match tool {
+			LockedTool::Github { install_path, .. } => install_path.as_path(),
+		})
+		.collect();
+	state.binaries = candidates::find_binaries_by_tool(tools_dir, install_paths)?;
+	Ok(())
+}
+
 #[cfg(windows)]
 pub(crate) fn index_shims(state: &mut State, lock: &Lock) {
 	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();

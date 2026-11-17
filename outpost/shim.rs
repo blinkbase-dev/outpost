@@ -1,14 +1,14 @@
 use std::path::Path;
 
-use crate::config::locate;
-use crate::config::state::{self, State};
-use crate::tools::lock::{self, Lock, LockedTool};
-use crate::tools::{candidates, shims};
+use crate::config::{locate, state};
+use crate::tools::{lock, shims};
 
 #[cfg(not(windows))]
 mod unix_import {
 	pub(super) use std::collections::BTreeMap;
 	pub(super) use std::path::PathBuf;
+
+	pub(super) use crate::tools::lock::{Lock, LockedTool};
 }
 
 #[cfg(not(windows))]
@@ -24,7 +24,7 @@ pub(crate) fn shim() -> Result<(), Error> {
 	let _guard = lock::acquire(config_dir)?;
 	let lock = lock::read(config_dir)?;
 	let (mut state, text) = state::read(config_dir)?;
-	_index_binaries(&mut state, &lock, tools_dir)?;
+	shims::index_binaries(&mut state, tools_dir, &lock)?;
 	shims::index_shims(&mut state, &lock);
 	state::write(config_dir, &state, text.as_deref())?;
 	let shims_dir = paths.shims_dir.as_deref().ok_or("no shims directory")?;
@@ -37,18 +37,6 @@ pub(crate) fn shim() -> Result<(), Error> {
 	{
 		_generate_shims(shims_dir, &lock, &state.binaries)?;
 	}
-	Ok(())
-}
-
-fn _index_binaries(state: &mut State, lock: &Lock, tools_dir: &Path) -> Result<(), Error> {
-	let install_paths: Vec<&Path> = lock
-		.tools
-		.iter()
-		.map(|tool| match tool {
-			LockedTool::Github { install_path, .. } => install_path.as_path(),
-		})
-		.collect();
-	state.binaries = candidates::find_binaries_by_tool(tools_dir, install_paths)?;
 	Ok(())
 }
 
