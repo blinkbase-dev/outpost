@@ -9,8 +9,8 @@ use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate, state};
 use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionGroup};
 use crate::tools::lock::{self, Identity, Lock, LockedTool};
-use crate::tools::status;
 use crate::tools::tool_request::{self, ToolRequest, ToolRequestGroup};
+use crate::tools::{shims, status};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestGroup, ToolResolution);
@@ -21,7 +21,6 @@ pub(crate) fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let configs = loader::load(&paths)?;
-	state::register_config(paths.system_dir.as_deref(), &paths.project)?;
 	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
 	let downloads_dir = paths.downloads_dir.as_deref().ok_or("no downloads directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
@@ -35,6 +34,10 @@ pub(crate) fn install() -> Result<(), Error> {
 	let mut lock = lock::read(config_dir)?;
 	let requests = status::missing_from_lock(requests, &lock, tools_dir);
 	if requests.is_empty() {
+		// persist the project registration even when nothing needs installing
+		let (mut state, text) = state::read(config_dir)?;
+		state::register_config(&mut state, config_dir, &paths.project);
+		state::write(config_dir, &state, text.as_deref())?;
 		return Ok(());
 	}
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
@@ -45,8 +48,15 @@ pub(crate) fn install() -> Result<(), Error> {
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
-	let installed_artifacts = _update_lock_entries(&mut lock, extractions);
+	let installed_artifacts = _update_lock_entries(&mut lock, &extractions);
 	lock::write(config_dir, &lock)?;
+	// refresh binaries and shims for the newly installed tools
+	let (mut state, text) = state::read(config_dir)?;
+	state::register_config(&mut state, config_dir, &paths.project);
+	let install_paths: Vec<PathBuf> = extractions.iter().map(|(group, _)| PathBuf::from(group.artifact_key.as_str())).collect();
+	shims::index_installed_binaries(&mut state, tools_dir, &lock, &install_paths)?;
+	shims::index_shims(&mut state, &lock);
+	state::write(config_dir, &state, text.as_deref())?;
 	// representative rows are appended after duplicate rows
 	for tool in &lock.tools[lock.tools.len() - installed_artifacts..] {
 		match tool {
@@ -125,9 +135,9 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, 
 	}
 }
 
-fn _update_lock_entries(lock: &mut Lock, installed: Vec<DownloadEntry>) -> usize {
+fn _update_lock_entries(lock: &mut Lock, installed: &[DownloadEntry]) -> usize {
 	let installed_artifacts = installed.len();
-	let groups: Vec<ToolResolutionGroup> = installed.into_iter().map(|(group, _)| group).collect();
+	let groups: Vec<&ToolResolutionGroup> = installed.iter().map(|(group, _)| group).collect();
 	let row = |group: &ToolResolutionGroup, request: &ToolRequestGroup| match (&request.tool, &group.resolution) {
 		(ToolRequest::Github { full_name, lane, version }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
 			full_name: full_name.clone(),
@@ -182,7 +192,7 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		})];
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let installed = resolutions
+		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
 				(group, ToolArchive::Github {
@@ -191,7 +201,7 @@ mod tests {
 			})
 			.collect();
 		let mut lock = Lock::default();
-		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
@@ -227,7 +237,7 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		})];
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let installed = resolutions
+		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
 				(group, ToolArchive::Github {
@@ -235,7 +245,7 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
@@ -271,7 +281,7 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		})];
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let installed = resolutions
+		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
 				(group, ToolArchive::Github {
@@ -279,7 +289,7 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
@@ -327,7 +337,7 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		})];
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let installed = resolutions
+		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
 				(group, ToolArchive::Github {
@@ -335,7 +345,7 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![other, LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
@@ -377,7 +387,7 @@ mod tests {
 			})
 			.collect();
 		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
-		let installed = resolutions
+		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
 				(group, ToolArchive::Github {
@@ -386,7 +396,7 @@ mod tests {
 			})
 			.collect();
 		let mut lock = Lock::default();
-		let installed_artifacts = _update_lock_entries(&mut lock, installed);
+		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(installed_artifacts, 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
