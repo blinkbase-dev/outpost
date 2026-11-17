@@ -1,10 +1,18 @@
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::config::locate;
 use crate::config::state::{self, State};
-use crate::tools::candidates;
 use crate::tools::lock::{self, Lock, LockedTool};
+use crate::tools::{candidates, shims};
+
+#[cfg(not(windows))]
+mod unix_import {
+	pub(super) use std::collections::BTreeMap;
+	pub(super) use std::path::PathBuf;
+}
+
+#[cfg(not(windows))]
+use unix_import::*;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -17,7 +25,7 @@ pub(crate) fn shim() -> Result<(), Error> {
 	let lock = lock::read(config_dir)?;
 	let (mut state, text) = state::read(config_dir)?;
 	_index_binaries(&mut state, &lock, tools_dir)?;
-	_index_shims(&mut state, &lock);
+	shims::index_shims(&mut state, &lock);
 	state::write(config_dir, &state, text.as_deref())?;
 	let shims_dir = paths.shims_dir.as_deref().ok_or("no shims directory")?;
 	#[cfg(windows)]
@@ -43,50 +51,6 @@ fn _index_binaries(state: &mut State, lock: &Lock, tools_dir: &Path) -> Result<(
 	state.binaries = candidates::find_binaries_by_tool(tools_dir, install_paths)?;
 	Ok(())
 }
-
-#[cfg(windows)]
-fn _index_shims(state: &mut State, lock: &Lock) {
-	use std::ffi::OsStr;
-
-	use crate::config::state::ShimEntry;
-
-	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();
-	for tool in &lock.tools {
-		match tool {
-			LockedTool::Github {
-				full_name,
-				lane,
-				requested,
-				install_path,
-				..
-			} => {
-				let Some(binaries) = state.binaries.get(install_path) else {
-					continue;
-				};
-				let mut names: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-				for binary in binaries {
-					let Some(name) = binary.file_stem().and_then(OsStr::to_str) else {
-						continue;
-					};
-					names.entry(name.to_ascii_lowercase()).or_default().push(binary.clone());
-				}
-				for (name, binaries) in names {
-					shims.entry(name).or_default().push(ShimEntry::Github {
-						full_name: full_name.clone(),
-						lane: lane.clone(),
-						requested: requested.clone(),
-						install_path: install_path.clone(),
-						binaries,
-					});
-				}
-			}
-		}
-	}
-	state.shims = shims;
-}
-
-#[cfg(not(windows))]
-fn _index_shims(_state: &mut State, _lock: &Lock) {}
 
 #[cfg(windows)]
 fn _generate_shims<'a>(shims_dir: &Path, trampoline: &Path, names: impl IntoIterator<Item = &'a str>) -> Result<(), Error> {

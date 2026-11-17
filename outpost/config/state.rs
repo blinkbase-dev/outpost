@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -34,30 +33,9 @@ pub(crate) fn write(config_dir: &Path, state: &State, text: Option<&str>) -> Res
 	Ok(())
 }
 
-pub(crate) fn acquire(config_dir: &Path) -> Result<File, StateError> {
-	let file = OpenOptions::new()
-		.read(true)
-		.write(true)
-		.create(true)
-		.truncate(false)
-		.open(config_dir.join("outpost.lock.guard"))
-		.map_err(|source| (config_dir.join("outpost.lock.guard"), source))?;
-	match file.try_lock() {
-		Ok(()) => Ok(file),
-		Err(TryLockError::WouldBlock) => Err(StateError::Busy),
-		Err(TryLockError::Error(error)) => Err((config_dir.join("outpost.lock.guard"), error).into()),
-	}
-}
-
-pub(crate) fn register_config(config_dir: Option<&Path>, project_configs: &[PathBuf]) -> Result<(), StateError> {
-	let Some(config_dir) = config_dir.filter(|dir| dir.is_dir()) else {
-		return Ok(());
-	};
-	let _guard = acquire(config_dir)?;
-	let (mut state, text) = read(config_dir)?;
+pub(crate) fn register_config(state: &mut State, config_dir: &Path, project_configs: &[PathBuf]) {
 	// registered paths are written canonical
-	let mut registered: Vec<_> = state
-		.registered_paths
+	let mut registered: Vec<_> = std::mem::take(&mut state.registered_paths)
 		.into_iter()
 		.chain(project_configs.iter().cloned())
 		.filter(|path| path.parent() != Some(config_dir))
@@ -65,7 +43,6 @@ pub(crate) fn register_config(config_dir: Option<&Path>, project_configs: &[Path
 	registered.sort();
 	registered.dedup();
 	state.registered_paths = registered;
-	write(config_dir, &state, text.as_deref())
 }
 
 #[derive(Deserialize, Serialize)]
@@ -109,7 +86,6 @@ pub(crate) enum StateError {
 	Io { path: PathBuf, source: std::io::Error },
 	Parse { path: PathBuf, source: toml::de::Error },
 	Serialize(toml::ser::Error),
-	Busy,
 }
 
 impl From<(PathBuf, std::io::Error)> for StateError {
@@ -136,7 +112,6 @@ impl fmt::Display for StateError {
 			Self::Io { path, source } => write!(f, "failed to access `{}`: {source}", path.display()),
 			Self::Parse { path, source } => write!(f, "failed to parse state `{}`: {source}", path.display()),
 			Self::Serialize(error) => write!(f, "failed to serialize state: {error}"),
-			Self::Busy => write!(f, "another outpost process is updating state"),
 		}
 	}
 }
@@ -147,7 +122,6 @@ impl std::error::Error for StateError {
 			Self::Io { source, .. } => Some(source),
 			Self::Parse { source, .. } => Some(source),
 			Self::Serialize(error) => Some(error),
-			Self::Busy => None,
 		}
 	}
 }
