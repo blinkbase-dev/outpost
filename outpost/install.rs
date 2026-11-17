@@ -57,8 +57,12 @@ pub(crate) fn install() -> Result<(), Error> {
 	shims::index_installed_binaries(&mut state, tools_dir, &lock, &install_paths)?;
 	shims::index_shims(&mut state, &lock);
 	state::write(config_dir, &state, text.as_deref())?;
-	let shims_dir = paths.shims_dir.as_deref().ok_or("no shims directory")?;
-	shims::generate(&state, shims_dir, &lock)?;
+	let generate_err: Option<Error> = paths
+		.shims_dir
+		.as_deref()
+		.ok_or_else(|| Error::from("no shims directory"))
+		.and_then(|dir| shims::generate(&state, dir, &lock).map_err(Error::from))
+		.err();
 	// representative rows are appended after duplicate rows
 	for tool in &lock.tools[lock.tools.len() - installed_artifacts..] {
 		match tool {
@@ -89,10 +93,15 @@ pub(crate) fn install() -> Result<(), Error> {
 		}
 	}
 	let failed = failures.iter().map(|(requests, _)| requests.len()).sum::<usize>();
-	if failed > 0 {
-		return Err(format!("failed to install {failed} tool(s)").into());
+	let mut message = (failed > 0).then(|| format!("failed to install {failed} tool(s)"));
+	if let Some(error) = generate_err {
+		let error = error.to_string();
+		match &mut message {
+			Some(message) => message.push_str(&format!("\n{error}")),
+			None => message = Some(error),
+		}
 	}
-	Ok(())
+	message.map_or(Ok(()), |message| Err(message.into()))
 }
 
 async fn resolve_parallel(requests: Vec<ToolRequestGroup>, http: Client) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>), Error> {
