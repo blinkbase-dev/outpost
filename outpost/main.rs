@@ -13,7 +13,7 @@ fn main() {
 		Command::Install => install::install().map(|()| 0),
 		Command::List => list::list().map(|()| 0),
 		Command::Exec(args) => exec::exec(args),
-		Command::Shim => shim::shim().map(|()| 0),
+		Command::Shim(args) => shim::shim(args).map(|()| 0),
 	};
 	match result {
 		Ok(code) => std::process::exit(code),
@@ -36,5 +36,5 @@ enum Command {
 	Install,
 	List,
 	Exec(exec::ExecArgs),
-	Shim,
+	Shim(shim::ShimArgs),
 }

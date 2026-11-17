@@ -10,6 +10,7 @@ use crate::tools::candidates;
 #[cfg(windows)]
 mod windows_import {
 	pub(super) use std::collections::BTreeMap;
+	pub(super) use std::os::windows::fs::OpenOptionsExt;
 
 	pub(super) use crate::config::state::ShimEntry;
 }
@@ -90,6 +91,40 @@ pub(crate) fn index_shims(state: &mut State, lock: &Lock) {
 #[cfg(not(windows))]
 pub(crate) fn index_shims(_state: &mut State, _lock: &Lock) {}
 
+pub(crate) fn purge(shims_dir: &Path) -> Result<(), ShimError> {
+	let entries = match std::fs::read_dir(shims_dir) {
+		Ok(entries) => entries.collect::<Result<Vec<_>, _>>()?,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+		Err(error) => return Err(error.into()),
+	};
+	#[cfg(windows)]
+	{
+		let mut in_use = Vec::new();
+		for entry in &entries {
+			// only top-level files are probed because the shims directory is flat
+			if !entry.file_type()?.is_file() {
+				continue;
+			}
+			let path = entry.path();
+			if std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).is_err() {
+				in_use.push(path);
+			}
+		}
+		if !in_use.is_empty() {
+			return Err(ShimError::InUse(in_use));
+		}
+	}
+	for entry in entries {
+		let path = entry.path();
+		if entry.file_type()?.is_dir() {
+			std::fs::remove_dir_all(path)?;
+		} else {
+			std::fs::remove_file(path)?;
+		}
+	}
+	Ok(())
+}
+
 #[cfg(windows)]
 pub(crate) fn generate(state: &State, shims_dir: &Path, _lock: &Lock) -> Result<(), ShimError> {
 	let trampoline = std::env::current_exe()?.with_file_name("op_shim.exe");
@@ -165,6 +200,7 @@ fn _is_plain_file_name(name: &str) -> bool {
 pub(crate) enum ShimError {
 	Io(std::io::Error),
 	State(StateError),
+	InUse(Vec<PathBuf>),
 	#[cfg(windows)]
 	Trampoline {
 		path: PathBuf,
@@ -189,6 +225,13 @@ impl fmt::Display for ShimError {
 		match self {
 			Self::Io(error) => fmt::Display::fmt(error, f),
 			Self::State(error) => fmt::Display::fmt(error, f),
+			Self::InUse(paths) => {
+				f.write_str("cannot regenerate shims, in use:")?;
+				for path in paths {
+					write!(f, "\n  {}", path.display())?;
+				}
+				Ok(())
+			}
 			#[cfg(windows)]
 			Self::Trampoline { path, source } => write!(f, "failed to read trampoline `{}`: {source}", path.display()),
 		}
@@ -200,6 +243,7 @@ impl std::error::Error for ShimError {
 		match self {
 			Self::Io(error) => Some(error),
 			Self::State(error) => Some(error),
+			Self::InUse(_) => None,
 			#[cfg(windows)]
 			Self::Trampoline { source, .. } => Some(source),
 		}

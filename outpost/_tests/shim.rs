@@ -27,9 +27,10 @@ impl Fixture {
 		}
 	}
 
-	fn run(&self, cwd: &Path) -> Output {
+	fn run(&self, cwd: &Path, args: &[&str]) -> Output {
 		Command::new(env!("CARGO_BIN_EXE_op"))
 			.arg("shim")
+			.args(args)
 			.current_dir(cwd)
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
 			.env_remove("OUTPOST_ENV")
@@ -57,7 +58,7 @@ install_path = "github_a/1"
 	let fixture = Fixture::new(lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	fixture.tool("github_a/1", name);
-	let output = fixture.run(&fixture.config_dir);
+	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
@@ -114,7 +115,7 @@ install_path = "github_a/1"
 "stale/1" = ["old"]
 "#;
 	std::fs::write(fixture.config_dir.join("state.toml"), initial).unwrap();
-	let output = fixture.run(&fixture.config_dir);
+	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
@@ -174,7 +175,7 @@ install_path = "github_b/1"
 	let fixture = Fixture::new(lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	fixture.tool("github_a/1", name);
-	let output = fixture.run(&fixture.config_dir);
+	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
@@ -208,4 +209,74 @@ registered_paths = []
 		use std::os::unix::fs::PermissionsExt;
 		assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o111, 0o111);
 	}
+}
+
+#[test]
+fn force_recreates_shims() {
+	let lock = r#"
+version = 1
+
+[[tool]]
+backend = "github"
+full_name = "a/repo"
+lane = ""
+requested = "1"
+tag_name = "v1.0.0"
+install_path = "github_a/1"
+"#;
+	let fixture = Fixture::new(lock);
+	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+	fixture.tool("github_a/1", name);
+	let output = fixture.run(&fixture.config_dir, &[]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(output.status.success(), "{stderr}");
+	// without --force, files not in the lock are not touched
+	let shims = fixture.config_dir.join("shims");
+	let extra = shims.join(if cfg!(windows) { "extra.exe" } else { "extra" });
+	std::fs::write(&extra, b"junk").unwrap();
+	let output = fixture.run(&fixture.config_dir, &[]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(output.status.success(), "{stderr}");
+	assert!(extra.exists());
+	// --force clears the directory before regenerating
+	let output = fixture.run(&fixture.config_dir, &["--force"]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(output.status.success(), "{stderr}");
+	assert!(!extra.exists());
+	assert!(shims.join(name).exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn force_refuses_when_shim_is_in_use() {
+	use std::os::windows::fs::OpenOptionsExt;
+
+	let lock = r#"
+version = 1
+
+[[tool]]
+backend = "github"
+full_name = "a/repo"
+lane = ""
+requested = "1"
+tag_name = "v1.0.0"
+install_path = "github_a/1"
+"#;
+	let fixture = Fixture::new(lock);
+	fixture.tool("github_a/1", "tool.exe");
+	let output = fixture.run(&fixture.config_dir, &[]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(output.status.success(), "{stderr}");
+	// hold the shim open so purge sees it as in use
+	let shims = fixture.config_dir.join("shims");
+	let shim = shims.join("tool.exe");
+	let extra = shims.join("extra.exe");
+	std::fs::write(&extra, b"junk").unwrap();
+	let _held = std::fs::OpenOptions::new().read(true).share_mode(1).open(&shim).unwrap();
+	let output = fixture.run(&fixture.config_dir, &["--force"]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success());
+	assert!(stderr.contains("cannot regenerate shims, in use:"), "{stderr}");
+	assert!(shim.exists());
+	assert!(extra.exists());
 }
