@@ -55,6 +55,7 @@ impl ToolSpec {
 					full_name: request_name,
 					lane: request_lane,
 					version: request_version,
+					..
 				},
 			) => full_name == request_name && version.as_ref().is_none_or(|version| lane == request_lane && version == request_version),
 		}
@@ -122,6 +123,7 @@ mod tests {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::Latest,
+			api_url: None,
 		};
 		assert!(latest.matches(&request));
 
@@ -129,6 +131,7 @@ mod tests {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::Exact("1.0.0".to_owned()),
+			api_url: None,
 		};
 		assert!(!latest.matches(&exact));
 
@@ -141,6 +144,7 @@ mod tests {
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			version: Version::Exact("1.0.0".to_owned()),
+			api_url: None,
 		};
 		assert!(lane.matches(&lane_request));
 		assert!(!lane.matches(&exact));

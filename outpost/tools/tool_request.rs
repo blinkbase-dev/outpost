@@ -29,30 +29,37 @@ pub(crate) struct ToolRequestEntry {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ToolRequest {
-	Github { full_name: String, lane: String, version: Version },
+	Github {
+		full_name: String,
+		lane: String,
+		version: Version,
+		api_url: Option<String>,
+	},
 }
 
 impl ToolRequest {
 	pub(crate) fn identity(&self) -> Identity {
 		match self {
-			Self::Github { full_name, lane, version } => ("github", full_name.clone(), lane.clone(), version.clone()),
+			Self::Github { full_name, lane, version, .. } => ("github", full_name.clone(), lane.clone(), version.clone()),
 		}
 	}
 
 	fn parse(path: &Path, key: &str, options: &ToolOptions) -> Result<Self, ToolRequestError> {
-		let (backend, full_name) = key.split_once(':').ok_or_else(|| ToolRequestError::UnsupportedBackend {
-			path: path.to_path_buf(),
-			key: key.to_owned(),
-		})?;
-		match backend {
-			"github" => {
-				if regex!(r"^(?:\.{1,2})?$|[^a-zA-Z0-9_./-]").is_match(full_name) {
-					return Err(ToolRequestError::InvalidFullName {
-						path: path.to_path_buf(),
-						key: key.to_owned(),
-					});
-				}
-				let version = options.version().trim();
+		let Some((_, full_name)) = key.split_once(':') else {
+			return Err(ToolRequestError::InvalidFullName {
+				path: path.to_path_buf(),
+				key: key.to_owned(),
+			});
+		};
+		if regex!(r"^(?:\.{1,2})?$|[^a-zA-Z0-9_./-]").is_match(full_name) {
+			return Err(ToolRequestError::InvalidFullName {
+				path: path.to_path_buf(),
+				key: key.to_owned(),
+			});
+		}
+		match options {
+			ToolOptions::Github(table) => {
+				let version = table.version.trim();
 				if version.is_empty() {
 					return Err(ToolRequestError::EmptyVersion {
 						path: path.to_path_buf(),
@@ -64,12 +71,9 @@ impl ToolRequest {
 					full_name: full_name.to_ascii_lowercase(),
 					lane: lane.to_owned(),
 					version: Version::parse(value),
+					api_url: table.api_url.clone(),
 				})
 			}
-			_ => Err(ToolRequestError::UnsupportedBackend {
-				path: path.to_path_buf(),
-				key: key.to_owned(),
-			}),
 		}
 	}
 }
@@ -102,7 +106,6 @@ impl ToolRequestGroup {
 
 #[derive(Debug)]
 pub(crate) enum ToolRequestError {
-	UnsupportedBackend { path: PathBuf, key: String },
 	InvalidFullName { path: PathBuf, key: String },
 	EmptyVersion { path: PathBuf, key: String },
 }
@@ -110,7 +113,6 @@ pub(crate) enum ToolRequestError {
 impl fmt::Display for ToolRequestError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::UnsupportedBackend { path, key } => write!(f, "unsupported backend in `{key}` from `{}`", path.display()),
 			Self::InvalidFullName { path, key } => write!(f, "invalid full name in `{key}` from `{}`", path.display()),
 			Self::EmptyVersion { path, key } => write!(f, "missing version for `{key}` from `{}`", path.display()),
 		}
@@ -141,6 +143,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::Latest,
+				api_url: None,
 			},
 		}]);
 	}
@@ -163,6 +166,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::Exact("0.26.0".to_owned()),
+				api_url: None,
 			},
 		}]);
 	}
@@ -185,6 +189,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: "cli/".to_owned(),
 				version: Version::Exact("1.2.3".to_owned()),
+				api_url: None,
 			},
 		}]);
 
@@ -204,6 +209,7 @@ mod tests {
 				full_name: "owner/repo".to_owned(),
 				lane: "tool-".to_owned(),
 				version: Version::parse("10"),
+				api_url: None,
 			},
 		}]);
 	}
@@ -226,6 +232,7 @@ mod tests {
 				full_name: "owner/repo.js".to_owned(),
 				lane: String::new(),
 				version: Version::Latest,
+				api_url: None,
 			},
 		}]);
 	}
@@ -238,18 +245,31 @@ mod tests {
 				r#"
 				[tools]
 				"github:owner/repo" = { version = "0.26.0" }
+				"github:owner/other" = { version = "0.26.0", api_url = "http://127.0.0.1:8080" }
 				"#,
 			)
 			.unwrap(),
 		};
-		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequestEntry {
-			origin: PathBuf::from("outpost.toml"),
-			tool: ToolRequest::Github {
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::Exact("0.26.0".to_owned()),
+		assert_eq!(requests(&[config]).unwrap(), vec![
+			ToolRequestEntry {
+				origin: PathBuf::from("outpost.toml"),
+				tool: ToolRequest::Github {
+					full_name: "owner/other".to_owned(),
+					lane: String::new(),
+					version: Version::Exact("0.26.0".to_owned()),
+					api_url: Some("http://127.0.0.1:8080".to_owned()),
+				},
 			},
-		}]);
+			ToolRequestEntry {
+				origin: PathBuf::from("outpost.toml"),
+				tool: ToolRequest::Github {
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::Exact("0.26.0".to_owned()),
+					api_url: None,
+				},
+			},
+		]);
 	}
 
 	#[test]
@@ -291,6 +311,7 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1"),
+					api_url: None,
 				},
 			},
 			ToolRequestEntry {
@@ -299,6 +320,7 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2"),
+					api_url: None,
 				},
 			},
 			// the same request from another file is still a separate entry
@@ -308,26 +330,10 @@ mod tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1"),
+					api_url: None,
 				},
 			},
 		]);
-	}
-
-	#[test]
-	fn rejects_unsupported_backend() {
-		let config = ConfigFile {
-			path: PathBuf::from("outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"rust" = "latest"
-				"#,
-			)
-			.unwrap(),
-		};
-		let error = requests(&[config]).unwrap_err();
-		assert!(matches!(&error, ToolRequestError::UnsupportedBackend { .. }));
-		assert!(error.to_string().contains("outpost.toml"));
 	}
 
 	#[test]
@@ -379,6 +385,7 @@ mod group_tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
+					api_url: None,
 				},
 			},
 			ToolRequestEntry {
@@ -387,6 +394,7 @@ mod group_tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
+					api_url: None,
 				},
 			},
 			ToolRequestEntry {
@@ -395,6 +403,7 @@ mod group_tests {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
+					api_url: None,
 				},
 			},
 		];
@@ -404,12 +413,14 @@ mod group_tests {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
+			api_url: None,
 		});
 		assert_eq!(groups[0].origins, vec![PathBuf::from("a.toml"), PathBuf::from("b.toml")]);
 		assert_eq!(groups[1].tool, ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
+			api_url: None,
 		});
 		assert_eq!(groups[1].origins, vec![PathBuf::from("c.toml")]);
 	}

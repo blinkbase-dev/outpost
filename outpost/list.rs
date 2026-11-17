@@ -17,7 +17,7 @@ pub(crate) fn list() -> Result<(), Error> {
 	let mut rows = Vec::with_capacity(report.requested.len() + report.unrequested.len());
 	for entry in &report.requested {
 		let (tool, requested) = match &entry.tool {
-			ToolRequest::Github { full_name, lane, version } => (format!("github:{full_name}"), format!("{lane}{version}")),
+			ToolRequest::Github { full_name, lane, version, .. } => (format!("github:{full_name}"), format!("{lane}{version}")),
 		};
 		let version = match &entry.installed_version {
 			Some(version) => match entry.install_state {
