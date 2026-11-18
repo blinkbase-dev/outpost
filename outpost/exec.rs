@@ -102,6 +102,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		return Err(format!("no installed tool provides `{name}`").into());
 	};
 	let requests = candidates::requests(&paths)?;
+	let mut missing = None;
 	for request in &requests {
 		let Some((install_path, binary)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
 			(
@@ -130,11 +131,37 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		}
 		let path = tools_dir.join(install_path).join(binary);
 		if !path.is_file() {
+			missing = Some(tools_dir.join(install_path));
 			continue;
 		}
 		return Ok(candidates::run(&path, args)?);
 	}
-	Err(format!("no installed tool provides `{name}`").into())
+	if let Some(dir) = missing {
+		return Err(format!("`{name}` was not found in {}", dir.display()).into());
+	}
+	// the config requests this tool, but not a version that is installed
+	for request in &requests {
+		let spec = match &request.tool {
+			ToolRequest::Github { full_name, lane, version, .. } => {
+				let installed = shims.iter().any(|entry| match entry {
+					ShimEntry::Github { full_name: installed_name, .. } => installed_name == full_name,
+				});
+				installed.then(|| format!("github:{full_name}@{lane}{version}"))
+			}
+		};
+		if let Some(spec) = spec {
+			return Err(format!("`{name}` is not installed for `{spec}`\nrun `op install` to install it").into());
+		}
+	}
+	let mut message = format!("`{name}` is not requested by the current config:");
+	for entry in shims {
+		message.push_str(&match entry {
+			ShimEntry::Github {
+				full_name, lane, requested, ..
+			} => format!("\n  github:{full_name} {lane}{requested}"),
+		});
+	}
+	Err(message.into())
 }
 
 #[cfg(not(windows))]
