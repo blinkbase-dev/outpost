@@ -36,6 +36,7 @@ path = "_tests/shim.rs"
 [dependencies]
 clap.workspace = true
 flate2.workspace = true
+globset.workspace = true
 liblzma.workspace = true
 percent-encoding.workspace = true
 rayon.workspace = true

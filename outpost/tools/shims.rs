@@ -3,6 +3,8 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+
 use super::lock::{Lock, LockedTool};
 use super::tool_request::ToolRequest;
 use crate::config::state::{ShimEntry, State, StateError};
@@ -25,7 +27,20 @@ use unix_import::*;
 use windows_import::*;
 
 pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, installed: &[(PathBuf, &ToolRequest)]) -> Result<(), ShimError> {
-	let indexed = candidates::find_binaries_by_tool(tools_dir, installed.iter().map(|(install_path, _)| install_path.as_path()))?;
+	let mut indexed = candidates::find_binaries_by_tool(tools_dir, installed.iter().map(|(install_path, _)| install_path.as_path()))?;
+	for (install_path, request) in installed {
+		let Some(binaries) = indexed.get_mut(install_path.as_path()) else {
+			continue;
+		};
+		match request {
+			ToolRequest::Github { exposed, .. } => {
+				if let Some(patterns) = exposed {
+					let set = _exposed_set(patterns)?;
+					binaries.retain(|binary| set.is_match(binary));
+				}
+			}
+		}
+	}
 	state.binaries.extend(indexed);
 	let locked_install_paths: HashSet<&Path> = lock
 		.tools
@@ -36,6 +51,15 @@ pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock
 		.collect();
 	state.binaries.retain(|path, _| locked_install_paths.contains(path.as_path()));
 	Ok(())
+}
+
+fn _exposed_set(patterns: &[String]) -> Result<GlobSet, ShimError> {
+	let mut builder = GlobSetBuilder::new();
+	for pattern in patterns {
+		// '*' stays within one path segment, '**' crosses them
+		builder.add(GlobBuilder::new(pattern).literal_separator(true).build().map_err(ShimError::Exposed)?);
+	}
+	builder.build().map_err(ShimError::Exposed)
 }
 
 pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, lock: &Lock) -> Result<(), ShimError> {
@@ -290,6 +314,7 @@ pub(crate) struct ShimConflict {
 pub(crate) enum ShimError {
 	Io(std::io::Error),
 	State(StateError),
+	Exposed(globset::Error),
 	Conflict(Vec<ShimConflict>),
 	#[cfg(windows)]
 	InUse(Vec<PathBuf>),
@@ -317,6 +342,7 @@ impl fmt::Display for ShimError {
 		match self {
 			Self::Io(error) => fmt::Display::fmt(error, f),
 			Self::State(error) => fmt::Display::fmt(error, f),
+			Self::Exposed(error) => write!(f, "invalid exposed pattern: {error}"),
 			Self::Conflict(conflicts) => {
 				f.write_str("conflicting binaries, cannot generate shims:")?;
 				for conflict in conflicts {
@@ -346,6 +372,7 @@ impl std::error::Error for ShimError {
 		match self {
 			Self::Io(error) => Some(error),
 			Self::State(error) => Some(error),
+			Self::Exposed(error) => Some(error),
 			Self::Conflict(_) => None,
 			#[cfg(windows)]
 			Self::InUse(_) => None,

@@ -37,14 +37,16 @@ impl Fixture {
 	}
 }
 
-fn _tarball(name: &str, bytes: &[u8]) -> Vec<u8> {
+fn _tarball(files: &[(&str, &[u8])]) -> Vec<u8> {
 	let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
-	let mut header = tar::Header::new_gnu();
-	header.set_path(name).unwrap();
-	header.set_size(bytes.len() as u64);
-	header.set_mode(0o755);
-	header.set_cksum();
-	builder.append(&header, bytes).unwrap();
+	for (name, bytes) in files {
+		let mut header = tar::Header::new_gnu();
+		header.set_path(name).unwrap();
+		header.set_size(bytes.len() as u64);
+		header.set_mode(0o755);
+		header.set_cksum();
+		builder.append(&header, *bytes).unwrap();
+	}
 	builder.into_inner().unwrap().finish().unwrap()
 }
 
@@ -53,8 +55,10 @@ async fn _mock_release(server: &MockServer, version: &str) -> (String, &'static 
 	let libc = if cfg!(windows) { "msvc" } else { "gnu" };
 	let asset = format!("tool-{}-{}-{libc}.tar.gz", std::env::consts::OS, std::env::consts::ARCH);
 	let binary = if cfg!(windows) { "tool.exe" } else { "tool" };
+	let helper = if cfg!(windows) { "helper.exe" } else { "helper" };
+	let nested = format!("bin/{helper}");
 	let content = format!("binary {version}");
-	let bytes = _tarball(binary, content.as_bytes());
+	let bytes = _tarball(&[(binary, content.as_bytes()), (&nested, content.as_bytes())]);
 	Mock::given(method("GET"))
 		.and(path(format!("/repos/owner/repo/releases/tags/{version}")))
 		.respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -140,7 +144,18 @@ install_path = "github_owner_repo/1.0.0"
 registered_paths = []
 
 [binaries]
-"github_owner_repo/1.0.0" = ["tool.exe"]
+"github_owner_repo/1.0.0" = [
+    "tool.exe",
+    'bin\helper.exe',
+]
+
+[[shims.helper]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+install_path = "github_owner_repo/1.0.0"
+binary = 'bin\helper.exe'
 
 [[shims.tool]]
 backend = "github"
@@ -155,7 +170,10 @@ binary = "tool.exe"
 registered_paths = []
 
 [binaries]
-"github_owner_repo/1.0.0" = ["tool"]
+"github_owner_repo/1.0.0" = [
+    "tool",
+    "bin/helper",
+]
 "#;
 	assert_eq!(state, expected_state);
 	let shim = fixture.config_dir.join("shims").join(binary);
@@ -314,4 +332,95 @@ fn reports_failed_install_per_origin() {
 	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
 	assert!(!lock.contains("[[tool]]"), "{lock}");
 	assert_eq!(std::fs::read_dir(fixture.config_dir.join("tools")).unwrap().count(), 0);
+}
+
+mod exposed {
+	use super::*;
+
+	#[test]
+	fn exposes_only_top_level_binaries() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let server = runtime.block_on(MockServer::start());
+		let helper = if cfg!(windows) { "helper.exe" } else { "helper" };
+		let (_, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+		let config = r#"[tools]
+"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}", exposed = ["*"] }
+"#
+		.replace("{api_url}", &server.uri());
+		let fixture = Fixture::new(&config);
+		let output = fixture.run();
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		// `*` does not cross `/`, so the nested helper stays hidden
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		#[cfg(windows)]
+		let expected = r#"version = 1
+registered_paths = []
+
+[binaries]
+"github_owner_repo/1.0.0" = ["{binary}"]
+
+[[shims.tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+install_path = "github_owner_repo/1.0.0"
+binary = "{binary}"
+"#;
+		#[cfg(not(windows))]
+		let expected = r#"version = 1
+registered_paths = []
+
+[binaries]
+"github_owner_repo/1.0.0" = ["{binary}"]
+"#;
+		assert_eq!(state, expected.replace("{binary}", binary));
+		assert!(fixture.config_dir.join("shims").join(binary).exists());
+		assert!(!fixture.config_dir.join("shims").join(helper).exists());
+	}
+
+	#[test]
+	fn exposes_nested_binaries() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let server = runtime.block_on(MockServer::start());
+		let helper = if cfg!(windows) { "helper.exe" } else { "helper" };
+		let (_, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+		let config = r#"[tools]
+"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}", exposed = ["**/{exposed}"] }
+"#
+		.replace("{api_url}", &server.uri())
+		.replace("{exposed}", helper);
+		let fixture = Fixture::new(&config);
+		let output = fixture.run();
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		// '**' crosses '/', so the nested helper is exposed and the tool is not
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		#[cfg(windows)]
+		let expected = r#"version = 1
+registered_paths = []
+
+[binaries]
+"github_owner_repo/1.0.0" = ['bin\helper.exe']
+
+[[shims.helper]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+install_path = "github_owner_repo/1.0.0"
+binary = 'bin\helper.exe'
+"#;
+		#[cfg(not(windows))]
+		let expected = r#"version = 1
+registered_paths = []
+
+[binaries]
+"github_owner_repo/1.0.0" = ["bin/helper"]
+"#;
+		assert_eq!(state, expected);
+		assert!(fixture.config_dir.join("shims").join(helper).exists());
+		assert!(!fixture.config_dir.join("shims").join(binary).exists());
+	}
 }
