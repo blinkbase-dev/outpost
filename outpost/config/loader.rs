@@ -74,10 +74,10 @@ fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 			// trim so the url can be concatenated with paths
 			options.api_url = options.api_url.map(|api_url| api_url.trim().trim_end_matches('/').to_owned());
 			// reject blank patterns since they cannot match a binary
-			if let Some(exposed) = options.exposed.as_ref() {
-				if exposed.iter().any(|pattern| pattern.trim().is_empty()) {
-					return Err(format!("invalid `exposed` for `{key}`: expected non-empty patterns"));
-				}
+			if let Some(exposed) = options.exposed.as_ref()
+				&& exposed.iter().any(|pattern| pattern.trim().is_empty())
+			{
+				return Err(format!("invalid `exposed` for `{key}`: expected non-empty patterns"));
 			}
 			Ok(ToolOptions::Github(options))
 		}

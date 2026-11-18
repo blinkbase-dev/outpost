@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 use super::archive::ToolResolutionGroup;
-use super::lock::{Lock, LockedTool};
-use super::tool_request::ToolRequest;
+use super::lock::{Identity, Lock, LockedTool};
+use super::tool_request::{ToolRequest, ToolRequestGroup};
 use crate::config::state::{ShimEntry, State, StateError};
 use crate::tools::candidates;
 
@@ -34,22 +34,10 @@ pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock
 		let Some(binaries) = indexed.get_mut(Path::new(group.artifact_key.as_str())) else {
 			continue;
 		};
-		let mut exposed_patterns = Vec::new();
-		let mut expose_all = false;
 		// identities sharing one artifact contribute to a single allowlist
-		for request in &group.requests {
-			match &request.tool {
-				ToolRequest::Github { exposed: Some(exposed), .. } => exposed_patterns.extend(exposed.iter().map(String::as_str)),
-				ToolRequest::Github { exposed: None, .. } => {
-					expose_all = true;
-					break;
-				}
-			}
-		}
-		// a missing list exposes everything, so the artifact stays unfiltered
-		if expose_all {
+		let Some(exposed_patterns) = _exposed_patterns(group.requests.iter().map(|request| &request.tool)) else {
 			continue;
-		}
+		};
 		let set = _exposed_set(exposed_patterns)?;
 		binaries.retain(|binary| set.is_match(binary));
 	}
@@ -65,6 +53,49 @@ pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock
 	Ok(())
 }
 
+pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, requests: &[ToolRequestGroup]) -> Result<(), ShimError> {
+	// lock rows sharing an install path contribute to a single allowlist
+	let requests_by_identity: HashMap<Identity, &ToolRequest> = requests.iter().map(|group| (group.tool.identity(), &group.tool)).collect();
+	let mut requests_by_path: BTreeMap<&Path, Vec<&ToolRequest>> = BTreeMap::new();
+	for tool in &lock.tools {
+		let install_path = match tool {
+			LockedTool::Github { install_path, .. } => install_path,
+		};
+		let requests = requests_by_path.entry(install_path.as_path()).or_default();
+		if let Some(request) = requests_by_identity.get(&tool.identity()).copied() {
+			requests.push(request);
+		}
+	}
+	let mut indexed = candidates::find_binaries_by_tool(tools_dir, requests_by_path.keys().copied())?;
+	for (install_path, requests) in requests_by_path {
+		// a row without a config entry leaves the artifact unfiltered
+		if requests.is_empty() {
+			continue;
+		}
+		let Some(binaries) = indexed.get_mut(install_path) else {
+			continue;
+		};
+		let Some(exposed_patterns) = _exposed_patterns(requests) else {
+			continue;
+		};
+		let set = _exposed_set(exposed_patterns)?;
+		binaries.retain(|binary| set.is_match(binary));
+	}
+	state.binaries = indexed;
+	Ok(())
+}
+
+fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a ToolRequest>) -> Option<Vec<&'a str>> {
+	let mut patterns = Vec::new();
+	for request in requests {
+		match request {
+			ToolRequest::Github { exposed: Some(exposed), .. } => patterns.extend(exposed.iter().map(String::as_str)),
+			ToolRequest::Github { exposed: None, .. } => return None,
+		}
+	}
+	Some(patterns)
+}
+
 fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobSet, ShimError> {
 	let mut builder = GlobSetBuilder::new();
 	for pattern in patterns {
@@ -72,18 +103,6 @@ fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobS
 		builder.add(GlobBuilder::new(pattern).literal_separator(true).build().map_err(ShimError::Exposed)?);
 	}
 	builder.build().map_err(ShimError::Exposed)
-}
-
-pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, lock: &Lock) -> Result<(), ShimError> {
-	let install_paths: Vec<&Path> = lock
-		.tools
-		.iter()
-		.map(|tool| match tool {
-			LockedTool::Github { install_path, .. } => install_path.as_path(),
-		})
-		.collect();
-	state.binaries = candidates::find_binaries_by_tool(tools_dir, install_paths)?;
-	Ok(())
 }
 
 #[cfg(windows)]
