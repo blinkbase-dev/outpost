@@ -393,7 +393,7 @@ impl fmt::Display for ShimError {
 				Ok(())
 			}
 			#[cfg(windows)]
-			Self::Trampoline { path, source } => write!(f, "failed to read trampoline `{}`: {source}", path.display()),
+			Self::Trampoline { path, source } => write!(f, "failed to read trampoline '{}': {source}", path.display()),
 		}
 	}
 }

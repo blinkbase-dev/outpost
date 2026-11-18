@@ -249,5 +249,5 @@ install_path = "../escape"
 	let fixture = Fixture::new(config, lock);
 	let output = fixture.run(&fixture.config_dir, None);
 	assert!(!output.status.success());
-	assert!(String::from_utf8(output.stderr).unwrap().contains("invalid install path `../escape` in lock"));
+	assert!(String::from_utf8(output.stderr).unwrap().contains("invalid install path '../escape' in lock"));
 }

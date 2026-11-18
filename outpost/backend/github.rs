@@ -295,9 +295,9 @@ impl fmt::Display for GithubError {
 			Self::Http(error) => write!(f, "github request failed: {error}"),
 			Self::Parse(error) => write!(f, "github response parse failed: {error}"),
 			Self::Status(status) => write!(f, "github returned {status}"),
-			Self::NotFound { full_name, tag } => write!(f, "no release found for `{full_name}` at tag `{tag}`"),
-			Self::NoMatchingVersion { full_name, version } => write!(f, "no release found for `{full_name}` matching version `{version}`"),
-			Self::NoAsset { full_name, tag } => write!(f, "no compatible asset for `{full_name}` at tag `{tag}`"),
+			Self::NotFound { full_name, tag } => write!(f, "no release found for '{full_name}' at tag '{tag}'"),
+			Self::NoMatchingVersion { full_name, version } => write!(f, "no release found for '{full_name}' matching version '{version}'"),
+			Self::NoAsset { full_name, tag } => write!(f, "no compatible asset for '{full_name}' at tag '{tag}'"),
 		}
 	}
 }

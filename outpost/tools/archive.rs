@@ -170,7 +170,7 @@ impl ToolResolutionGroup {
 								.flat_map(|request| &request.origins)
 								.map(|origin| format!("\n  from {}", origin.display()))
 								.collect();
-							return Err(format!("artifact collision: `{tag_name}` and `{installed_tag}` share `{artifact_key}`{origins}").into());
+							return Err(format!("artifact collision: '{tag_name}' and '{installed_tag}' share '{artifact_key}'{origins}").into());
 						}
 					}
 				}
