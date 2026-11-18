@@ -54,10 +54,20 @@ lane = ""
 requested = "1"
 tag_name = "v1.0.0"
 install_path = "github_a/1"
+
+[[tool]]
+backend = "github"
+full_name = "a/repo"
+lane = "cli/"
+requested = "1"
+tag_name = "cli/v1.0.0"
+install_path = "github_a/cli_1"
 "#;
 	let fixture = Fixture::new(lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+	let other = if cfg!(windows) { "other.exe" } else { "other" };
 	fixture.tool("github_a/1", name);
+	fixture.tool("github_a/cli_1", other);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
@@ -68,6 +78,15 @@ registered_paths = []
 
 [binaries]
 "github_a/1" = ["{name}"]
+"github_a/cli_1" = ["{other}"]
+
+[[shims.other]]
+backend = "github"
+full_name = "a/repo"
+lane = "cli/"
+requested = "1"
+install_path = "github_a/cli_1"
+binary = "{other}"
 
 [[shims.tool]]
 backend = "github"
@@ -83,14 +102,25 @@ registered_paths = []
 
 [binaries]
 "github_a/1" = ["{name}"]
+"github_a/cli_1" = ["{other}"]
 "#;
-	assert_eq!(state, template.replace("{name}", name));
+	assert_eq!(state, template.replace("{name}", name).replace("{other}", other));
 	let shim = fixture.config_dir.join("shims").join(name);
 	assert!(shim.exists());
+	let other_shim = fixture.config_dir.join("shims").join(other);
+	assert!(other_shim.exists());
 	#[cfg(not(windows))]
 	{
 		use std::os::unix::fs::PermissionsExt;
 		assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o111, 0o111);
+		assert_eq!(
+			std::fs::read_to_string(&shim).unwrap(),
+			"#!/bin/sh\nexec op exec 'github:a/repo' -- 'tool' \"$@\"\n"
+		);
+		assert_eq!(
+			std::fs::read_to_string(&other_shim).unwrap(),
+			"#!/bin/sh\nexec op exec 'github:a/repo@cli/' -- 'other' \"$@\"\n"
+		);
 	}
 }
 
@@ -235,6 +265,44 @@ install_path = "github_a/1"
 	let normalized = stderr.replace('\\', "/");
 	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
 	assert!(normalized.contains(&format!("github_a/1/nested/{name}")), "{stderr}");
+	// the ambiguous name is not shimmed or indexed
+	assert!(!fixture.config_dir.join("shims").join(name).exists());
+	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+	assert!(!state.contains("shims"), "{state}");
+}
+
+#[test]
+fn rejects_binaries_shared_by_two_tools() {
+	let lock = r#"
+version = 1
+
+[[tool]]
+backend = "github"
+full_name = "a/repo"
+lane = ""
+requested = "1"
+tag_name = "v1.0.0"
+install_path = "github_a/1"
+
+[[tool]]
+backend = "github"
+full_name = "b/repo"
+lane = ""
+requested = "1"
+tag_name = "v1.0.0"
+install_path = "github_b/1"
+"#;
+	let fixture = Fixture::new(lock);
+	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+	fixture.tool("github_a/1", name);
+	fixture.tool("github_b/1", name);
+	let output = fixture.run(&fixture.config_dir, &[]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success(), "{stderr}");
+	assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
+	let normalized = stderr.replace('\\', "/");
+	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_b/1/{name}")), "{stderr}");
 	// the ambiguous name is not shimmed or indexed
 	assert!(!fixture.config_dir.join("shims").join(name).exists());
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();

@@ -125,11 +125,10 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		if !install_path.components().all(|component| matches!(component, Component::Normal(_))) {
 			continue;
 		}
-		let install_dir = tools_dir.join(install_path);
 		if !binary.components().all(|component| matches!(component, Component::Normal(_))) {
 			continue;
 		}
-		let path = install_dir.join(binary);
+		let path = tools_dir.join(install_path).join(binary);
 		if !path.is_file() {
 			continue;
 		}

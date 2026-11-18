@@ -28,12 +28,11 @@ impl ToolSpec {
 				}
 				let (lane, version) = match version {
 					Some(version) => {
-						let version = version.trim();
-						if version.is_empty() {
+						let (lane, value) = split_lane(version.trim());
+						if lane.is_empty() && value.is_empty() {
 							return Err(ToolSpecError::EmptyVersion(spec.to_owned()));
 						}
-						let (lane, value) = split_lane(version);
-						(lane.to_owned(), Some(Version::parse(value)))
+						(lane.to_owned(), (!value.is_empty()).then(|| Version::parse(value)))
 					}
 					None => (String::new(), None),
 				};
@@ -57,7 +56,11 @@ impl ToolSpec {
 					version: request_version,
 					..
 				},
-			) => full_name == request_name && version.as_ref().is_none_or(|version| lane == request_lane && version == request_version),
+			) => {
+				full_name == request_name
+					&& (lane == request_lane || (lane.is_empty() && version.is_none()))
+					&& version.as_ref().is_none_or(|version| version == request_version)
+			}
 		}
 	}
 }
@@ -92,6 +95,11 @@ mod tests {
 		assert_eq!(ToolSpec::parse("github:owner/repo").unwrap(), ToolSpec::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
+			version: None,
+		});
+		assert_eq!(ToolSpec::parse("github:owner/repo@cli/").unwrap(), ToolSpec::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: "cli/".to_owned(),
 			version: None,
 		});
 		assert_eq!(ToolSpec::parse("github:owner/repo@latest").unwrap(), ToolSpec::Github {
@@ -148,6 +156,22 @@ mod tests {
 		};
 		assert!(lane.matches(&lane_request));
 		assert!(!lane.matches(&exact));
+
+		let any_lane_version = ToolSpec::parse("github:owner/repo@cli/").unwrap();
+		assert!(any_lane_version.matches(&lane_request));
+		assert!(any_lane_version.matches(&ToolRequest::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: "cli/".to_owned(),
+			version: Version::Latest,
+			api_url: None,
+		}));
+		assert!(!any_lane_version.matches(&exact));
+		assert!(!any_lane_version.matches(&ToolRequest::Github {
+			full_name: "owner/repo".to_owned(),
+			lane: "other/".to_owned(),
+			version: Version::Latest,
+			api_url: None,
+		}));
 	}
 
 	#[test]

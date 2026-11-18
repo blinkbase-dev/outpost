@@ -16,8 +16,8 @@ impl Fixture {
 		Self { _dir: dir, config_dir }
 	}
 
-	fn script(&self, relative: &str) {
-		let path = self.config_dir.join("tools/github_owner_repo/1.2.3").join(relative);
+	fn script(&self, install_path: &str, relative: &str) {
+		let path = self.config_dir.join("tools").join(install_path).join(relative);
 		std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 		#[cfg(unix)]
 		{
@@ -61,7 +61,7 @@ install_path = "github_owner_repo/1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
-	fixture.script(name);
+	fixture.script("github_owner_repo/1.2.3", name);
 	let output = fixture.run(&["exec", "github:owner/repo", "--", "tool", "hello", "world"]);
 	let stdout = String::from_utf8(output.stdout).unwrap();
 	let stderr = String::from_utf8(output.stderr).unwrap();
@@ -87,7 +87,7 @@ install_path = "github_owner_repo/1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
-	fixture.script(name);
+	fixture.script("github_owner_repo/1.2.3", name);
 	let template = r#"version = 1
 [binaries]
 "github_owner_repo/1.2.3" = ["{name}"]
@@ -118,7 +118,7 @@ install_path = "github_owner_repo/1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
-	fixture.script(&format!("bin/{}", name));
+	fixture.script("github_owner_repo/1.2.3", &format!("bin/{}", name));
 	let template = r#"version = 1
 [binaries]
 "github_owner_repo/1.2.3" = ["{name}"]
@@ -146,7 +146,7 @@ install_path = "github_owner_repo/1.2.3"
 "#;
 	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
-	fixture.script(name);
+	fixture.script("github_owner_repo/1.2.3", name);
 	let output = fixture.run(&["exec", "github:owner/repo", "--", "tool"]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success());
@@ -171,7 +171,7 @@ install_path = "github_owner_repo/1.2.3"
 "github:owner/repo" = "1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
-	fixture.script("tool.cmd");
+	fixture.script("github_owner_repo/1.2.3", "tool.cmd");
 	std::fs::write(
 		fixture.config_dir.join("state.toml"),
 		r#"version = 1
@@ -210,7 +210,7 @@ install_path = "github_owner_repo/1.2.3"
 "github:owner/repo" = "1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
-	fixture.script("tool.cmd");
+	fixture.script("github_owner_repo/1.2.3", "tool.cmd");
 	std::fs::write(
 		fixture.config_dir.join("state.toml"),
 		r#"version = 1

@@ -83,11 +83,11 @@ impl fmt::Display for Prefix {
 }
 
 pub(crate) fn split_lane(input: &str) -> (&str, &str) {
-	match regex!(r"^(?:(?<lane>.*?[_@/-]))?(?<version>v?[0-9].*|latest)$").captures(input) {
+	match regex!(r"^(?:(?<lane>.*?[_@/-]))?(?<version>v?[0-9].*|latest)?$").captures(input) {
 		Some(captures) => {
-			let lane = captures.name("lane").map_or(0..0, |lane| lane.range());
-			let version = captures.name("version").unwrap().range();
-			(&input[lane], &input[version])
+			let lane = captures.name("lane").map_or("", |lane| lane.as_str());
+			let version = captures.name("version").map_or("", |version| version.as_str());
+			(lane, version)
 		}
 		None => ("", input),
 	}
@@ -168,5 +168,15 @@ mod tests {
 		for tag in ["nightly", "2.20.1.0", "v", ""] {
 			assert!(Prefix { parts: vec![2] }.matches(tag).is_none(), "{tag}");
 		}
+	}
+
+	#[test]
+	fn splits_lanes() {
+		assert_eq!(split_lane("1.2.3"), ("", "1.2.3"));
+		assert_eq!(split_lane("latest"), ("", "latest"));
+		assert_eq!(split_lane("cli/1.2.3"), ("cli/", "1.2.3"));
+		assert_eq!(split_lane("cli/latest"), ("cli/", "latest"));
+		assert_eq!(split_lane("cli/"), ("cli/", ""));
+		assert_eq!(split_lane("cli"), ("", "cli"));
 	}
 }

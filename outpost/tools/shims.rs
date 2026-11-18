@@ -4,15 +4,13 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use super::lock::{Lock, LockedTool};
-use crate::config::state::{State, StateError};
+use crate::config::state::{ShimEntry, State, StateError};
 use crate::tools::candidates;
 
 #[cfg(windows)]
 mod windows_import {
 	pub(super) use std::os::windows::fs::OpenOptionsExt;
 	pub(super) use std::path::Component;
-
-	pub(super) use crate::config::state::ShimEntry;
 }
 
 #[cfg(not(windows))]
@@ -94,10 +92,30 @@ pub(crate) fn index_shims(state: &mut State, lock: &Lock) -> Result<(), ShimErro
 			}
 		}
 	}
+	// a name provided by more than one tool cannot be shimmed unambiguously
+	for (name, entries) in &shims {
+		let mut tools: HashSet<(&str, &str, &str)> = HashSet::new();
+		for entry in entries {
+			tools.insert(match entry {
+				ShimEntry::Github { full_name, lane, .. } => ("github", full_name.as_str(), lane.as_str()),
+			});
+		}
+		if tools.len() < 2 {
+			continue;
+		}
+		conflicts.push(ShimConflict {
+			name: name.clone(),
+			paths: entries
+				.iter()
+				.map(|entry| match entry {
+					ShimEntry::Github { install_path, binary, .. } => install_path.join(binary),
+				})
+				.collect(),
+		});
+	}
 	// drop stale entries so conflicted names stop resolving
-	if !conflicts.is_empty() {
-		let conflicted: HashSet<&str> = conflicts.iter().map(|conflict| conflict.name.as_str()).collect();
-		shims.retain(|name, _| !conflicted.contains(name.as_str()));
+	for conflict in &conflicts {
+		shims.remove(&conflict.name);
 	}
 	state.shims = shims;
 	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
@@ -170,49 +188,97 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, _lock: &Lock) -> Result<
 #[cfg(not(windows))]
 pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(), ShimError> {
 	std::fs::create_dir_all(shims_dir)?;
+	// the same index as windows, but only used to generate the scripts
+	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();
 	let mut conflicts = Vec::new();
 	for tool in &lock.tools {
 		match tool {
-			LockedTool::Github { full_name, install_path, .. } => {
+			LockedTool::Github {
+				full_name,
+				lane,
+				requested,
+				install_path,
+				..
+			} => {
 				let Some(binaries) = state.binaries.get(install_path) else {
 					continue;
 				};
-				let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
+				let mut names: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
 				for binary in binaries {
 					let Some(name) = binary.file_name().and_then(OsStr::to_str) else {
 						continue;
 					};
-					names.entry(name.to_owned()).or_default().push(binary);
+					names.entry(name.to_owned()).or_default().push(binary.clone());
 				}
 				for (name, binaries) in names {
-					// a name with more than one binary cannot be shimmed unambiguously
-					if binaries.len() > 1 {
+					// a name with more than one binary in one tool cannot be shimmed
+					let [binary] = binaries.as_slice() else {
 						conflicts.push(ShimConflict {
 							name,
 							paths: binaries.into_iter().map(|binary| install_path.join(binary)).collect(),
 						});
 						continue;
-					}
-					let script = format!(
-						"#!/bin/sh\nexec op exec 'github:{}' -- '{}' \"$@\"\n",
-						full_name.replace('\'', "'\\''"),
-						name.replace('\'', "'\\''")
-					);
-					let target = shims_dir.join(&name);
-					let size_matches = std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() == script.len() as u64);
-					if size_matches && std::fs::read_to_string(&target).is_ok_and(|existing| existing == script) {
-						continue;
-					}
-					let temp = shims_dir.join(format!("{name}.tmp"));
-					match std::fs::rename(&target, &temp) {
-						Ok(()) => {}
-						Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-						Err(error) => return Err(error.into()),
-					}
-					std::fs::write(&target, &script)?;
-					std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
+					};
+					shims.entry(name).or_default().push(ShimEntry::Github {
+						full_name: full_name.clone(),
+						lane: lane.clone(),
+						requested: requested.clone(),
+						install_path: install_path.clone(),
+						binary: binary.clone(),
+					});
 				}
 			}
+		}
+	}
+	for (name, entries) in &shims {
+		// a name provided by more than one tool cannot be scripted unambiguously
+		let mut tools: HashSet<(&str, &str, &str)> = HashSet::new();
+		for entry in entries {
+			tools.insert(match entry {
+				ShimEntry::Github { full_name, lane, .. } => ("github", full_name.as_str(), lane.as_str()),
+			});
+		}
+		if tools.len() > 1 {
+			conflicts.push(ShimConflict {
+				name: name.clone(),
+				paths: entries
+					.iter()
+					.map(|entry| match entry {
+						ShimEntry::Github { install_path, binary, .. } => install_path.join(binary),
+					})
+					.collect(),
+			});
+			continue;
+		}
+		let spec = match &entries[0] {
+			ShimEntry::Github { full_name, lane, .. } if !lane.is_empty() => format!("github:{full_name}@{lane}"),
+			ShimEntry::Github { full_name, .. } => format!("github:{full_name}"),
+		};
+		let script = format!(
+			"#!/bin/sh\nexec op exec '{}' -- '{}' \"$@\"\n",
+			spec.replace('\'', "'\\''"),
+			name.replace('\'', "'\\''")
+		);
+		let target = shims_dir.join(name);
+		let size_matches = std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() == script.len() as u64);
+		if size_matches && std::fs::read_to_string(&target).is_ok_and(|existing| existing == script) {
+			continue;
+		}
+		let temp = shims_dir.join(format!("{name}.tmp"));
+		match std::fs::rename(&target, &temp) {
+			Ok(()) => {}
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => return Err(error.into()),
+		}
+		std::fs::write(&target, &script)?;
+		std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
+	}
+	// drop stale scripts for conflicted names
+	for conflict in &conflicts {
+		match std::fs::remove_file(shims_dir.join(&conflict.name)) {
+			Ok(()) => {}
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => return Err(error.into()),
 		}
 	}
 	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
