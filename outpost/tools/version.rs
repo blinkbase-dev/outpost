@@ -178,5 +178,16 @@ mod tests {
 		assert_eq!(split_lane("cli/latest"), ("cli/", "latest"));
 		assert_eq!(split_lane("cli/"), ("cli/", ""));
 		assert_eq!(split_lane("cli"), ("", "cli"));
+		// lanes may contain separators and digits that do not follow a separator
+		assert_eq!(split_lane("cli-nightly-1.0.0"), ("cli-nightly-", "1.0.0"));
+		assert_eq!(split_lane("cli2-1.0.0"), ("cli2-", "1.0.0"));
+		assert_eq!(split_lane("2024/1.0.0"), ("2024/", "1.0.0"));
+		assert_eq!(split_lane("cli-nightly-latest"), ("cli-nightly-", "latest"));
+		assert_eq!(split_lane("cli-nightly/"), ("cli-nightly/", ""));
+		assert_eq!(split_lane("cli@1.2.3"), ("cli@", "1.2.3"));
+		// a digit right after a separator is read as the version
+		assert_eq!(split_lane("cli-2-1.0.0"), ("cli-", "2-1.0.0"));
+		assert_eq!(split_lane("cli-v2-1.0.0"), ("cli-", "v2-1.0.0"));
+		assert_eq!(split_lane("cli_20-1.0.0"), ("cli_", "20-1.0.0"));
 	}
 }
