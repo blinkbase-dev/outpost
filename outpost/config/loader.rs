@@ -6,9 +6,11 @@ use serde::Deserialize;
 
 use super::locate::ConfigPaths;
 
-pub(crate) fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
+pub(crate) fn load(paths: &ConfigPaths, registered: &[PathBuf]) -> Result<Vec<ConfigFile>, LoadError> {
+	// a registered path can point at a config that is already discovered
+	let registered = registered.iter().filter(|path| !paths.project.contains(path) && !paths.system.contains(path));
 	// earlier files take precedence
-	load_paths(paths.project.iter().chain(&paths.system).chain(&paths.state.registered_paths))
+	load_paths(paths.project.iter().chain(&paths.system).chain(registered))
 }
 
 pub(crate) fn load_paths<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) -> Result<Vec<ConfigFile>, LoadError> {
@@ -130,7 +132,6 @@ mod tests {
 	use std::path::Path;
 
 	use super::*;
-	use crate::config::state::State;
 
 	fn _config(dir: &Path, name: &str, tools: &str) -> PathBuf {
 		let path = dir.join(name);
@@ -150,15 +151,14 @@ mod tests {
 		let project = _config(tmp.path(), "project.toml", r#""github:a/project" = "1""#);
 		let system = _config(tmp.path(), "system.toml", r#""github:a/system" = "2""#);
 		let registered = _config(tmp.path(), "registered.toml", r#""github:a/registered" = "3""#);
-		let files = load(&ConfigPaths {
-			system: vec![system.clone()],
-			project: vec![project.clone()],
-			state: State {
-				registered_paths: vec![registered.clone()],
-				..State::default()
+		let files = load(
+			&ConfigPaths {
+				system: vec![system.clone()],
+				project: vec![project.clone()],
+				..ConfigPaths::default()
 			},
-			..ConfigPaths::default()
-		})
+			&[registered.clone()],
+		)
 		.unwrap();
 		assert_eq!(files.len(), 3);
 		assert_eq!(files[0].path, project);
@@ -173,11 +173,14 @@ mod tests {
 	fn loads_string_form() {
 		let tmp = tempfile::tempdir().unwrap();
 		let path = _config(tmp.path(), "outpost.toml", r#""github:owner/repo" = "latest""#);
-		let files = load(&ConfigPaths {
-			system: vec![path.clone()],
-			project: vec![],
-			..ConfigPaths::default()
-		})
+		let files = load(
+			&ConfigPaths {
+				system: vec![path.clone()],
+				project: vec![],
+				..ConfigPaths::default()
+			},
+			&[],
+		)
 		.unwrap();
 		assert_eq!(files.len(), 1);
 		assert_eq!(files[0].path, path);
@@ -199,11 +202,14 @@ mod tests {
 "github:owner/empty" = { version = "0.26.0", exposed = [] }
 "github:owner/exposed" = { version = "0.26.0", exposed = ["tool", "bin/*"] }"#;
 		let path = _config(tmp.path(), "outpost.toml", tools);
-		let files = load(&ConfigPaths {
-			system: vec![path],
-			project: vec![],
-			..ConfigPaths::default()
-		})
+		let files = load(
+			&ConfigPaths {
+				system: vec![path],
+				project: vec![],
+				..ConfigPaths::default()
+			},
+			&[],
+		)
 		.unwrap();
 		assert_eq!(
 			files[0].config.tools["github:owner/repo"],
@@ -246,11 +252,14 @@ mod tests {
 		let project_outer = _config(tmp.path(), "outer.toml", r#""github:a/one" = "3""#);
 		let system_env = _config(tmp.path(), "outpost.dev.toml", r#""github:a/one" = "2""#);
 		let system = _config(tmp.path(), "config.toml", concat!(r#""github:a/one" = "1""#, "\n", r#""github:a/two" = "1""#));
-		let files = load(&ConfigPaths {
-			system: vec![system_env, system],
-			project: vec![project_inner, project_outer],
-			..ConfigPaths::default()
-		})
+		let files = load(
+			&ConfigPaths {
+				system: vec![system_env, system],
+				project: vec![project_inner, project_outer],
+				..ConfigPaths::default()
+			},
+			&[],
+		)
 		.unwrap();
 		assert_eq!(files.len(), 4);
 		assert_eq!(files[0].config.tools.len(), 2);
@@ -266,15 +275,34 @@ mod tests {
 	}
 
 	#[test]
+	fn skips_duplicate_registered_files() {
+		let tmp = tempfile::tempdir().unwrap();
+		let project = _config(tmp.path(), "project.toml", "");
+		let system = _config(tmp.path(), "system.toml", "");
+		let registered = _config(tmp.path(), "registered.toml", r#""github:a/registered" = "3""#);
+		let paths = ConfigPaths {
+			system: vec![system.clone()],
+			project: vec![project.clone()],
+			..ConfigPaths::default()
+		};
+		let files = load(&paths, &[project.clone(), system.clone(), registered.clone()]).unwrap();
+		let loaded: Vec<PathBuf> = files.iter().map(|file| file.path.clone()).collect();
+		assert_eq!(loaded, vec![project, system, registered]);
+	}
+
+	#[test]
 	fn skips_missing_files() {
 		let tmp = tempfile::tempdir().unwrap();
 		let missing = tmp.path().join("missing.toml");
 		let path = _config(tmp.path(), "outpost.toml", r#""github:owner/repo" = "latest""#);
-		let files = load(&ConfigPaths {
-			system: vec![missing],
-			project: vec![path.clone()],
-			..ConfigPaths::default()
-		})
+		let files = load(
+			&ConfigPaths {
+				system: vec![missing],
+				project: vec![path.clone()],
+				..ConfigPaths::default()
+			},
+			&[],
+		)
 		.unwrap();
 		assert_eq!(files.len(), 1);
 		assert_eq!(files[0].path, path);
@@ -284,11 +312,14 @@ mod tests {
 
 	#[test]
 	fn defaults_without_files() {
-		let files = load(&ConfigPaths {
-			system: vec![],
-			project: vec![],
-			..ConfigPaths::default()
-		})
+		let files = load(
+			&ConfigPaths {
+				system: vec![],
+				project: vec![],
+				..ConfigPaths::default()
+			},
+			&[],
+		)
 		.unwrap();
 		assert!(files.is_empty());
 	}
@@ -298,11 +329,14 @@ mod tests {
 		let tmp = tempfile::tempdir().unwrap();
 		let path = tmp.path().join("outpost.toml");
 		fs::write(&path, "[tools\n").unwrap();
-		let result = load(&ConfigPaths {
-			system: vec![path.clone()],
-			project: vec![],
-			..ConfigPaths::default()
-		});
+		let result = load(
+			&ConfigPaths {
+				system: vec![path.clone()],
+				project: vec![],
+				..ConfigPaths::default()
+			},
+			&[],
+		);
 		let error = result.err().expect("expected a parse error");
 		assert!(matches!(&error, LoadError::Parse { .. }));
 		assert!(error.to_string().contains(&path.display().to_string()));
@@ -320,11 +354,14 @@ mod tests {
 		for (tools, needle) in cases {
 			let tmp = tempfile::tempdir().unwrap();
 			let path = _config(tmp.path(), "outpost.toml", tools);
-			let error = load(&ConfigPaths {
-				system: vec![path],
-				project: vec![],
-				..ConfigPaths::default()
-			})
+			let error = load(
+				&ConfigPaths {
+					system: vec![path],
+					project: vec![],
+					..ConfigPaths::default()
+				},
+				&[],
+			)
 			.err()
 			.unwrap();
 			assert!(error.to_string().contains(needle), "{tools}: {error}");

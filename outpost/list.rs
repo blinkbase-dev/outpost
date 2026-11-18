@@ -1,4 +1,4 @@
-use crate::config::{loader, locate};
+use crate::config::{loader, locate, state};
 use crate::tools::lock::{self, LockedTool};
 use crate::tools::status::{self, InstallState};
 use crate::tools::tool_request::{self, ToolRequest};
@@ -8,10 +8,11 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 pub(crate) fn list() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
-	let configs = loader::load(&paths)?;
-	let requests = tool_request::requests(&configs)?;
 	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
+	let (state, _) = state::read(data_dir)?;
+	let configs = loader::load(&paths, &state.registered_paths)?;
+	let requests = tool_request::requests(&configs)?;
 	let lock = lock::read(data_dir)?;
 	let report = status::report(requests, &lock, tools_dir);
 	let mut rows = Vec::with_capacity(report.requested.len() + report.unrequested.len());

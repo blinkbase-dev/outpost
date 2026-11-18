@@ -277,7 +277,6 @@ mod tests {
 	use std::path::{Path, PathBuf};
 
 	use super::*;
-	use crate::config::state::State;
 	use crate::tools::tool_request::ToolRequest;
 
 	fn write(root: &Path, relative: &str, keys: &[&str]) -> PathBuf {
@@ -301,21 +300,16 @@ mod tests {
 	}
 
 	#[test]
-	fn orders_project_before_system_and_skips_registered() {
+	fn orders_project_before_system() {
 		let dir = tempfile::tempdir().unwrap();
 		let inner = write(dir.path(), "inner/outpost.toml", &["github:o/inner"]);
 		let outer = write(dir.path(), "outer/outpost.toml", &["github:o/outer"]);
 		let dev = write(dir.path(), "system/outpost.dev.toml", &["github:o/dev"]);
 		let prod = write(dir.path(), "system/outpost.prod.toml", &["github:o/prod"]);
 		let base = write(dir.path(), "system/config.toml", &["github:o/base"]);
-		let registered = write(dir.path(), "other/outpost.toml", &["github:o/registered"]);
 		let paths = ConfigPaths {
 			system: vec![dev, prod, base],
 			project: vec![inner, outer],
-			state: State {
-				registered_paths: vec![registered],
-				..State::default()
-			},
 			..ConfigPaths::default()
 		};
 		let requests = requests(&paths).unwrap();
