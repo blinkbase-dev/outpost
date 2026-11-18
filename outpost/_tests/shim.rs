@@ -242,8 +242,9 @@ registered_paths = []
 }
 
 #[test]
-fn rejects_conflicting_binaries() {
-	let lock = r#"
+fn rejects_binaries_duplicated_within_and_across_tools() {
+	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+	let single = r#"
 version = 1
 
 [[tool]]
@@ -254,26 +255,7 @@ requested = "1"
 tag_name = "v1.0.0"
 install_path = "github_a/1"
 "#;
-	let fixture = Fixture::new(lock);
-	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-	fixture.tool("github_a/1", name);
-	fixture.tool("github_a/1", &format!("nested/{name}"));
-	let output = fixture.run(&fixture.config_dir, &[]);
-	let stderr = String::from_utf8(output.stderr).unwrap();
-	assert!(!output.status.success(), "{stderr}");
-	assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
-	let normalized = stderr.replace('\\', "/");
-	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
-	assert!(normalized.contains(&format!("github_a/1/nested/{name}")), "{stderr}");
-	// the ambiguous name is not shimmed or indexed
-	assert!(!fixture.config_dir.join("shims").join(name).exists());
-	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-	assert!(!state.contains("shims"), "{state}");
-}
-
-#[test]
-fn rejects_binaries_shared_by_two_tools() {
-	let lock = r#"
+	let pair = r#"
 version = 1
 
 [[tool]]
@@ -292,8 +274,22 @@ requested = "1"
 tag_name = "v1.0.0"
 install_path = "github_b/1"
 "#;
-	let fixture = Fixture::new(lock);
-	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+	// two binaries for one name in a single tool
+	let fixture = Fixture::new(single);
+	fixture.tool("github_a/1", name);
+	fixture.tool("github_a/1", &format!("nested/{name}"));
+	let output = fixture.run(&fixture.config_dir, &[]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success(), "{stderr}");
+	assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
+	let normalized = stderr.replace('\\', "/");
+	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_a/1/nested/{name}")), "{stderr}");
+	assert!(!fixture.config_dir.join("shims").join(name).exists());
+	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+	assert!(!state.contains("shims"), "{state}");
+	// the same name from two tools
+	let fixture = Fixture::new(pair);
 	fixture.tool("github_a/1", name);
 	fixture.tool("github_b/1", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
@@ -303,7 +299,22 @@ install_path = "github_b/1"
 	let normalized = stderr.replace('\\', "/");
 	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
 	assert!(normalized.contains(&format!("github_b/1/{name}")), "{stderr}");
-	// the ambiguous name is not shimmed or indexed
+	assert!(!fixture.config_dir.join("shims").join(name).exists());
+	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+	assert!(!state.contains("shims"), "{state}");
+	// a duplicate within one tool plus another tool providing the same name
+	let fixture = Fixture::new(pair);
+	fixture.tool("github_a/1", name);
+	fixture.tool("github_a/1", &format!("nested/{name}"));
+	fixture.tool("github_b/1", name);
+	let output = fixture.run(&fixture.config_dir, &[]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success(), "{stderr}");
+	assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
+	let normalized = stderr.replace('\\', "/");
+	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_a/1/nested/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_b/1/{name}")), "{stderr}");
 	assert!(!fixture.config_dir.join("shims").join(name).exists());
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	assert!(!state.contains("shims"), "{state}");
