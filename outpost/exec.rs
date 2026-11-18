@@ -25,7 +25,6 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
 	let lock = lock::read(data_dir)?;
-	let (state, _) = state::read(data_dir)?;
 	let requests = candidates::requests(&paths)?;
 	let tool = args.tool.ok_or("missing tool")?;
 	let tool_spec = tool.to_str().ok_or("tool must be valid utf-8")?;
@@ -63,6 +62,7 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	let binary = command.next().ok_or("missing binary name after '--'")?;
 	let binary = binary.to_str().ok_or("binary name must be valid utf-8")?;
 	let install_dir = tools_dir.join(install_path);
+	let (state, _) = state::read(data_dir)?;
 	let matches = candidates::find_binaries_cached(&install_dir, binary, state.binaries.get(install_path).map(Vec::as_slice))?;
 	let path = match matches.as_slice() {
 		[path] => path,

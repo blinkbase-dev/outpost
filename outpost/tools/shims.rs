@@ -121,12 +121,12 @@ pub(crate) fn index_shims(state: &mut State, lock: &Lock) -> Result<(), ShimErro
 				let Some(binaries) = state.binaries.get(install_path) else {
 					continue;
 				};
-				let mut names: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+				let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
 				for binary in binaries {
 					let Some(name) = binary.file_stem().and_then(OsStr::to_str) else {
 						continue;
 					};
-					names.entry(name.to_ascii_lowercase()).or_default().push(binary.clone());
+					names.entry(name.to_ascii_lowercase()).or_default().push(binary);
 				}
 				for (name, binaries) in names {
 					// a name with more than one binary cannot be shimmed unambiguously
@@ -142,7 +142,7 @@ pub(crate) fn index_shims(state: &mut State, lock: &Lock) -> Result<(), ShimErro
 						lane: lane.clone(),
 						requested: requested.clone(),
 						install_path: install_path.clone(),
-						binary: binary.clone(),
+						binary: binary.to_path_buf(),
 					});
 				}
 			}
@@ -253,12 +253,12 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(
 				let Some(binaries) = state.binaries.get(install_path) else {
 					continue;
 				};
-				let mut names: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+				let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
 				for binary in binaries {
 					let Some(name) = binary.file_name().and_then(OsStr::to_str) else {
 						continue;
 					};
-					names.entry(name.to_owned()).or_default().push(binary.clone());
+					names.entry(name.to_owned()).or_default().push(binary);
 				}
 				for (name, binaries) in names {
 					// a name with more than one binary in one tool cannot be shimmed
@@ -274,7 +274,7 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(
 						lane: lane.clone(),
 						requested: requested.clone(),
 						install_path: install_path.clone(),
-						binary: binary.clone(),
+						binary: binary.to_path_buf(),
 					});
 				}
 			}

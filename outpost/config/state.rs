@@ -170,7 +170,7 @@ mod tests {
 		let system = PathBuf::from("system/outpost.toml");
 		let mut state = State::default();
 		register_config(&mut state, std::slice::from_ref(&system), &[system.clone(), project.clone()]);
-		assert_eq!(state.registered_paths, vec![project.clone()]);
+		assert_eq!(state.registered_paths.as_slice(), std::slice::from_ref(&project));
 		// registering the same project again does not duplicate it
 		register_config(&mut state, std::slice::from_ref(&system), std::slice::from_ref(&project));
 		assert_eq!(state.registered_paths, vec![project]);

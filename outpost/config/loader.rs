@@ -157,7 +157,7 @@ mod tests {
 				project: vec![project.clone()],
 				..ConfigPaths::default()
 			},
-			&[registered.clone()],
+			std::slice::from_ref(&registered),
 		)
 		.unwrap();
 		assert_eq!(files.len(), 3);
@@ -286,8 +286,8 @@ mod tests {
 			..ConfigPaths::default()
 		};
 		let files = load(&paths, &[project.clone(), system.clone(), registered.clone()]).unwrap();
-		let loaded: Vec<PathBuf> = files.iter().map(|file| file.path.clone()).collect();
-		assert_eq!(loaded, vec![project, system, registered]);
+		let loaded: Vec<&Path> = files.iter().map(|file| file.path.as_path()).collect();
+		assert_eq!(loaded, vec![project.as_path(), system.as_path(), registered.as_path()]);
 	}
 
 	#[test]
