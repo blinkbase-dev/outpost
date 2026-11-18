@@ -2,7 +2,7 @@ use std::ffi::{OsStr, OsString};
 
 use clap::Args;
 
-use crate::config::locate;
+use crate::config::{locate, state};
 use crate::tools::tool_request::ToolRequest;
 use crate::tools::tool_spec::ToolSpec;
 use crate::tools::{candidates, lock};
@@ -62,7 +62,8 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	let binary = command.next().ok_or("missing binary name after '--'")?;
 	let binary = binary.to_str().ok_or("binary name must be valid utf-8")?;
 	let install_dir = tools_dir.join(install_path);
-	let matches = candidates::find_binaries_cached(&install_dir, binary, paths.state.binaries.get(install_path).map(Vec::as_slice))?;
+	let (state, _) = state::read(data_dir)?;
+	let matches = candidates::find_binaries_cached(&install_dir, binary, state.binaries.get(install_path).map(Vec::as_slice))?;
 	let path = match matches.as_slice() {
 		[path] => path,
 		[] => {
@@ -96,9 +97,11 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
+	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
 	let name = Path::new(shim).file_stem().and_then(OsStr::to_str).ok_or("invalid shim name")?;
-	let Some(shims) = paths.state.shims.get(&name.to_ascii_lowercase()) else {
+	let (state, _) = state::read(data_dir)?;
+	let Some(shims) = state.shims.get(&name.to_ascii_lowercase()) else {
 		return Err(format!("no installed tool provides '{name}'").into());
 	};
 	let requests = candidates::requests(&paths)?;

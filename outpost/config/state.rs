@@ -165,6 +165,18 @@ mod tests {
 	}
 
 	#[test]
+	fn registers_only_project_configs() {
+		let project = PathBuf::from("project/outpost.toml");
+		let system = PathBuf::from("system/outpost.toml");
+		let mut state = State::default();
+		register_config(&mut state, std::slice::from_ref(&system), &[system.clone(), project.clone()]);
+		assert_eq!(state.registered_paths.as_slice(), std::slice::from_ref(&project));
+		// registering the same project again does not duplicate it
+		register_config(&mut state, std::slice::from_ref(&system), std::slice::from_ref(&project));
+		assert_eq!(state.registered_paths, vec![project]);
+	}
+
+	#[test]
 	fn reads_state_without_indexes() {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("state.toml"), "version = 1\nregistered_paths = [\"project/outpost.toml\"]\n").unwrap();
@@ -173,5 +185,12 @@ mod tests {
 		assert_eq!(state.registered_paths, vec![PathBuf::from("project/outpost.toml")]);
 		assert!(state.binaries.is_empty());
 		assert!(state.shims.is_empty());
+	}
+
+	#[test]
+	fn rejects_invalid_state() {
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("state.toml"), "[registered_paths\n").unwrap();
+		assert!(matches!(read(dir.path()), Err(StateError::Parse { .. })));
 	}
 }

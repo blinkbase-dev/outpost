@@ -20,7 +20,6 @@ type DownloadEntry = (ToolResolutionGroup, ToolArchive);
 pub(crate) fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
-	let configs = loader::load(&paths)?;
 	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let downloads_dir = paths.downloads_dir.as_deref().ok_or("no downloads directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
@@ -28,6 +27,8 @@ pub(crate) fn install() -> Result<(), Error> {
 	std::fs::create_dir_all(downloads_dir)?;
 	std::fs::create_dir_all(tools_dir)?;
 	let _install_lock = lock::acquire(data_dir)?;
+	let (mut state, text) = state::read(data_dir)?;
+	let configs = loader::load(&paths, &state.registered_paths)?;
 	let requests = tool_request::requests(&configs)?;
 	// group requests by identity so each tool resolves once
 	let requests = ToolRequestGroup::from_entries(requests);
@@ -36,7 +37,6 @@ pub(crate) fn install() -> Result<(), Error> {
 	let requests = status::missing_from_lock(requests, &lock, tools_dir);
 	if requests.is_empty() {
 		// persist the project registration even when nothing needs installing
-		let (mut state, text) = state::read(data_dir)?;
 		state::register_config(&mut state, &paths.system, &paths.project);
 		state::write(data_dir, &state, text.as_deref())?;
 		return Ok(());
@@ -52,7 +52,6 @@ pub(crate) fn install() -> Result<(), Error> {
 	let groups = _update_lock_entries(&mut lock, &extractions);
 	lock::write(data_dir, &lock)?;
 	// refresh binaries and shims for the newly installed tools
-	let (mut state, text) = state::read(data_dir)?;
 	state::register_config(&mut state, &paths.system, &paths.project);
 	shims::index_installed_binaries(&mut state, tools_dir, &lock, &groups)?;
 	let index_err = shims::index_shims(&mut state, &lock).err();

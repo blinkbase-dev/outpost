@@ -15,7 +15,7 @@ pub(crate) fn shim(args: ShimArgs) -> Result<(), Error> {
 	let _guard = lock::acquire(data_dir)?;
 	let lock = lock::read(data_dir)?;
 	let (mut state, text) = state::read(data_dir)?;
-	let configs = loader::load(&paths)?;
+	let configs = loader::load(&paths, &state.registered_paths)?;
 	let requests = ToolRequestGroup::from_entries(tool_request::requests(&configs)?);
 	shims::index_binaries(&mut state, tools_dir, &lock, &requests)?;
 	let index_err = shims::index_shims(&mut state, &lock).err();
