@@ -338,6 +338,8 @@ fn reports_failed_install_per_origin() {
 }
 
 mod exposed {
+	use indoc::formatdoc;
+
 	use super::*;
 
 	#[test]
@@ -346,10 +348,12 @@ mod exposed {
 		let server = runtime.block_on(MockServer::start());
 		let helper = if cfg!(windows) { "helper.exe" } else { "helper" };
 		let (_, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
-		let config = r#"[tools]
-"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}", exposed = ["*"] }
-"#
-		.replace("{api_url}", &server.uri());
+		let config = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}", exposed = ["*"] }}
+		"#,
+		api_url = server.uri()
+		};
 		let fixture = Fixture::new(&config, None);
 		let output = fixture.run();
 		let stderr = String::from_utf8(output.stderr).unwrap();
@@ -357,28 +361,30 @@ mod exposed {
 		// `*` does not cross `/`, so the nested helper stays hidden
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 		#[cfg(windows)]
-		let expected = r#"version = 1
-registered_paths = []
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
 
-[binaries]
-"github_owner_repo/1.0.0" = ["{binary}"]
+		[binaries]
+		"github_owner_repo/1.0.0" = ["{binary}"]
 
-[[shims.tool]]
-backend = "github"
-full_name = "owner/repo"
-lane = ""
-requested = "1.0.0"
-install_path = "github_owner_repo/1.0.0"
-binary = "{binary}"
-"#;
+		[[shims.tool]]
+		backend = "github"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		binary = "{binary}"
+		"#};
 		#[cfg(not(windows))]
-		let expected = r#"version = 1
-registered_paths = []
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
 
-[binaries]
-"github_owner_repo/1.0.0" = ["{binary}"]
-"#;
-		assert_eq!(state, expected.replace("{binary}", binary));
+		[binaries]
+		"github_owner_repo/1.0.0" = ["{binary}"]
+		"#};
+		assert_eq!(state, expected);
 		assert!(fixture.config_dir.join("shims").join(binary).exists());
 		assert!(!fixture.config_dir.join("shims").join(helper).exists());
 	}
@@ -389,11 +395,13 @@ registered_paths = []
 		let server = runtime.block_on(MockServer::start());
 		let helper = if cfg!(windows) { "helper.exe" } else { "helper" };
 		let (_, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
-		let config = r#"[tools]
-"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}", exposed = ["**/{exposed}"] }
-"#
-		.replace("{api_url}", &server.uri())
-		.replace("{exposed}", helper);
+		let config = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}", exposed = ["**/{exposed}"] }}
+		"#,
+		api_url = server.uri(),
+		exposed = helper
+		};
 		let fixture = Fixture::new(&config, None);
 		let output = fixture.run();
 		let stderr = String::from_utf8(output.stderr).unwrap();
@@ -401,27 +409,29 @@ registered_paths = []
 		// '**' crosses '/', so the nested helper is exposed and the tool is not
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 		#[cfg(windows)]
-		let expected = r#"version = 1
-registered_paths = []
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
 
-[binaries]
-"github_owner_repo/1.0.0" = ['bin\helper.exe']
+		[binaries]
+		"github_owner_repo/1.0.0" = ['bin\helper.exe']
 
-[[shims.helper]]
-backend = "github"
-full_name = "owner/repo"
-lane = ""
-requested = "1.0.0"
-install_path = "github_owner_repo/1.0.0"
-binary = 'bin\helper.exe'
-"#;
+		[[shims.helper]]
+		backend = "github"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		binary = 'bin\helper.exe'
+		"#};
 		#[cfg(not(windows))]
-		let expected = r#"version = 1
-registered_paths = []
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
 
-[binaries]
-"github_owner_repo/1.0.0" = ["bin/helper"]
-"#;
+		[binaries]
+		"github_owner_repo/1.0.0" = ["bin/helper"]
+		"#};
 		assert_eq!(state, expected);
 		assert!(fixture.config_dir.join("shims").join(helper).exists());
 		assert!(!fixture.config_dir.join("shims").join(binary).exists());
@@ -434,16 +444,18 @@ registered_paths = []
 		let helper = if cfg!(windows) { "helper.exe" } else { "helper" };
 		let (_, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
 		// both requests resolve to the same artifact
-		let config = r#"[tools]
-"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}", exposed = ["{binary}"] }
-"#
-		.replace("{api_url}", &server.uri())
-		.replace("{binary}", binary);
-		let env = r#"[tools]
-"github:owner/repo" = { version = "v1.0.0", api_url = "{api_url}", exposed = ["bin/{helper}"] }
-"#
-		.replace("{api_url}", &server.uri())
-		.replace("{helper}", helper);
+		let config = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}", exposed = ["{binary}"] }}
+		"#,
+		api_url = server.uri()
+		};
+		let env = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "v1.0.0", api_url = "{api_url}", exposed = ["bin/{helper}"] }}
+		"#,
+		api_url = server.uri()
+		};
 		let fixture = Fixture::new(&config, Some(&env));
 		let output = fixture.run();
 		let stderr = String::from_utf8(output.stderr).unwrap();
@@ -451,58 +463,60 @@ registered_paths = []
 		// both allowlists apply to the shared artifact
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 		#[cfg(windows)]
-		let expected = r#"version = 1
-registered_paths = []
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
 
-[binaries]
-"github_owner_repo/1.0.0" = [
-    "{binary}",
-    'bin\helper.exe',
-]
+		[binaries]
+		"github_owner_repo/1.0.0" = [
+		    "{binary}",
+		    'bin\helper.exe',
+		]
 
-[[shims.helper]]
-backend = "github"
-full_name = "owner/repo"
-lane = ""
-requested = "1.0.0"
-install_path = "github_owner_repo/1.0.0"
-binary = 'bin\helper.exe'
+		[[shims.helper]]
+		backend = "github"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		binary = 'bin\helper.exe'
 
-[[shims.helper]]
-backend = "github"
-full_name = "owner/repo"
-lane = ""
-requested = "v1.0.0"
-install_path = "github_owner_repo/1.0.0"
-binary = 'bin\helper.exe'
+		[[shims.helper]]
+		backend = "github"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "v1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		binary = 'bin\helper.exe'
 
-[[shims.tool]]
-backend = "github"
-full_name = "owner/repo"
-lane = ""
-requested = "1.0.0"
-install_path = "github_owner_repo/1.0.0"
-binary = "{binary}"
+		[[shims.tool]]
+		backend = "github"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		binary = "{binary}"
 
-[[shims.tool]]
-backend = "github"
-full_name = "owner/repo"
-lane = ""
-requested = "v1.0.0"
-install_path = "github_owner_repo/1.0.0"
-binary = "{binary}"
-"#;
+		[[shims.tool]]
+		backend = "github"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "v1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		binary = "{binary}"
+		"#};
 		#[cfg(not(windows))]
-		let expected = r#"version = 1
-registered_paths = []
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
 
-[binaries]
-"github_owner_repo/1.0.0" = [
-    "{binary}",
-    "bin/helper",
-]
-"#;
-		assert_eq!(state, expected.replace("{binary}", binary));
+		[binaries]
+		"github_owner_repo/1.0.0" = [
+		    "{binary}",
+		    "bin/helper",
+		]
+		"#};
+		assert_eq!(state, expected);
 		assert!(fixture.config_dir.join("shims").join(binary).exists());
 		assert!(fixture.config_dir.join("shims").join(helper).exists());
 	}
