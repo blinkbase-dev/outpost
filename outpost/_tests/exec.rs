@@ -194,7 +194,7 @@ binary = "tool.cmd"
 
 #[cfg(windows)]
 #[test]
-fn reports_shim_missing_from_shims() {
+fn reports_shim_failures() {
 	let lock = r#"
 version = 1
 
@@ -206,26 +206,54 @@ requested = "1.2.3"
 tag_name = "v1.2.3"
 install_path = "github_owner_repo/1.2.3"
 "#;
-	let config = r#"[tools]
-"github:owner/repo" = "1.2.3"
-"#;
-	let fixture = Fixture::new(config, lock);
-	fixture.script("github_owner_repo/1.2.3", "tool.cmd");
-	std::fs::write(
-		fixture.config_dir.join("state.toml"),
-		r#"version = 1
-[[shims.other]]
+	let state = r#"version = 1
+[[shims.tool]]
 backend = "github"
 full_name = "owner/repo"
 lane = ""
 requested = "1.2.3"
 install_path = "github_owner_repo/1.2.3"
 binary = "tool.cmd"
-"#,
-	)
-	.unwrap();
+"#;
+	let requested = r#"[tools]
+"github:owner/repo" = "1.2.3"
+"#;
+	let other = r#"[tools]
+"github:owner/repo" = "2.0.0"
+"#;
+	let unrelated = r#"[tools]
+"github:other/repo" = "1.2.3"
+"#;
+	// the shim name is not indexed
+	let fixture = Fixture::new(requested, lock);
+	fixture.script("github_owner_repo/1.2.3", "tool.cmd");
+	std::fs::write(fixture.config_dir.join("state.toml"), state.replace("[[shims.tool]]", "[[shims.other]]")).unwrap();
 	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
-	assert!(!output.status.success());
+	assert!(!output.status.success(), "{stderr}");
 	assert!(stderr.contains("no installed tool provides `tool`"), "{stderr}");
+	// indexed, but the config asks for another version
+	let fixture = Fixture::new(other, lock);
+	fixture.script("github_owner_repo/1.2.3", "tool.cmd");
+	std::fs::write(fixture.config_dir.join("state.toml"), state).unwrap();
+	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success(), "{stderr}");
+	assert!(stderr.contains("`tool` is not installed for `github:owner/repo@2.0.0`"), "{stderr}");
+	// indexed, but the config requests a different tool
+	let fixture = Fixture::new(unrelated, lock);
+	fixture.script("github_owner_repo/1.2.3", "tool.cmd");
+	std::fs::write(fixture.config_dir.join("state.toml"), state).unwrap();
+	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success(), "{stderr}");
+	assert!(stderr.contains("`tool` is not requested by the current config:"), "{stderr}");
+	assert!(stderr.contains("github:owner/repo 1.2.3"), "{stderr}");
+	// indexed and requested, but the binary is gone
+	let fixture = Fixture::new(requested, lock);
+	std::fs::write(fixture.config_dir.join("state.toml"), state).unwrap();
+	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success(), "{stderr}");
+	assert!(stderr.contains("`tool` was not found in"), "{stderr}");
 }
