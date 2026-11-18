@@ -7,11 +7,11 @@ struct Fixture {
 }
 
 impl Fixture {
-	fn new(lock: &str) -> Self {
+	fn new(config: &str, lock: &str) -> Self {
 		let dir = tempfile::tempdir().unwrap();
 		let config_dir = dir.path().join("config");
 		std::fs::create_dir_all(&config_dir).unwrap();
-		std::fs::write(config_dir.join("outpost.toml"), "").unwrap();
+		std::fs::write(config_dir.join("outpost.toml"), config).unwrap();
 		std::fs::write(config_dir.join("outpost.lock"), lock).unwrap();
 		Self { _dir: dir, config_dir }
 	}
@@ -63,7 +63,7 @@ requested = "1"
 tag_name = "cli/v1.0.0"
 install_path = "github_a/cli_1"
 "#;
-	let fixture = Fixture::new(lock);
+	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	let other = if cfg!(windows) { "other.exe" } else { "other" };
 	fixture.tool("github_a/1", name);
@@ -137,7 +137,7 @@ requested = "1"
 tag_name = "v1.0.0"
 install_path = "github_a/1"
 "#;
-	let fixture = Fixture::new(lock);
+	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	fixture.tool("github_a/1", name);
 	let initial = r#"version = 1
@@ -202,7 +202,7 @@ requested = "1"
 tag_name = "v1.0.0"
 install_path = "github_b/1"
 "#;
-	let fixture = Fixture::new(lock);
+	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	fixture.tool("github_a/1", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
@@ -275,7 +275,7 @@ tag_name = "v1.0.0"
 install_path = "github_b/1"
 "#;
 	// two binaries for one name in a single tool
-	let fixture = Fixture::new(single);
+	let fixture = Fixture::new("", single);
 	fixture.tool("github_a/1", name);
 	fixture.tool("github_a/1", &format!("nested/{name}"));
 	let output = fixture.run(&fixture.config_dir, &[]);
@@ -289,7 +289,7 @@ install_path = "github_b/1"
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	assert!(!state.contains("shims"), "{state}");
 	// the same name from two tools
-	let fixture = Fixture::new(pair);
+	let fixture = Fixture::new("", pair);
 	fixture.tool("github_a/1", name);
 	fixture.tool("github_b/1", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
@@ -303,7 +303,7 @@ install_path = "github_b/1"
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	assert!(!state.contains("shims"), "{state}");
 	// a duplicate within one tool plus another tool providing the same name
-	let fixture = Fixture::new(pair);
+	let fixture = Fixture::new("", pair);
 	fixture.tool("github_a/1", name);
 	fixture.tool("github_a/1", &format!("nested/{name}"));
 	fixture.tool("github_b/1", name);
@@ -333,7 +333,7 @@ requested = "1"
 tag_name = "v1.0.0"
 install_path = "github_a/1"
 "#;
-	let fixture = Fixture::new(lock);
+	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	fixture.tool("github_a/1", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
@@ -371,7 +371,7 @@ requested = "1"
 tag_name = "v1.0.0"
 install_path = "github_a/1"
 "#;
-	let fixture = Fixture::new(lock);
+	let fixture = Fixture::new("", lock);
 	fixture.tool("github_a/1", "tool.exe");
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
@@ -388,4 +388,101 @@ install_path = "github_a/1"
 	assert!(stderr.contains("cannot regenerate shims, in use:"), "{stderr}");
 	assert!(shim.exists());
 	assert!(extra.exists());
+}
+
+mod exposed {
+	use indoc::indoc;
+
+	use super::*;
+
+	const LOCK: &str = indoc! {r#"
+	version = 1
+
+	[[tool]]
+	backend = "github"
+	full_name = "a/repo"
+	lane = ""
+	requested = "1"
+	tag_name = "v1.0.0"
+	install_path = "github_a/1"
+	"#};
+
+	#[cfg(windows)]
+	const INDEXED_STATE: &str = indoc! {r#"
+	version = 1
+	registered_paths = []
+
+	[binaries]
+	"github_a/1" = ["tool.exe"]
+
+	[[shims.tool]]
+	backend = "github"
+	full_name = "a/repo"
+	lane = ""
+	requested = "1"
+	install_path = "github_a/1"
+	binary = "tool.exe"
+	"#};
+	#[cfg(not(windows))]
+	const INDEXED_STATE: &str = indoc! {r#"
+	version = 1
+	registered_paths = []
+
+	[binaries]
+	"github_a/1" = ["tool"]
+	"#};
+
+	#[test]
+	fn exposes_only_listed_binaries() {
+		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let hidden = if cfg!(windows) { "hidden.exe" } else { "hidden" };
+		let config = indoc! {r#"
+		[tools]
+		"github:a/repo" = { version = "1", exposed = ["{name}"] }
+		"#}
+		.replace("{name}", name);
+		let fixture = Fixture::new(&config, LOCK);
+		fixture.tool("github_a/1", name);
+		fixture.tool("github_a/1", hidden);
+		let output = fixture.run(&fixture.config_dir, &[]);
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		assert_eq!(state, INDEXED_STATE);
+		let shims = fixture.config_dir.join("shims");
+		assert!(shims.join(name).exists());
+		assert!(!shims.join(hidden).exists());
+	}
+
+	#[test]
+	fn exposes_listed_binaries_after_narrowing() {
+		let initial = indoc! {r#"
+		[tools]
+		"github:a/repo" = "1"
+		"#};
+		let fixture = Fixture::new(initial, LOCK);
+		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let hidden = if cfg!(windows) { "hidden.exe" } else { "hidden" };
+		fixture.tool("github_a/1", name);
+		fixture.tool("github_a/1", hidden);
+		let output = fixture.run(&fixture.config_dir, &[]);
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		let shims = fixture.config_dir.join("shims");
+		assert!(shims.join(name).exists());
+		assert!(shims.join(hidden).exists());
+		// narrowing the list drops the binary from the next reindex
+		let config = indoc! {r#"
+		[tools]
+		"github:a/repo" = { version = "1", exposed = ["{name}"] }
+		"#}
+		.replace("{name}", name);
+		std::fs::write(fixture.config_dir.join("outpost.toml"), &config).unwrap();
+		let output = fixture.run(&fixture.config_dir, &[]);
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		assert_eq!(state, INDEXED_STATE);
+		assert!(shims.join(name).exists());
+	}
 }
