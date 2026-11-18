@@ -59,14 +59,13 @@ impl ToolRequest {
 		}
 		match options {
 			ToolOptions::Github(table) => {
-				let version = table.version.trim();
-				if version.is_empty() {
+				let (lane, value) = split_lane(table.version.trim());
+				if value.is_empty() {
 					return Err(ToolRequestError::EmptyVersion {
 						path: path.to_path_buf(),
 						key: key.to_owned(),
 					});
 				}
-				let (lane, value) = split_lane(version);
 				Ok(Self::Github {
 					full_name: full_name.to_ascii_lowercase(),
 					lane: lane.to_owned(),
