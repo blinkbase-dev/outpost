@@ -10,9 +10,9 @@ pub(crate) fn list() -> Result<(), Error> {
 	let paths = locate::locate(&cwd)?;
 	let configs = loader::load(&paths)?;
 	let requests = tool_request::requests(&configs)?;
-	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
+	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
-	let lock = lock::read(config_dir)?;
+	let lock = lock::read(data_dir)?;
 	let report = status::report(requests, &lock, tools_dir);
 	let mut rows = Vec::with_capacity(report.requested.len() + report.unrequested.len());
 	for entry in &report.requested {

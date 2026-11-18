@@ -10,8 +10,8 @@ use crate::tools::version::Version;
 
 pub(crate) type Identity = (&'static str, String, String, Version);
 
-pub(crate) fn read(config_dir: &Path) -> Result<Lock, LockError> {
-	match std::fs::read_to_string(config_dir.join("outpost.lock")) {
+pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
+	match std::fs::read_to_string(data_dir.join("outpost.lock")) {
 		Ok(text) if text.trim().is_empty() => Ok(Lock::default()),
 		Ok(text) => {
 			let mut lock: Lock = toml::from_str(&text)?;
@@ -41,11 +41,11 @@ pub(crate) fn read(config_dir: &Path) -> Result<Lock, LockError> {
 	}
 }
 
-pub(crate) fn write(config_dir: &Path, lock: &Lock) -> Result<(), LockError> {
+pub(crate) fn write(data_dir: &Path, lock: &Lock) -> Result<(), LockError> {
 	let mut tools = lock.tools.clone();
 	tools.sort_by(|a, b| a.key().cmp(&b.key()));
 	let text = toml::to_string_pretty(&Lock { version: lock.version, tools })?;
-	let path = config_dir.join("outpost.lock");
+	let path = data_dir.join("outpost.lock");
 	let temp = path.with_extension("lock.tmp");
 	let mut file = std::fs::File::create(&temp)?;
 	file.write_all(text.as_bytes())?;
@@ -55,13 +55,13 @@ pub(crate) fn write(config_dir: &Path, lock: &Lock) -> Result<(), LockError> {
 	Ok(())
 }
 
-pub(crate) fn acquire(config_dir: &Path) -> Result<File, LockError> {
+pub(crate) fn acquire(data_dir: &Path) -> Result<File, LockError> {
 	let file = OpenOptions::new()
 		.read(true)
 		.write(true)
 		.create(true)
 		.truncate(false)
-		.open(config_dir.join("outpost.lock.guard"))?;
+		.open(data_dir.join("outpost.lock.guard"))?;
 	match file.try_lock() {
 		Ok(()) => Ok(file),
 		Err(TryLockError::WouldBlock) => Err(LockError::Busy),

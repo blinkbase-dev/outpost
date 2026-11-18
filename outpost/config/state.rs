@@ -8,8 +8,8 @@ use crate::tools::version::Version;
 
 pub(crate) const VERSION: u32 = 1;
 
-pub(crate) fn read(config_dir: &Path) -> Result<(State, Option<String>), StateError> {
-	let path = config_dir.join("state.toml");
+pub(crate) fn read(data_dir: &Path) -> Result<(State, Option<String>), StateError> {
+	let path = data_dir.join("state.toml");
 	match std::fs::read_to_string(&path) {
 		Ok(text) if text.trim().is_empty() => Ok((State::default(), Some(text))),
 		Ok(text) => {
@@ -21,24 +21,24 @@ pub(crate) fn read(config_dir: &Path) -> Result<(State, Option<String>), StateEr
 	}
 }
 
-pub(crate) fn write(config_dir: &Path, state: &State, text: Option<&str>) -> Result<(), StateError> {
+pub(crate) fn write(data_dir: &Path, state: &State, text: Option<&str>) -> Result<(), StateError> {
 	let serialized = toml::to_string_pretty(state)?;
 	if text == Some(serialized.as_str()) {
 		return Ok(());
 	}
-	let path = config_dir.join("state.toml");
+	let path = data_dir.join("state.toml");
 	let temp = path.with_extension("toml.tmp");
 	std::fs::write(&temp, serialized).map_err(|source| (temp.clone(), source))?;
 	std::fs::rename(&temp, &path).map_err(|source| (path.clone(), source))?;
 	Ok(())
 }
 
-pub(crate) fn register_config(state: &mut State, config_dir: &Path, project_configs: &[PathBuf]) {
+pub(crate) fn register_config(state: &mut State, system_configs: &[PathBuf], project_configs: &[PathBuf]) {
 	// registered paths are written canonical
 	let mut registered: Vec<_> = std::mem::take(&mut state.registered_paths)
 		.into_iter()
 		.chain(project_configs.iter().cloned())
-		.filter(|path| path.parent() != Some(config_dir))
+		.filter(|path| !system_configs.contains(path))
 		.collect();
 	registered.sort();
 	registered.dedup();

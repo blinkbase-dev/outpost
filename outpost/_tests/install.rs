@@ -29,6 +29,7 @@ impl Fixture {
 			.arg("install")
 			.current_dir(&self.config_dir)
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
+			.env("OUTPOST_DATA_DIR", &self.config_dir)
 			.env("OUTPOST_ENV", "dev")
 			.env_remove("OUTPOST_TOOLS_DIR")
 			.env_remove("OUTPOST_SHIMS_DIR")
@@ -316,8 +317,11 @@ fn reports_failed_install_per_origin() {
 	assert!(!output.status.success(), "{stderr}");
 	assert!(stderr.contains("owner/repo 1.0.0: no release found"), "{stderr}");
 	// a failed resolve names every config that requested the tool
-	let system = fixture.config_dir.join("outpost.toml").display().to_string();
-	let dev = fixture.config_dir.join("outpost.dev.toml").display().to_string();
+	let system = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
+	let dev = std::fs::canonicalize(fixture.config_dir.join("outpost.dev.toml"))
+		.unwrap()
+		.display()
+		.to_string();
 	assert!(stderr.contains(&format!("  from {system}")), "{stderr}");
 	assert!(stderr.contains(&format!("  from {dev}")), "{stderr}");
 	// both tag candidates are tried, and nothing is installed
