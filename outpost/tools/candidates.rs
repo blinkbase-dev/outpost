@@ -20,7 +20,7 @@ pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequestEntry>, Can
 pub(crate) fn find_binaries(install_dir: &Path, name: &str) -> io::Result<Vec<PathBuf>> {
 	let mut components = Path::new(name).components();
 	if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
-		return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid binary name `{name}`")));
+		return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid binary name '{name}'")));
 	}
 	let mut matches = Vec::new();
 	let mut directories = VecDeque::from([(install_dir.to_path_buf(), 0)]);
@@ -60,7 +60,7 @@ pub(crate) fn find_binaries_cached(install_dir: &Path, name: &str, cached: Optio
 	if let Some(cached) = cached {
 		let mut components = Path::new(name).components();
 		if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
-			return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid binary name `{name}`")));
+			return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("invalid binary name '{name}'")));
 		}
 		let mut invalid = false;
 		let mut matches = Vec::new();

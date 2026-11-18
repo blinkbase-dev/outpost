@@ -232,7 +232,7 @@ binary = "tool.cmd"
 	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
-	assert!(stderr.contains("no installed tool provides `tool`"), "{stderr}");
+	assert!(stderr.contains("no installed tool provides 'tool'"), "{stderr}");
 	// indexed, but the config asks for another version
 	let fixture = Fixture::new(other, lock);
 	fixture.script("github_owner_repo/1.2.3", "tool.cmd");
@@ -240,7 +240,7 @@ binary = "tool.cmd"
 	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
-	assert!(stderr.contains("`tool` is not installed for `github:owner/repo@2.0.0`"), "{stderr}");
+	assert!(stderr.contains("'tool' is not installed for 'github:owner/repo@2.0.0'"), "{stderr}");
 	// indexed, but the config requests a different tool
 	let fixture = Fixture::new(unrelated, lock);
 	fixture.script("github_owner_repo/1.2.3", "tool.cmd");
@@ -248,7 +248,7 @@ binary = "tool.cmd"
 	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
-	assert!(stderr.contains("`tool` is not requested by the current config:"), "{stderr}");
+	assert!(stderr.contains("'tool' is not requested by the current config:"), "{stderr}");
 	assert!(stderr.contains("github:owner/repo 1.2.3"), "{stderr}");
 	// indexed and requested, but the binary is gone
 	let fixture = Fixture::new(requested, lock);
@@ -256,5 +256,5 @@ binary = "tool.cmd"
 	let output = fixture.run(&["exec", "--shim", "--", "tool"]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
-	assert!(stderr.contains("`tool` was not found in"), "{stderr}");
+	assert!(stderr.contains("'tool' was not found in"), "{stderr}");
 }

@@ -109,8 +109,8 @@ impl From<toml::ser::Error> for StateError {
 impl fmt::Display for StateError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::Io { path, source } => write!(f, "failed to access `{}`: {source}", path.display()),
-			Self::Parse { path, source } => write!(f, "failed to parse state `{}`: {source}", path.display()),
+			Self::Io { path, source } => write!(f, "failed to access '{}': {source}", path.display()),
+			Self::Parse { path, source } => write!(f, "failed to parse state '{}': {source}", path.display()),
 			Self::Serialize(error) => write!(f, "failed to serialize state: {error}"),
 		}
 	}

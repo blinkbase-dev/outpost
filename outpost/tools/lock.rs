@@ -150,9 +150,9 @@ impl fmt::Display for LockError {
 			Self::Busy => write!(f, "another outpost install is already running"),
 			Self::UnsupportedVersion(version) => write!(f, "unsupported lock version {version}, expected 1"),
 			Self::DuplicateIdentity((backend, full_name, lane, version)) => {
-				write!(f, "duplicate {backend} tool `{full_name}` (lane `{lane}`, version `{version}`) in lock")
+				write!(f, "duplicate {backend} tool '{full_name}' (lane '{lane}', version '{version}') in lock")
 			}
-			Self::InvalidPath(path) => write!(f, "invalid install path `{}` in lock", path.display()),
+			Self::InvalidPath(path) => write!(f, "invalid install path '{}' in lock", path.display()),
 		}
 	}
 }

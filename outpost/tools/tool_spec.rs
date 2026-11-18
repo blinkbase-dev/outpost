@@ -76,10 +76,10 @@ pub(crate) enum ToolSpecError {
 impl fmt::Display for ToolSpecError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::MissingBackend(spec) => write!(f, "invalid tool spec `{spec}`: expected `<backend>:<tool>[@<version>]`"),
-			Self::UnsupportedBackend(backend) => write!(f, "unsupported backend `{backend}`"),
-			Self::InvalidFullName(name) => write!(f, "invalid tool name `{name}`"),
-			Self::EmptyVersion(spec) => write!(f, "invalid tool spec `{spec}`: empty version"),
+			Self::MissingBackend(spec) => write!(f, "invalid tool spec '{spec}': expected '<backend>:<tool>[@<version>]'"),
+			Self::UnsupportedBackend(backend) => write!(f, "unsupported backend '{backend}'"),
+			Self::InvalidFullName(name) => write!(f, "invalid tool name '{name}'"),
+			Self::EmptyVersion(spec) => write!(f, "invalid tool spec '{spec}': empty version"),
 		}
 	}
 }

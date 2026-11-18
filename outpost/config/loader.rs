@@ -58,7 +58,7 @@ impl TryFrom<RawConfig> for Config {
 // the backend in the tool name picks the options table
 fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 	let Some((backend, _)) = key.split_once(':') else {
-		return Err(format!("missing backend in `{key}`"));
+		return Err(format!("missing backend in '{key}'"));
 	};
 	match backend {
 		"github" => {
@@ -69,7 +69,7 @@ fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 					api_url: None,
 					exposed: None,
 				},
-				table => table.try_into().map_err(|error| format!("invalid options for `{key}`: {error}"))?,
+				table => table.try_into().map_err(|error| format!("invalid options for '{key}': {error}"))?,
 			};
 			// trim so the url can be concatenated with paths
 			options.api_url = options.api_url.map(|api_url| api_url.trim().trim_end_matches('/').to_owned());
@@ -77,11 +77,11 @@ fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 			if let Some(exposed) = options.exposed.as_ref()
 				&& exposed.iter().any(|pattern| pattern.trim().is_empty())
 			{
-				return Err(format!("invalid `exposed` for `{key}`: expected non-empty patterns"));
+				return Err(format!("invalid 'exposed' for '{key}': expected non-empty patterns"));
 			}
 			Ok(ToolOptions::Github(options))
 		}
-		_ => Err(format!("unsupported backend `{backend}` in `{key}`")),
+		_ => Err(format!("unsupported backend '{backend}' in '{key}'")),
 	}
 }
 
@@ -109,8 +109,8 @@ pub(crate) enum LoadError {
 impl fmt::Display for LoadError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::Io { path, source } => write!(f, "failed to read `{}`: {source}", path.display()),
-			Self::Parse { path, source } => write!(f, "failed to parse `{}`: {source}", path.display()),
+			Self::Io { path, source } => write!(f, "failed to read '{}': {source}", path.display()),
+			Self::Parse { path, source } => write!(f, "failed to parse '{}': {source}", path.display()),
 		}
 	}
 }
@@ -312,10 +312,10 @@ mod tests {
 	fn rejects_invalid_tool_options() {
 		let cases = [
 			(r#""github:owner/repo" = { version = "1", token = "x" }"#, "unknown field"),
-			(r#""gitlab:owner/repo" = { version = "1" }"#, "unsupported backend `gitlab`"),
-			(r#""gitlab:owner/repo" = "1""#, "unsupported backend `gitlab`"),
-			(r#""owner/repo" = "1""#, "missing backend in `owner/repo`"),
-			(r#""github:owner/repo" = { version = "1", exposed = ["tool", ""] }"#, "invalid `exposed`"),
+			(r#""gitlab:owner/repo" = { version = "1" }"#, "unsupported backend 'gitlab'"),
+			(r#""gitlab:owner/repo" = "1""#, "unsupported backend 'gitlab'"),
+			(r#""owner/repo" = "1""#, "missing backend in 'owner/repo'"),
+			(r#""github:owner/repo" = { version = "1", exposed = ["tool", ""] }"#, "invalid 'exposed'"),
 		];
 		for (tools, needle) in cases {
 			let tmp = tempfile::tempdir().unwrap();

@@ -176,8 +176,8 @@ impl From<StateError> for LocateError {
 impl fmt::Display for LocateError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::Io { path, source } => write!(f, "failed to access `{}`: {source}", path.display()),
-			Self::RelativeDir { name, path } => write!(f, "{name} must be absolute, got `{}`", path.display()),
+			Self::Io { path, source } => write!(f, "failed to access '{}': {source}", path.display()),
+			Self::RelativeDir { name, path } => write!(f, "{name} must be absolute, got '{}'", path.display()),
 			Self::State(error) => fmt::Display::fmt(error, f),
 		}
 	}

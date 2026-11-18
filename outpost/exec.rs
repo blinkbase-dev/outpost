@@ -30,7 +30,7 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	let tool_spec = tool.to_str().ok_or("tool must be valid utf-8")?;
 	let spec = ToolSpec::parse(tool_spec)?;
 	let Some(request) = requests.iter().find(|entry| spec.matches(&entry.tool)) else {
-		return Err(format!("`{tool_spec}` is not requested by the current config").into());
+		return Err(format!("'{tool_spec}' is not requested by the current config").into());
 	};
 	let Some((install_path, installed_version)) = lock.tools.iter().find_map(|tool| match (&request.tool, tool) {
 		(
@@ -52,14 +52,14 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	}) else {
 		return Err(
 			format!(
-				"`{tool_spec}` is not installed\n  from {}\nrun `op install` to install it",
+				"'{tool_spec}' is not installed\n  from {}\nrun 'op install' to install it",
 				request.origin.display()
 			)
 			.into(),
 		);
 	};
 	let mut command = args.command.into_iter();
-	let binary = command.next().ok_or("missing binary name after `--`")?;
+	let binary = command.next().ok_or("missing binary name after '--'")?;
 	let binary = binary.to_str().ok_or("binary name must be valid utf-8")?;
 	let install_dir = tools_dir.join(install_path);
 	let matches = candidates::find_binaries_cached(&install_dir, binary, paths.state.binaries.get(install_path).map(Vec::as_slice))?;
@@ -69,16 +69,16 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 			if !install_dir.is_dir() {
 				return Err(
 					format!(
-						"`{tool_spec}` is not installed\n  from {}\nrun `op install` to install it",
+						"'{tool_spec}' is not installed\n  from {}\nrun 'op install' to install it",
 						request.origin.display()
 					)
 					.into(),
 				);
 			}
-			return Err(format!("`{binary}` was not found in {} ({})", request.origin.display(), installed_version).into());
+			return Err(format!("'{binary}' was not found in {} ({})", request.origin.display(), installed_version).into());
 		}
 		paths => {
-			let mut message = format!("multiple `{binary}` binaries found in {}:", install_dir.display());
+			let mut message = format!("multiple '{binary}' binaries found in {}:", install_dir.display());
 			for path in paths {
 				message.push_str(&format!("\n  {}", path.display()));
 			}
@@ -99,7 +99,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
 	let name = Path::new(shim).file_stem().and_then(OsStr::to_str).ok_or("invalid shim name")?;
 	let Some(shims) = paths.state.shims.get(&name.to_ascii_lowercase()) else {
-		return Err(format!("no installed tool provides `{name}`").into());
+		return Err(format!("no installed tool provides '{name}'").into());
 	};
 	let requests = candidates::requests(&paths)?;
 	let mut missing = None;
@@ -137,7 +137,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		return Ok(candidates::run(&path, args)?);
 	}
 	if let Some(dir) = missing {
-		return Err(format!("`{name}` was not found in {}", dir.display()).into());
+		return Err(format!("'{name}' was not found in {}", dir.display()).into());
 	}
 	// the config requests this tool, but not a version that is installed
 	for request in &requests {
@@ -150,10 +150,10 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 			}
 		};
 		if let Some(spec) = spec {
-			return Err(format!("`{name}` is not installed for `{spec}`\nrun `op install` to install it").into());
+			return Err(format!("'{name}' is not installed for '{spec}'\nrun 'op install' to install it").into());
 		}
 	}
-	let mut message = format!("`{name}` is not requested by the current config:");
+	let mut message = format!("'{name}' is not requested by the current config:");
 	for entry in shims {
 		message.push_str(&match entry {
 			ShimEntry::Github {

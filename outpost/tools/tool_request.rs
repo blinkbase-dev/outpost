@@ -114,8 +114,8 @@ pub(crate) enum ToolRequestError {
 impl fmt::Display for ToolRequestError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::InvalidFullName { path, key } => write!(f, "invalid full name in `{key}` from `{}`", path.display()),
-			Self::EmptyVersion { path, key } => write!(f, "missing version for `{key}` from `{}`", path.display()),
+			Self::InvalidFullName { path, key } => write!(f, "invalid full name in '{key}' from '{}'", path.display()),
+			Self::EmptyVersion { path, key } => write!(f, "missing version for '{key}' from '{}'", path.display()),
 		}
 	}
 }
