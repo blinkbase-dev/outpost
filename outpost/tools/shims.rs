@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::fmt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use super::lock::{Lock, LockedTool};
 use crate::config::state::{State, StateError};
@@ -9,8 +9,8 @@ use crate::tools::candidates;
 
 #[cfg(windows)]
 mod windows_import {
-	pub(super) use std::collections::BTreeMap;
 	pub(super) use std::os::windows::fs::OpenOptionsExt;
+	pub(super) use std::path::Component;
 
 	pub(super) use crate::config::state::ShimEntry;
 }
@@ -52,8 +52,9 @@ pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, lock: &Lock) -
 }
 
 #[cfg(windows)]
-pub(crate) fn index_shims(state: &mut State, lock: &Lock) {
+pub(crate) fn index_shims(state: &mut State, lock: &Lock) -> Result<(), ShimError> {
 	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();
+	let mut conflicts = Vec::new();
 	for tool in &lock.tools {
 		match tool {
 			LockedTool::Github {
@@ -74,22 +75,38 @@ pub(crate) fn index_shims(state: &mut State, lock: &Lock) {
 					names.entry(name.to_ascii_lowercase()).or_default().push(binary.clone());
 				}
 				for (name, binaries) in names {
+					// a name with more than one binary cannot be shimmed unambiguously
+					let [binary] = binaries.as_slice() else {
+						conflicts.push(ShimConflict {
+							name,
+							paths: binaries.iter().map(|binary| install_path.join(binary)).collect(),
+						});
+						continue;
+					};
 					shims.entry(name).or_default().push(ShimEntry::Github {
 						full_name: full_name.clone(),
 						lane: lane.clone(),
 						requested: requested.clone(),
 						install_path: install_path.clone(),
-						binaries,
+						binary: binary.clone(),
 					});
 				}
 			}
 		}
 	}
+	// drop stale entries so conflicted names stop resolving
+	if !conflicts.is_empty() {
+		let conflicted: HashSet<&str> = conflicts.iter().map(|conflict| conflict.name.as_str()).collect();
+		shims.retain(|name, _| !conflicted.contains(name.as_str()));
+	}
 	state.shims = shims;
+	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
 }
 
 #[cfg(not(windows))]
-pub(crate) fn index_shims(_state: &mut State, _lock: &Lock) {}
+pub(crate) fn index_shims(_state: &mut State, _lock: &Lock) -> Result<(), ShimError> {
+	Ok(())
+}
 
 pub(crate) fn purge(shims_dir: &Path) -> Result<(), ShimError> {
 	let entries = match std::fs::read_dir(shims_dir) {
@@ -153,17 +170,27 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, _lock: &Lock) -> Result<
 #[cfg(not(windows))]
 pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(), ShimError> {
 	std::fs::create_dir_all(shims_dir)?;
+	let mut conflicts = Vec::new();
 	for tool in &lock.tools {
 		match tool {
 			LockedTool::Github { full_name, install_path, .. } => {
 				let Some(binaries) = state.binaries.get(install_path) else {
 					continue;
 				};
+				let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
 				for binary in binaries {
 					let Some(name) = binary.file_name().and_then(OsStr::to_str) else {
 						continue;
 					};
-					if !_is_plain_file_name(name) {
+					names.entry(name.to_owned()).or_default().push(binary);
+				}
+				for (name, binaries) in names {
+					// a name with more than one binary cannot be shimmed unambiguously
+					if binaries.len() > 1 {
+						conflicts.push(ShimConflict {
+							name,
+							paths: binaries.into_iter().map(|binary| install_path.join(binary)).collect(),
+						});
 						continue;
 					}
 					let script = format!(
@@ -171,7 +198,7 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(
 						full_name.replace('\'', "'\\''"),
 						name.replace('\'', "'\\''")
 					);
-					let target = shims_dir.join(name);
+					let target = shims_dir.join(&name);
 					let size_matches = std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() == script.len() as u64);
 					if size_matches && std::fs::read_to_string(&target).is_ok_and(|existing| existing == script) {
 						continue;
@@ -188,18 +215,26 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(
 			}
 		}
 	}
-	Ok(())
+	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
 }
 
+#[cfg(windows)]
 fn _is_plain_file_name(name: &str) -> bool {
 	let mut components = Path::new(name).components();
 	matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 #[derive(Debug)]
+pub(crate) struct ShimConflict {
+	pub(crate) name: String,
+	pub(crate) paths: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
 pub(crate) enum ShimError {
 	Io(std::io::Error),
 	State(StateError),
+	Conflict(Vec<ShimConflict>),
 	#[cfg(windows)]
 	InUse(Vec<PathBuf>),
 	#[cfg(windows)]
@@ -226,6 +261,16 @@ impl fmt::Display for ShimError {
 		match self {
 			Self::Io(error) => fmt::Display::fmt(error, f),
 			Self::State(error) => fmt::Display::fmt(error, f),
+			Self::Conflict(conflicts) => {
+				f.write_str("conflicting binaries, cannot generate shims:")?;
+				for conflict in conflicts {
+					write!(f, "\n  {}:", conflict.name)?;
+					for path in &conflict.paths {
+						write!(f, "\n    {}", path.display())?;
+					}
+				}
+				Ok(())
+			}
 			#[cfg(windows)]
 			Self::InUse(paths) => {
 				f.write_str("cannot regenerate shims, in use:")?;
@@ -245,6 +290,7 @@ impl std::error::Error for ShimError {
 		match self {
 			Self::Io(error) => Some(error),
 			Self::State(error) => Some(error),
+			Self::Conflict(_) => None,
 			#[cfg(windows)]
 			Self::InUse(_) => None,
 			#[cfg(windows)]

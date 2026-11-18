@@ -181,7 +181,7 @@ full_name = "owner/repo"
 lane = ""
 requested = "1.2.3"
 install_path = "github_owner_repo/1.2.3"
-binaries = ["tool.cmd"]
+binary = "tool.cmd"
 "#,
 	)
 	.unwrap();
@@ -220,7 +220,7 @@ full_name = "owner/repo"
 lane = ""
 requested = "1.2.3"
 install_path = "github_owner_repo/1.2.3"
-binaries = ["tool.cmd"]
+binary = "tool.cmd"
 "#,
 	)
 	.unwrap();

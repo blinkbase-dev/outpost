@@ -148,7 +148,7 @@ full_name = "owner/repo"
 lane = ""
 requested = "1.0.0"
 install_path = "github_owner_repo/1.0.0"
-binaries = ["tool.exe"]
+binary = "tool.exe"
 "#;
 	#[cfg(not(windows))]
 	let expected_state = r#"version = 1

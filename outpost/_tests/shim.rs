@@ -75,7 +75,7 @@ full_name = "a/repo"
 lane = ""
 requested = "1"
 install_path = "github_a/1"
-binaries = ["{name}"]
+binary = "{name}"
 "#;
 	#[cfg(not(windows))]
 	let template = r#"version = 1
@@ -132,7 +132,7 @@ full_name = "a/repo"
 lane = ""
 requested = "1"
 install_path = "github_a/1"
-binaries = ["{name}"]
+binary = "{name}"
 "#;
 	#[cfg(not(windows))]
 	let template = r#"version = 1
@@ -192,7 +192,7 @@ full_name = "a/repo"
 lane = ""
 requested = "1"
 install_path = "github_a/1"
-binaries = ["{name}"]
+binary = "{name}"
 "#;
 	#[cfg(not(windows))]
 	let template = r#"version = 1
@@ -209,6 +209,36 @@ registered_paths = []
 		use std::os::unix::fs::PermissionsExt;
 		assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o111, 0o111);
 	}
+}
+
+#[test]
+fn rejects_conflicting_binaries() {
+	let lock = r#"
+version = 1
+
+[[tool]]
+backend = "github"
+full_name = "a/repo"
+lane = ""
+requested = "1"
+tag_name = "v1.0.0"
+install_path = "github_a/1"
+"#;
+	let fixture = Fixture::new(lock);
+	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+	fixture.tool("github_a/1", name);
+	fixture.tool("github_a/1", &format!("nested/{name}"));
+	let output = fixture.run(&fixture.config_dir, &[]);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(!output.status.success(), "{stderr}");
+	assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
+	let normalized = stderr.replace('\\', "/");
+	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_a/1/nested/{name}")), "{stderr}");
+	// the ambiguous name is not shimmed or indexed
+	assert!(!fixture.config_dir.join("shims").join(name).exists());
+	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+	assert!(!state.contains("shims"), "{state}");
 }
 
 #[test]
