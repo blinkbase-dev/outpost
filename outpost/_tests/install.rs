@@ -13,11 +13,14 @@ struct Fixture {
 }
 
 impl Fixture {
-	fn new(config: &str) -> Self {
+	fn new(config: &str, env: Option<&str>) -> Self {
 		let dir = tempfile::tempdir().unwrap();
 		let config_dir = dir.path().join("config");
 		std::fs::create_dir_all(&config_dir).unwrap();
 		std::fs::write(config_dir.join("outpost.toml"), config).unwrap();
+		if let Some(env) = env {
+			std::fs::write(config_dir.join("outpost.dev.toml"), env).unwrap();
+		}
 		Self { _dir: dir, config_dir }
 	}
 
@@ -90,7 +93,7 @@ fn skips_installed_tools() {
 "github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
 "#
 	.replace("{api_url}", &server.uri());
-	let fixture = Fixture::new(&config);
+	let fixture = Fixture::new(&config, None);
 	let first = fixture.run();
 	assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
 	let second = fixture.run();
@@ -115,7 +118,7 @@ fn installs_github_release_asset() {
 "github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
 "#
 	.replace("{api_url}", &server.uri());
-	let fixture = Fixture::new(&config);
+	let fixture = Fixture::new(&config, None);
 	let output = fixture.run();
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
@@ -201,7 +204,7 @@ fn installs_two_versions_of_same_tool() {
 "github:owner/repo" = { version = "2.0.0", api_url = "{api_url}" }
 "#
 	.replace("{api_url}", &server.uri());
-	let fixture = Fixture::new(&one);
+	let fixture = Fixture::new(&one, None);
 	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
 	let output = fixture.run();
 	let stderr = String::from_utf8(output.stderr).unwrap();
@@ -263,7 +266,7 @@ fn installs_same_version_from_two_origins() {
 "github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
 "#
 	.replace("{api_url}", &server.uri());
-	let fixture = Fixture::new(&one);
+	let fixture = Fixture::new(&one, None);
 	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
 	let output = fixture.run();
 	let stderr = String::from_utf8(output.stderr).unwrap();
@@ -306,7 +309,7 @@ fn reports_failed_install_per_origin() {
 "github:owner/repo" = { version = "1.0.0", api_url = "{api_url}" }
 "#
 	.replace("{api_url}", &server.uri());
-	let fixture = Fixture::new(&config);
+	let fixture = Fixture::new(&config, None);
 	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), config).unwrap();
 	let output = fixture.run();
 	let stderr = String::from_utf8(output.stderr).unwrap();
@@ -347,7 +350,7 @@ mod exposed {
 "github:owner/repo" = { version = "1.0.0", api_url = "{api_url}", exposed = ["*"] }
 "#
 		.replace("{api_url}", &server.uri());
-		let fixture = Fixture::new(&config);
+		let fixture = Fixture::new(&config, None);
 		let output = fixture.run();
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -391,7 +394,7 @@ registered_paths = []
 "#
 		.replace("{api_url}", &server.uri())
 		.replace("{exposed}", helper);
-		let fixture = Fixture::new(&config);
+		let fixture = Fixture::new(&config, None);
 		let output = fixture.run();
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -422,5 +425,85 @@ registered_paths = []
 		assert_eq!(state, expected);
 		assert!(fixture.config_dir.join("shims").join(helper).exists());
 		assert!(!fixture.config_dir.join("shims").join(binary).exists());
+	}
+
+	#[test]
+	fn exposes_binaries_from_every_request() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let server = runtime.block_on(MockServer::start());
+		let helper = if cfg!(windows) { "helper.exe" } else { "helper" };
+		let (_, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+		// both requests resolve to the same artifact
+		let config = r#"[tools]
+"github:owner/repo" = { version = "1.0.0", api_url = "{api_url}", exposed = ["{binary}"] }
+"#
+		.replace("{api_url}", &server.uri())
+		.replace("{binary}", binary);
+		let env = r#"[tools]
+"github:owner/repo" = { version = "v1.0.0", api_url = "{api_url}", exposed = ["bin/{helper}"] }
+"#
+		.replace("{api_url}", &server.uri())
+		.replace("{helper}", helper);
+		let fixture = Fixture::new(&config, Some(&env));
+		let output = fixture.run();
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		// both allowlists apply to the shared artifact
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		#[cfg(windows)]
+		let expected = r#"version = 1
+registered_paths = []
+
+[binaries]
+"github_owner_repo/1.0.0" = [
+    "{binary}",
+    'bin\helper.exe',
+]
+
+[[shims.helper]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+install_path = "github_owner_repo/1.0.0"
+binary = 'bin\helper.exe'
+
+[[shims.helper]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "v1.0.0"
+install_path = "github_owner_repo/1.0.0"
+binary = 'bin\helper.exe'
+
+[[shims.tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "1.0.0"
+install_path = "github_owner_repo/1.0.0"
+binary = "{binary}"
+
+[[shims.tool]]
+backend = "github"
+full_name = "owner/repo"
+lane = ""
+requested = "v1.0.0"
+install_path = "github_owner_repo/1.0.0"
+binary = "{binary}"
+"#;
+		#[cfg(not(windows))]
+		let expected = r#"version = 1
+registered_paths = []
+
+[binaries]
+"github_owner_repo/1.0.0" = [
+    "{binary}",
+    "bin/helper",
+]
+"#;
+		assert_eq!(state, expected.replace("{binary}", binary));
+		assert!(fixture.config_dir.join("shims").join(binary).exists());
+		assert!(fixture.config_dir.join("shims").join(helper).exists());
 	}
 }

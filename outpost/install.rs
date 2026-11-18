@@ -48,19 +48,12 @@ pub(crate) fn install() -> Result<(), Error> {
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
-	let installed_artifacts = _update_lock_entries(&mut lock, &extractions);
+	let groups = _update_lock_entries(&mut lock, &extractions);
 	lock::write(config_dir, &lock)?;
 	// refresh binaries and shims for the newly installed tools
 	let (mut state, text) = state::read(config_dir)?;
 	state::register_config(&mut state, config_dir, &paths.project);
-	let installed: Vec<(PathBuf, &ToolRequest)> = extractions
-		.iter()
-		.filter_map(|(group, _)| {
-			let request = group.requests.first()?;
-			Some((PathBuf::from(group.artifact_key.as_str()), &request.tool))
-		})
-		.collect();
-	shims::index_installed_binaries(&mut state, tools_dir, &lock, &installed)?;
+	shims::index_installed_binaries(&mut state, tools_dir, &lock, &groups)?;
 	let index_err = shims::index_shims(&mut state, &lock).err();
 	state::write(config_dir, &state, text.as_deref())?;
 	let generate_err: Option<Error> = paths
@@ -70,7 +63,7 @@ pub(crate) fn install() -> Result<(), Error> {
 		.and_then(|dir| shims::generate(&state, dir, &lock).map_err(Error::from))
 		.err();
 	// representative rows are appended after duplicate rows
-	for tool in &lock.tools[lock.tools.len() - installed_artifacts..] {
+	for tool in &lock.tools[lock.tools.len() - groups.len()..] {
 		match tool {
 			LockedTool::Github {
 				full_name,
@@ -159,8 +152,7 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, 
 	}
 }
 
-fn _update_lock_entries(lock: &mut Lock, installed: &[DownloadEntry]) -> usize {
-	let installed_artifacts = installed.len();
+fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionGroup> {
 	let groups: Vec<&ToolResolutionGroup> = installed.iter().map(|(group, _)| group).collect();
 	let row = |group: &ToolResolutionGroup, request: &ToolRequestGroup| match (&request.tool, &group.resolution) {
 		(ToolRequest::Github { full_name, lane, version, .. }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
@@ -188,7 +180,7 @@ fn _update_lock_entries(lock: &mut Lock, installed: &[DownloadEntry]) -> usize {
 	// drop entries replaced by a new install before appending
 	lock.tools.retain(|existing| !incoming.contains(&existing.identity()));
 	lock.tools.extend(rows);
-	installed_artifacts
+	groups
 }
 
 #[cfg(test)]
@@ -227,8 +219,8 @@ mod tests {
 			})
 			.collect();
 		let mut lock = Lock::default();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -273,8 +265,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -319,8 +311,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
@@ -377,8 +369,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![other, LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -432,8 +424,8 @@ mod tests {
 			})
 			.collect();
 		let mut lock = Lock::default();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
+use super::archive::ToolResolutionGroup;
 use super::lock::{Lock, LockedTool};
 use super::tool_request::ToolRequest;
 use crate::config::state::{ShimEntry, State, StateError};
@@ -26,20 +27,31 @@ use unix_import::*;
 #[cfg(windows)]
 use windows_import::*;
 
-pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, installed: &[(PathBuf, &ToolRequest)]) -> Result<(), ShimError> {
-	let mut indexed = candidates::find_binaries_by_tool(tools_dir, installed.iter().map(|(install_path, _)| install_path.as_path()))?;
-	for (install_path, request) in installed {
-		let Some(binaries) = indexed.get_mut(install_path.as_path()) else {
+pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, groups: &[&ToolResolutionGroup]) -> Result<(), ShimError> {
+	let install_paths: Vec<PathBuf> = groups.iter().map(|group| PathBuf::from(group.artifact_key.as_str())).collect();
+	let mut indexed = candidates::find_binaries_by_tool(tools_dir, install_paths.iter().map(PathBuf::as_path))?;
+	for group in groups {
+		let Some(binaries) = indexed.get_mut(Path::new(group.artifact_key.as_str())) else {
 			continue;
 		};
-		match request {
-			ToolRequest::Github { exposed, .. } => {
-				if let Some(patterns) = exposed {
-					let set = _exposed_set(patterns)?;
-					binaries.retain(|binary| set.is_match(binary));
+		let mut exposed_patterns = Vec::new();
+		let mut expose_all = false;
+		// identities sharing one artifact contribute to a single allowlist
+		for request in &group.requests {
+			match &request.tool {
+				ToolRequest::Github { exposed: Some(exposed), .. } => exposed_patterns.extend(exposed.iter().map(String::as_str)),
+				ToolRequest::Github { exposed: None, .. } => {
+					expose_all = true;
+					break;
 				}
 			}
 		}
+		// a missing list exposes everything, so the artifact stays unfiltered
+		if expose_all {
+			continue;
+		}
+		let set = _exposed_set(exposed_patterns)?;
+		binaries.retain(|binary| set.is_match(binary));
 	}
 	state.binaries.extend(indexed);
 	let locked_install_paths: HashSet<&Path> = lock
@@ -53,7 +65,7 @@ pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock
 	Ok(())
 }
 
-fn _exposed_set(patterns: &[String]) -> Result<GlobSet, ShimError> {
+fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobSet, ShimError> {
 	let mut builder = GlobSetBuilder::new();
 	for pattern in patterns {
 		// '*' stays within one path segment, '**' crosses them
