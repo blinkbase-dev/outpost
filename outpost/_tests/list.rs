@@ -114,8 +114,8 @@ fn lists_duplicate_requests_per_config_file() {
 github:owner/repo  1.2.3      missing  {source1}
 github:owner/repo  1.2.3      missing  {source2}
 "#;
-	let source1 = fixture.config_dir.join("outpost.toml").display().to_string();
-	let source2 = fixture.config_dir.join("outpost.dev.toml").display().to_string();
+	let source1 = fixture.config_dir.join("outpost.dev.toml").display().to_string();
+	let source2 = fixture.config_dir.join("outpost.toml").display().to_string();
 	let expected = template.replace("{source1}", &source1).replace("{source2}", &source2);
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }

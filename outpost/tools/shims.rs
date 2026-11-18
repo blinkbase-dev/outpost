@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use super::lock::{Lock, LockedTool};
+use super::tool_request::ToolRequest;
 use crate::config::state::{ShimEntry, State, StateError};
 use crate::tools::candidates;
 
@@ -23,8 +24,8 @@ use unix_import::*;
 #[cfg(windows)]
 use windows_import::*;
 
-pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, install_paths: &[PathBuf]) -> Result<(), ShimError> {
-	let indexed = candidates::find_binaries_by_tool(tools_dir, install_paths.iter().map(PathBuf::as_path))?;
+pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, installed: &[(PathBuf, &ToolRequest)]) -> Result<(), ShimError> {
+	let indexed = candidates::find_binaries_by_tool(tools_dir, installed.iter().map(|(install_path, _)| install_path.as_path()))?;
 	state.binaries.extend(indexed);
 	let locked_install_paths: HashSet<&Path> = lock
 		.tools

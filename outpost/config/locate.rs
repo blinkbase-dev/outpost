@@ -65,21 +65,20 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 
 fn system_configs(home_config_dir: Option<&Path>, config_dir: Option<&Path>, envs: Option<&str>) -> Result<(Option<PathBuf>, Vec<PathBuf>), LocateError> {
 	let mut files = Vec::new();
-	let dir = if let Some(path) = config_dir.filter(|path| !path.is_empty()) {
+	let (dir, file) = if let Some(path) = config_dir.filter(|path| !path.is_empty()) {
 		if !path.is_absolute() {
 			return Err(LocateError::RelativeDir {
 				name: "OUTPOST_CONFIG_DIR",
 				path: path.to_path_buf(),
 			});
 		}
-		files.push(path.join("outpost.toml"));
-		path
+		(path, "outpost.toml")
 	} else if let Some(path) = home_config_dir {
-		files.push(path.join("config.toml"));
-		path
+		(path, "config.toml")
 	} else {
 		return Ok((None, files));
 	};
+	// env files come first so they take precedence over the base file
 	if let Some(envs) = envs {
 		let mut seen = HashSet::new();
 		for env in envs.split(',') {
@@ -89,11 +88,12 @@ fn system_configs(home_config_dir: Option<&Path>, config_dir: Option<&Path>, env
 			}
 		}
 	}
+	files.push(dir.join(file));
 	Ok((Some(dir.to_path_buf()), files))
 }
 
 fn project_configs(cwd: &Path, config_dir: Option<&Path>) -> Vec<PathBuf> {
-	let mut configs: Vec<PathBuf> = cwd
+	let configs: Vec<PathBuf> = cwd
 		.ancestors()
 		.map(|dir| dir.join("outpost.toml"))
 		.filter(|path| path.is_file())
@@ -101,7 +101,6 @@ fn project_configs(cwd: &Path, config_dir: Option<&Path>) -> Vec<PathBuf> {
 		.map(|path| std::fs::canonicalize(&path).unwrap_or(path))
 		.filter(|path| config_dir.is_none_or(|config_dir| path.parent() != Some(config_dir)))
 		.collect();
-	configs.reverse();
 	configs
 }
 
@@ -218,8 +217,8 @@ mod tests {
 		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
 		assert_eq!(locations.system, vec![home_config_dir.join("config.toml")]);
 		assert_eq!(locations.project, vec![
-			std::fs::canonicalize(nested.join("outpost.toml")).unwrap(),
-			std::fs::canonicalize(cwd.join("outpost.toml")).unwrap()
+			std::fs::canonicalize(cwd.join("outpost.toml")).unwrap(),
+			std::fs::canonicalize(nested.join("outpost.toml")).unwrap()
 		]);
 	}
 
@@ -238,9 +237,9 @@ mod tests {
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
 		assert_eq!(locations.system, vec![
-			home_config_dir.join("config.toml"),
 			home_config_dir.join("outpost.dev.toml"),
 			home_config_dir.join("outpost.prod.toml"),
+			home_config_dir.join("config.toml"),
 		]);
 
 		// config
@@ -283,7 +282,7 @@ mod tests {
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
-		assert_eq!(locations.system, vec![config_dir.join("outpost.toml"), config_dir.join("outpost.dev.toml"),]);
+		assert_eq!(locations.system, vec![config_dir.join("outpost.dev.toml"), config_dir.join("outpost.toml"),]);
 
 		// config + duplicate envs
 		let env = ConfigEnv {
@@ -293,7 +292,7 @@ mod tests {
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
 		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
-		assert_eq!(locations.system, vec![config_dir.join("outpost.toml"), config_dir.join("outpost.dev.toml"),]);
+		assert_eq!(locations.system, vec![config_dir.join("outpost.dev.toml"), config_dir.join("outpost.toml"),]);
 	}
 
 	#[test]

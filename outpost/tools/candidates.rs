@@ -13,7 +13,7 @@ use crate::config::locate::ConfigPaths;
 const MAX_BINARY_DEPTH: usize = 1;
 
 pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequestEntry>, CandidatesError> {
-	let configs = loader::load_paths(paths.project.iter().rev().chain(paths.system.iter().rev()))?;
+	let configs = loader::load_paths(paths.project.iter().chain(paths.system.iter()))?;
 	Ok(tool_request::requests(&configs)?)
 }
 
@@ -303,15 +303,15 @@ mod tests {
 	#[test]
 	fn orders_project_before_system_and_skips_registered() {
 		let dir = tempfile::tempdir().unwrap();
-		let base = write(dir.path(), "system/config.toml", &["github:o/base"]);
+		let inner = write(dir.path(), "inner/outpost.toml", &["github:o/inner"]);
+		let outer = write(dir.path(), "outer/outpost.toml", &["github:o/outer"]);
 		let dev = write(dir.path(), "system/outpost.dev.toml", &["github:o/dev"]);
 		let prod = write(dir.path(), "system/outpost.prod.toml", &["github:o/prod"]);
-		let outer = write(dir.path(), "outer/outpost.toml", &["github:o/outer"]);
-		let inner = write(dir.path(), "inner/outpost.toml", &["github:o/inner"]);
+		let base = write(dir.path(), "system/config.toml", &["github:o/base"]);
 		let registered = write(dir.path(), "other/outpost.toml", &["github:o/registered"]);
 		let paths = ConfigPaths {
-			system: vec![base, dev, prod],
-			project: vec![outer, inner],
+			system: vec![dev, prod, base],
+			project: vec![inner, outer],
 			state: State {
 				registered_paths: vec![registered],
 				..State::default()
@@ -325,7 +325,7 @@ mod tests {
 				ToolRequest::Github { full_name, .. } => full_name.as_str(),
 			})
 			.collect();
-		assert_eq!(names, vec!["o/inner", "o/outer", "o/prod", "o/dev", "o/base"]);
+		assert_eq!(names, vec!["o/inner", "o/outer", "o/dev", "o/prod", "o/base"]);
 	}
 
 	#[test]

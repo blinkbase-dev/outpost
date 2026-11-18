@@ -101,6 +101,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 			ToolRequestEntry {
@@ -110,6 +111,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 		];
@@ -124,6 +126,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 			ToolStatus {
@@ -135,6 +138,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 		]);
@@ -163,6 +167,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
 				api_url: None,
+				exposed: None,
 			},
 		}];
 		let report = report(requests, &lock, &tools);
@@ -175,6 +180,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
 				api_url: None,
+				exposed: None,
 			},
 		}]);
 		assert!(report.unrequested.is_empty());
@@ -222,6 +228,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 			ToolRequestEntry {
@@ -231,6 +238,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 		];
@@ -245,6 +253,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 			ToolStatus {
@@ -256,6 +265,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 		]);
@@ -283,6 +293,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
 				api_url: None,
+				exposed: None,
 			},
 		}]);
 		assert!(missing_from_lock(requests, &lock, &tools).is_empty());
@@ -309,6 +320,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
 				api_url: None,
+				exposed: None,
 			},
 		}]);
 		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 1);
@@ -334,12 +346,14 @@ mod tests {
 			lane: "cli/".to_owned(),
 			version: Version::parse("1.2.3"),
 			api_url: None,
+			exposed: None,
 		};
 		let other_version = ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
 			api_url: None,
+			exposed: None,
 		};
 		let requests = ToolRequestGroup::from_entries(vec![
 			ToolRequestEntry {
@@ -374,12 +388,14 @@ mod tests {
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
 			api_url: None,
+			exposed: None,
 		};
 		let missing = ToolRequest::Github {
 			full_name: "owner/other".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
 			api_url: None,
+			exposed: None,
 		};
 		let requests = missing_from_lock(
 			ToolRequestGroup::from_entries(vec![

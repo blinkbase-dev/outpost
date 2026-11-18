@@ -7,7 +7,8 @@ use serde::Deserialize;
 use super::locate::ConfigPaths;
 
 pub(crate) fn load(paths: &ConfigPaths) -> Result<Vec<ConfigFile>, LoadError> {
-	load_paths(paths.system.iter().chain(&paths.project).chain(&paths.state.registered_paths))
+	// earlier files take precedence
+	load_paths(paths.project.iter().chain(&paths.system).chain(&paths.state.registered_paths))
 }
 
 pub(crate) fn load_paths<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) -> Result<Vec<ConfigFile>, LoadError> {
@@ -63,11 +64,21 @@ fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 		"github" => {
 			let mut options: GithubOptionsTable = match value {
 				// shorthand form fills the same table
-				toml::Value::String(version) => GithubOptionsTable { version, api_url: None },
+				toml::Value::String(version) => GithubOptionsTable {
+					version,
+					api_url: None,
+					exposed: None,
+				},
 				table => table.try_into().map_err(|error| format!("invalid options for `{key}`: {error}"))?,
 			};
 			// trim so the url can be concatenated with paths
 			options.api_url = options.api_url.map(|api_url| api_url.trim().trim_end_matches('/').to_owned());
+			// reject blank patterns since they cannot match a binary
+			if let Some(exposed) = options.exposed.as_ref() {
+				if exposed.iter().any(|pattern| pattern.trim().is_empty()) {
+					return Err(format!("invalid `exposed` for `{key}`: expected non-empty patterns"));
+				}
+			}
 			Ok(ToolOptions::Github(options))
 		}
 		_ => Err(format!("unsupported backend `{backend}` in `{key}`")),
@@ -85,6 +96,8 @@ pub(crate) struct GithubOptionsTable {
 	pub(crate) version: String,
 	#[serde(default)]
 	pub(crate) api_url: Option<String>,
+	#[serde(default)]
+	pub(crate) exposed: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -134,8 +147,8 @@ mod tests {
 	#[test]
 	fn loads_files_from_all_sources() {
 		let tmp = tempfile::tempdir().unwrap();
-		let system = _config(tmp.path(), "system.toml", r#""github:a/system" = "1""#);
-		let project = _config(tmp.path(), "project.toml", r#""github:a/project" = "2""#);
+		let project = _config(tmp.path(), "project.toml", r#""github:a/project" = "1""#);
+		let system = _config(tmp.path(), "system.toml", r#""github:a/system" = "2""#);
 		let registered = _config(tmp.path(), "registered.toml", r#""github:a/registered" = "3""#);
 		let files = load(&ConfigPaths {
 			system: vec![system.clone()],
@@ -148,11 +161,11 @@ mod tests {
 		})
 		.unwrap();
 		assert_eq!(files.len(), 3);
-		assert_eq!(files[0].path, system);
-		assert_eq!(files[1].path, project);
+		assert_eq!(files[0].path, project);
+		assert_eq!(files[1].path, system);
 		assert_eq!(files[2].path, registered);
-		assert_eq!(_version(&files[0].config.tools["github:a/system"]), "1");
-		assert_eq!(_version(&files[1].config.tools["github:a/project"]), "2");
+		assert_eq!(_version(&files[0].config.tools["github:a/project"]), "1");
+		assert_eq!(_version(&files[1].config.tools["github:a/system"]), "2");
 		assert_eq!(_version(&files[2].config.tools["github:a/registered"]), "3");
 	}
 
@@ -173,6 +186,7 @@ mod tests {
 			ToolOptions::Github(GithubOptionsTable {
 				version: "latest".to_owned(),
 				api_url: None,
+				exposed: None,
 			})
 		);
 	}
@@ -181,7 +195,9 @@ mod tests {
 	fn loads_table_form() {
 		let tmp = tempfile::tempdir().unwrap();
 		let tools = r#""github:owner/repo" = { version = "0.26.0" }
-"github:owner/other" = { version = "0.26.0", api_url = " http://127.0.0.1:8080/ " }"#;
+"github:owner/other" = { version = "0.26.0", api_url = " http://127.0.0.1:8080/ " }
+"github:owner/empty" = { version = "0.26.0", exposed = [] }
+"github:owner/exposed" = { version = "0.26.0", exposed = ["tool", "bin/*"] }"#;
 		let path = _config(tmp.path(), "outpost.toml", tools);
 		let files = load(&ConfigPaths {
 			system: vec![path],
@@ -194,6 +210,7 @@ mod tests {
 			ToolOptions::Github(GithubOptionsTable {
 				version: "0.26.0".to_owned(),
 				api_url: None,
+				exposed: None,
 			})
 		);
 		assert_eq!(
@@ -201,6 +218,23 @@ mod tests {
 			ToolOptions::Github(GithubOptionsTable {
 				version: "0.26.0".to_owned(),
 				api_url: Some("http://127.0.0.1:8080".to_owned()),
+				exposed: None,
+			})
+		);
+		assert_eq!(
+			files[0].config.tools["github:owner/empty"],
+			ToolOptions::Github(GithubOptionsTable {
+				version: "0.26.0".to_owned(),
+				api_url: None,
+				exposed: Some(Vec::new()),
+			})
+		);
+		assert_eq!(
+			files[0].config.tools["github:owner/exposed"],
+			ToolOptions::Github(GithubOptionsTable {
+				version: "0.26.0".to_owned(),
+				api_url: None,
+				exposed: Some(vec!["tool".to_owned(), "bin/*".to_owned()]),
 			})
 		);
 	}
@@ -208,25 +242,27 @@ mod tests {
 	#[test]
 	fn keeps_files_separate() {
 		let tmp = tempfile::tempdir().unwrap();
-		let system = _config(tmp.path(), "config.toml", concat!(r#""github:a/one" = "1""#, "\n", r#""github:a/two" = "1""#));
-		let system_env = _config(tmp.path(), "outpost.dev.toml", r#""github:a/one" = "2""#);
-		let project_outer = _config(tmp.path(), "outer.toml", r#""github:a/one" = "3""#);
 		let project_inner = _config(tmp.path(), "inner.toml", concat!(r#""github:a/one" = "4""#, "\n", r#""github:a/three" = "3""#));
+		let project_outer = _config(tmp.path(), "outer.toml", r#""github:a/one" = "3""#);
+		let system_env = _config(tmp.path(), "outpost.dev.toml", r#""github:a/one" = "2""#);
+		let system = _config(tmp.path(), "config.toml", concat!(r#""github:a/one" = "1""#, "\n", r#""github:a/two" = "1""#));
 		let files = load(&ConfigPaths {
-			system: vec![system, system_env],
-			project: vec![project_outer, project_inner],
+			system: vec![system_env, system],
+			project: vec![project_inner, project_outer],
 			..ConfigPaths::default()
 		})
 		.unwrap();
 		assert_eq!(files.len(), 4);
 		assert_eq!(files[0].config.tools.len(), 2);
-		assert_eq!(_version(&files[0].config.tools["github:a/one"]), "1");
-		assert_eq!(_version(&files[0].config.tools["github:a/two"]), "1");
-		assert_eq!(_version(&files[1].config.tools["github:a/one"]), "2");
-		assert_eq!(_version(&files[2].config.tools["github:a/one"]), "3");
+		assert_eq!(_version(&files[0].config.tools["github:a/one"]), "4");
+		assert_eq!(_version(&files[0].config.tools["github:a/three"]), "3");
+		assert_eq!(files[1].config.tools.len(), 1);
+		assert_eq!(_version(&files[1].config.tools["github:a/one"]), "3");
+		assert_eq!(files[2].config.tools.len(), 1);
+		assert_eq!(_version(&files[2].config.tools["github:a/one"]), "2");
 		assert_eq!(files[3].config.tools.len(), 2);
-		assert_eq!(_version(&files[3].config.tools["github:a/one"]), "4");
-		assert_eq!(_version(&files[3].config.tools["github:a/three"]), "3");
+		assert_eq!(_version(&files[3].config.tools["github:a/one"]), "1");
+		assert_eq!(_version(&files[3].config.tools["github:a/two"]), "1");
 	}
 
 	#[test]
@@ -279,6 +315,7 @@ mod tests {
 			(r#""gitlab:owner/repo" = { version = "1" }"#, "unsupported backend `gitlab`"),
 			(r#""gitlab:owner/repo" = "1""#, "unsupported backend `gitlab`"),
 			(r#""owner/repo" = "1""#, "missing backend in `owner/repo`"),
+			(r#""github:owner/repo" = { version = "1", exposed = ["tool", ""] }"#, "invalid `exposed`"),
 		];
 		for (tools, needle) in cases {
 			let tmp = tempfile::tempdir().unwrap();
