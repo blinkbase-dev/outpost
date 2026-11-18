@@ -10,8 +10,21 @@ pub(crate) fn locate(cwd: &Path) -> Result<ConfigPaths, LocateError> {
 
 fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> {
 	let cwd = std::path::absolute(cwd).map_err(|source| (cwd.to_path_buf(), source))?;
-	let (system_dir, system) = system_configs(env.home_config_dir.as_deref(), env.config_dir.as_deref(), env.envs.as_deref())?;
-	let system_dir = system_dir.map(|dir| std::fs::canonicalize(&dir).unwrap_or(dir));
+	let (config_dir, system) = system_configs(env.home_config_dir.as_deref(), env.config_dir.as_deref(), env.envs.as_deref())?;
+	let config_dir = config_dir.map(|dir| std::fs::canonicalize(&dir).unwrap_or(dir));
+	// system paths are canonical like project paths so they compare equal
+	let system: Vec<PathBuf> = system.into_iter().map(|path| std::fs::canonicalize(&path).unwrap_or(path)).collect();
+	// data defaults to the home directory until OUTPOST_DATA_DIR is set
+	let data_dir = match env.data_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
+		Some(path) if !path.is_absolute() => {
+			return Err(LocateError::RelativeDir {
+				name: "OUTPOST_DATA_DIR",
+				path: path.to_path_buf(),
+			});
+		}
+		Some(path) => Some(path.to_path_buf()),
+		None => env.home_config_dir.clone(),
+	};
 	let downloads_dir = match env.downloads_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
 		Some(path) if !path.is_absolute() => {
 			return Err(LocateError::RelativeDir {
@@ -20,7 +33,7 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 			});
 		}
 		Some(path) => Some(path.to_path_buf()),
-		None => system_dir.as_ref().map(|dir| dir.join("downloads")),
+		None => data_dir.as_ref().map(|dir| dir.join("downloads")),
 	};
 	let tools_dir = match env.tools_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
 		Some(path) if !path.is_absolute() => {
@@ -30,7 +43,7 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 			});
 		}
 		Some(path) => Some(path.to_path_buf()),
-		None => system_dir.as_ref().map(|dir| dir.join("tools")),
+		None => data_dir.as_ref().map(|dir| dir.join("tools")),
 	};
 	let shims_dir = match env.shims_dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
 		Some(path) if !path.is_absolute() => {
@@ -40,20 +53,20 @@ fn locate_with(cwd: &Path, env: &ConfigEnv) -> Result<ConfigPaths, LocateError> 
 			});
 		}
 		Some(path) => Some(path.to_path_buf()),
-		None => system_dir.as_ref().map(|dir| dir.join("shims")),
+		None => data_dir.as_ref().map(|dir| dir.join("shims")),
 	};
-	let project = project_configs(&cwd, system_dir.as_deref());
-	let state = match system_dir.as_deref().filter(|dir| dir.is_dir()) {
-		Some(config_dir) => {
-			let (mut state, _) = state::read(config_dir)?;
+	let project = project_configs(&cwd, config_dir.as_deref(), &system);
+	let state = match data_dir.as_deref().filter(|dir| dir.is_dir()) {
+		Some(data_dir) => {
+			let (mut state, _) = state::read(data_dir)?;
 			let project: HashSet<_> = project.iter().collect();
-			state.registered_paths.retain(|path| !project.contains(path));
+			state.registered_paths.retain(|path| !project.contains(path) && !system.contains(path));
 			state
 		}
 		None => State::default(),
 	};
 	Ok(ConfigPaths {
-		system_dir,
+		data_dir,
 		downloads_dir,
 		tools_dir,
 		shims_dir,
@@ -92,22 +105,24 @@ fn system_configs(home_config_dir: Option<&Path>, config_dir: Option<&Path>, env
 	Ok((Some(dir.to_path_buf()), files))
 }
 
-fn project_configs(cwd: &Path, config_dir: Option<&Path>) -> Vec<PathBuf> {
-	let configs: Vec<PathBuf> = cwd
+fn project_configs(cwd: &Path, config_dir: Option<&Path>, system_configs: &[PathBuf]) -> Vec<PathBuf> {
+	cwd
 		.ancestors()
 		.map(|dir| dir.join("outpost.toml"))
 		.filter(|path| path.is_file())
-		// skip the system config dir, including through symlinks; hardlinks are not detected
 		.map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+		// skip the system config dir, including through symlinks; hardlinks are not detected
 		.filter(|path| config_dir.is_none_or(|config_dir| path.parent() != Some(config_dir)))
-		.collect();
-	configs
+		// a project config can resolve to the same file as a system config
+		.filter(|path| !system_configs.contains(path))
+		.collect()
 }
 
 #[derive(Default)]
 struct ConfigEnv {
 	home_config_dir: Option<PathBuf>,
 	config_dir: Option<PathBuf>,
+	data_dir: Option<PathBuf>,
 	downloads_dir: Option<PathBuf>,
 	tools_dir: Option<PathBuf>,
 	shims_dir: Option<PathBuf>,
@@ -119,6 +134,7 @@ impl ConfigEnv {
 		Self {
 			home_config_dir: std::env::home_dir().map(|home| home.join(".outpost")),
 			config_dir: std::env::var_os("OUTPOST_CONFIG_DIR").map(PathBuf::from),
+			data_dir: std::env::var_os("OUTPOST_DATA_DIR").map(PathBuf::from),
 			downloads_dir: std::env::var_os("OUTPOST_DOWNLOADS_DIR").map(PathBuf::from),
 			tools_dir: std::env::var_os("OUTPOST_TOOLS_DIR").map(PathBuf::from),
 			shims_dir: std::env::var_os("OUTPOST_SHIMS_DIR").map(PathBuf::from),
@@ -129,7 +145,7 @@ impl ConfigEnv {
 
 #[derive(Default)]
 pub(crate) struct ConfigPaths {
-	pub(crate) system_dir: Option<PathBuf>,
+	pub(crate) data_dir: Option<PathBuf>,
 	pub(crate) downloads_dir: Option<PathBuf>,
 	pub(crate) tools_dir: Option<PathBuf>,
 	pub(crate) shims_dir: Option<PathBuf>,
@@ -201,7 +217,7 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&flat, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
+		assert_eq!(locations.data_dir.as_ref(), Some(&home_config_dir));
 		assert_eq!(locations.downloads_dir, Some(home_config_dir.join("downloads")));
 		assert_eq!(locations.tools_dir, Some(home_config_dir.join("tools")));
 		assert_eq!(locations.shims_dir, Some(home_config_dir.join("shims")));
@@ -214,7 +230,6 @@ mod tests {
 		touch(&nested.join("outpost.toml"));
 		touch(&cwd.join("outpost.toml"));
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
 		assert_eq!(locations.system, vec![home_config_dir.join("config.toml")]);
 		assert_eq!(locations.project, vec![
 			std::fs::canonicalize(cwd.join("outpost.toml")).unwrap(),
@@ -235,7 +250,6 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
 		assert_eq!(locations.system, vec![
 			home_config_dir.join("outpost.dev.toml"),
 			home_config_dir.join("outpost.prod.toml"),
@@ -250,7 +264,6 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
 		assert_eq!(locations.system, vec![config_dir.join("outpost.toml")]);
 
 		// config + empty
@@ -260,7 +273,6 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&home_config_dir));
 		assert_eq!(locations.system, vec![home_config_dir.join("config.toml")]);
 
 		// config + relative
@@ -281,7 +293,6 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
 		assert_eq!(locations.system, vec![config_dir.join("outpost.dev.toml"), config_dir.join("outpost.toml"),]);
 
 		// config + duplicate envs
@@ -291,8 +302,35 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&config_dir));
 		assert_eq!(locations.system, vec![config_dir.join("outpost.dev.toml"), config_dir.join("outpost.toml"),]);
+	}
+
+	#[test]
+	fn locates_custom_data_with_env() {
+		let tmp = tempfile::tempdir().unwrap();
+		let cwd = tmp.path().join("cwd");
+		let config_dir = tmp.path().join("configs");
+		let data_dir = tmp.path().join("data");
+		let env = ConfigEnv {
+			config_dir: Some(config_dir.clone()),
+			data_dir: Some(data_dir.clone()),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&cwd, &env).unwrap();
+		assert_eq!(locations.data_dir.as_ref(), Some(&data_dir));
+		assert_eq!(locations.downloads_dir, Some(data_dir.join("downloads")));
+		assert_eq!(locations.tools_dir, Some(data_dir.join("tools")));
+		assert_eq!(locations.shims_dir, Some(data_dir.join("shims")));
+		assert_eq!(locations.system, vec![config_dir.join("outpost.toml")]);
+		// relative value is rejected
+		let env = ConfigEnv {
+			data_dir: Some(PathBuf::from("relative")),
+			..ConfigEnv::default()
+		};
+		assert!(matches!(
+			locate_with(&cwd, &env),
+			Err(LocateError::RelativeDir { name: "OUTPOST_DATA_DIR", path }) if path == Path::new("relative")
+		));
 	}
 
 	#[test]
@@ -308,7 +346,6 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&home));
 		assert_eq!(locations.downloads_dir, Some(downloads));
 		// empty value falls back to the default
 		let env = ConfigEnv {
@@ -342,7 +379,6 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&home));
 		assert_eq!(locations.tools_dir, Some(tools));
 		// empty value falls back to the default
 		let env = ConfigEnv {
@@ -376,7 +412,6 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&home));
 		assert_eq!(locations.shims_dir, Some(shims));
 		// empty value falls back to the default
 		let env = ConfigEnv {
@@ -410,8 +445,7 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&home_config_dir, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&std::fs::canonicalize(&home_config_dir).unwrap()));
-		assert_eq!(locations.system, vec![home_config_dir.join("config.toml")]);
+		assert_eq!(locations.system, vec![std::fs::canonicalize(home_config_dir.join("config.toml")).unwrap()]);
 		assert!(locations.project.is_empty());
 
 		// config
@@ -424,8 +458,7 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&cwd, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&std::fs::canonicalize(&cwd).unwrap()));
-		assert_eq!(locations.system, vec![cwd.join("outpost.toml")]);
+		assert_eq!(locations.system, vec![std::fs::canonicalize(cwd.join("outpost.toml")).unwrap()]);
 		assert_eq!(locations.project, vec![std::fs::canonicalize(nested.join("outpost.toml")).unwrap()]);
 	}
 
@@ -453,8 +486,38 @@ mod tests {
 			..ConfigEnv::default()
 		};
 		let locations = locate_with(&alias, &env).unwrap();
-		assert_eq!(locations.system_dir.as_ref(), Some(&std::fs::canonicalize(&config_dir).unwrap()));
-		assert_eq!(locations.system, vec![config_dir.join("outpost.toml")]);
+		assert_eq!(locations.system, vec![std::fs::canonicalize(config_dir.join("outpost.toml")).unwrap()]);
+		assert!(locations.project.is_empty());
+	}
+
+	#[test]
+	fn excludes_system_config_files_from_project_configs() {
+		let tmp = tempfile::tempdir().unwrap();
+		let config_dir = tmp.path().join("config");
+		fs::create_dir_all(&config_dir).unwrap();
+		let project = tmp.path().join("project");
+		let file = project.join("outpost.toml");
+		touch(&file);
+		let project = std::fs::canonicalize(&project).unwrap();
+		let file = project.join("outpost.toml");
+
+		#[cfg(unix)]
+		let linked = std::os::unix::fs::symlink(&file, config_dir.join("outpost.toml")).is_ok();
+		#[cfg(windows)]
+		let linked = std::os::windows::fs::symlink_file(&file, config_dir.join("outpost.toml")).is_ok();
+		#[cfg(not(any(unix, windows)))]
+		let linked = false;
+		if !linked {
+			eprintln!("skipping: cannot create a file symlink");
+			return;
+		}
+
+		let env = ConfigEnv {
+			config_dir: Some(config_dir),
+			..ConfigEnv::default()
+		};
+		let locations = locate_with(&project, &env).unwrap();
+		assert_eq!(locations.system, vec![file]);
 		assert!(locations.project.is_empty());
 	}
 }
@@ -471,18 +534,21 @@ mod state_tests {
 		let tmp = tempfile::tempdir().unwrap();
 		let config_dir = tmp.path().join("config");
 		fs::create_dir_all(&config_dir).unwrap();
+		let data_dir = tmp.path().join("data");
+		fs::create_dir_all(&data_dir).unwrap();
 		let project = tmp.path().join("project");
 		let config = project.join("outpost.toml");
 		touch(&config);
 		let env = ConfigEnv {
 			config_dir: Some(config_dir.clone()),
+			data_dir: Some(data_dir.clone()),
 			..ConfigEnv::default()
 		};
 		let config = std::fs::canonicalize(&config).unwrap();
 		let locations = locate_with(&project, &env).unwrap();
 		let mut registered = State::default();
-		state::register_config(&mut registered, &config_dir, std::slice::from_ref(&config));
-		state::write(&config_dir, &registered, None).unwrap();
+		state::register_config(&mut registered, &locations.system, std::slice::from_ref(&config));
+		state::write(&data_dir, &registered, None).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 
@@ -498,50 +564,53 @@ mod state_tests {
 		let tmp = tempfile::tempdir().unwrap();
 		let config_dir = tmp.path().join("config");
 		fs::create_dir_all(&config_dir).unwrap();
+		let data_dir = tmp.path().join("data");
+		fs::create_dir_all(&data_dir).unwrap();
 		let project = tmp.path().join("project");
 		let config = project.join("outpost.toml");
 		touch(&config);
 		let env = ConfigEnv {
 			config_dir: Some(config_dir.clone()),
+			data_dir: Some(data_dir.clone()),
 			..ConfigEnv::default()
 		};
 		let config = std::fs::canonicalize(&config).unwrap();
 		let locations = locate_with(&project, &env).unwrap();
 		let mut registered = State::default();
-		state::register_config(&mut registered, &config_dir, std::slice::from_ref(&config));
-		state::write(&config_dir, &registered, None).unwrap();
+		state::register_config(&mut registered, &locations.system, std::slice::from_ref(&config));
+		state::write(&data_dir, &registered, None).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 
 		let locations = locate_with(&project, &env).unwrap();
-		state::register_config(&mut registered, &config_dir, std::slice::from_ref(&config));
-		state::write(&config_dir, &registered, None).unwrap();
+		state::register_config(&mut registered, &locations.system, std::slice::from_ref(&config));
+		state::write(&data_dir, &registered, None).unwrap();
 		assert_eq!(locations.project, vec![config.clone()]);
 		assert!(locations.state.registered_paths.is_empty());
 
-		let text = fs::read_to_string(config_dir.join("state.toml")).unwrap();
+		let text = fs::read_to_string(data_dir.join("state.toml")).unwrap();
 		let state: State = toml::from_str(&text).unwrap();
 		assert_eq!(state.registered_paths, vec![config]);
 	}
 
 	#[test]
-	fn skips_state_without_system_dir() {
+	fn skips_state_without_data_dir() {
 		let tmp = tempfile::tempdir().unwrap();
 		let project = tmp.path().join("project");
 		touch(&project.join("outpost.toml"));
 		let locations = locate_with(&project, &ConfigEnv::default()).unwrap();
-		assert!(locations.system_dir.is_none());
+		assert!(locations.data_dir.is_none());
 		assert!(locations.state.registered_paths.is_empty());
 	}
 
 	#[test]
 	fn rejects_invalid_state() {
 		let tmp = tempfile::tempdir().unwrap();
-		let config_dir = tmp.path().join("config");
-		fs::create_dir_all(&config_dir).unwrap();
-		fs::write(config_dir.join("state.toml"), "[registered_paths\n").unwrap();
+		let data_dir = tmp.path().join("data");
+		fs::create_dir_all(&data_dir).unwrap();
+		fs::write(data_dir.join("state.toml"), "[registered_paths\n").unwrap();
 		let env = ConfigEnv {
-			config_dir: Some(config_dir),
+			data_dir: Some(data_dir),
 			..ConfigEnv::default()
 		};
 		let project = tmp.path().join("project");

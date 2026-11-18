@@ -21,23 +21,24 @@ pub(crate) fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let configs = loader::load(&paths)?;
-	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
+	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let downloads_dir = paths.downloads_dir.as_deref().ok_or("no downloads directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
+	std::fs::create_dir_all(data_dir)?;
 	std::fs::create_dir_all(downloads_dir)?;
 	std::fs::create_dir_all(tools_dir)?;
-	let _install_lock = lock::acquire(config_dir)?;
+	let _install_lock = lock::acquire(data_dir)?;
 	let requests = tool_request::requests(&configs)?;
 	// group requests by identity so each tool resolves once
 	let requests = ToolRequestGroup::from_entries(requests);
 	// skip tools already recorded in the lock
-	let mut lock = lock::read(config_dir)?;
+	let mut lock = lock::read(data_dir)?;
 	let requests = status::missing_from_lock(requests, &lock, tools_dir);
 	if requests.is_empty() {
 		// persist the project registration even when nothing needs installing
-		let (mut state, text) = state::read(config_dir)?;
-		state::register_config(&mut state, config_dir, &paths.project);
-		state::write(config_dir, &state, text.as_deref())?;
+		let (mut state, text) = state::read(data_dir)?;
+		state::register_config(&mut state, &paths.system, &paths.project);
+		state::write(data_dir, &state, text.as_deref())?;
 		return Ok(());
 	}
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
@@ -49,13 +50,13 @@ pub(crate) fn install() -> Result<(), Error> {
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
 	let groups = _update_lock_entries(&mut lock, &extractions);
-	lock::write(config_dir, &lock)?;
+	lock::write(data_dir, &lock)?;
 	// refresh binaries and shims for the newly installed tools
-	let (mut state, text) = state::read(config_dir)?;
-	state::register_config(&mut state, config_dir, &paths.project);
+	let (mut state, text) = state::read(data_dir)?;
+	state::register_config(&mut state, &paths.system, &paths.project);
 	shims::index_installed_binaries(&mut state, tools_dir, &lock, &groups)?;
 	let index_err = shims::index_shims(&mut state, &lock).err();
-	state::write(config_dir, &state, text.as_deref())?;
+	state::write(data_dir, &state, text.as_deref())?;
 	let generate_err: Option<Error> = paths
 		.shims_dir
 		.as_deref()

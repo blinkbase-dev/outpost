@@ -33,6 +33,7 @@ impl Fixture {
 			.args(args)
 			.current_dir(cwd)
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
+			.env("OUTPOST_DATA_DIR", &self.config_dir)
 			.env_remove("OUTPOST_ENV")
 			.env_remove("OUTPOST_TOOLS_DIR")
 			.env_remove("OUTPOST_SHIMS_DIR")

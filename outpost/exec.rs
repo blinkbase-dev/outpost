@@ -22,9 +22,9 @@ pub(crate) fn exec(args: ExecArgs) -> Result<i32, Error> {
 fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
-	let config_dir = paths.system_dir.as_deref().ok_or("no system config directory")?;
+	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
-	let lock = lock::read(config_dir)?;
+	let lock = lock::read(data_dir)?;
 	let requests = candidates::requests(&paths)?;
 	let tool = args.tool.ok_or("missing tool")?;
 	let tool_spec = tool.to_str().ok_or("tool must be valid utf-8")?;

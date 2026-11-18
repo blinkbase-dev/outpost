@@ -26,6 +26,7 @@ impl Fixture {
 			.arg("list")
 			.current_dir(cwd)
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
+			.env("OUTPOST_DATA_DIR", &self.config_dir)
 			.env_remove("OUTPOST_TOOLS_DIR")
 			.env_remove("OUTPOST_SHIMS_DIR")
 			.env_remove("OUTPOST_DOWNLOADS_DIR");
@@ -87,7 +88,7 @@ install_path = "github_owner_gone/8.0.0"
 	let output = fixture.run(&fixture.config_dir, None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
-	let source = fixture.config_dir.join("outpost.toml").display().to_string();
+	let source = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
 	let template = r#"TOOL                REQUESTED  VERSION           SOURCE
 github:owner/new    3.0.0      missing           {source}
 github:owner/other  2.0.0      v2.0.0 (missing)  {source}
@@ -114,8 +115,11 @@ fn lists_duplicate_requests_per_config_file() {
 github:owner/repo  1.2.3      missing  {source1}
 github:owner/repo  1.2.3      missing  {source2}
 "#;
-	let source1 = fixture.config_dir.join("outpost.dev.toml").display().to_string();
-	let source2 = fixture.config_dir.join("outpost.toml").display().to_string();
+	let source1 = std::fs::canonicalize(fixture.config_dir.join("outpost.dev.toml"))
+		.unwrap()
+		.display()
+		.to_string();
+	let source2 = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
 	let expected = template.replace("{source1}", &source1).replace("{source2}", &source2);
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
@@ -182,7 +186,7 @@ fn keeps_full_values_when_output_is_piped() {
 	let template = r#"TOOL{padding}  REQUESTED  VERSION  SOURCE
 {tool}  latest     missing  {source}
 "#;
-	let source = fixture.config_dir.join("outpost.toml").display().to_string();
+	let source = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
 	let expected = template.replace("{padding}", &padding).replace("{tool}", &tool).replace("{source}", &source);
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
@@ -212,7 +216,7 @@ install_path = "github_owner_repo/cli/v1.2.3"
 	let template = r#"TOOL               REQUESTED  VERSION     SOURCE
 github:owner/repo  cli/1.2.3  cli/v1.2.3  {source}
 "#;
-	let source = fixture.config_dir.join("outpost.toml").display().to_string();
+	let source = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
 	let expected = template.replace("{source}", &source);
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
