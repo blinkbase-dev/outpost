@@ -34,6 +34,7 @@ pub(crate) enum ToolRequest {
 		lane: String,
 		version: Version,
 		api_url: Option<String>,
+		exposed: Option<Vec<String>>,
 	},
 }
 
@@ -71,6 +72,7 @@ impl ToolRequest {
 					lane: lane.to_owned(),
 					version: Version::parse(value),
 					api_url: table.api_url.clone(),
+					exposed: table.exposed.clone(),
 				})
 			}
 		}
@@ -143,6 +145,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::Latest,
 				api_url: None,
+				exposed: None,
 			},
 		}]);
 	}
@@ -166,6 +169,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::Exact("0.26.0".to_owned()),
 				api_url: None,
+				exposed: None,
 			},
 		}]);
 	}
@@ -189,6 +193,7 @@ mod tests {
 				lane: "cli/".to_owned(),
 				version: Version::Exact("1.2.3".to_owned()),
 				api_url: None,
+				exposed: None,
 			},
 		}]);
 
@@ -209,6 +214,7 @@ mod tests {
 				lane: "tool-".to_owned(),
 				version: Version::parse("10"),
 				api_url: None,
+				exposed: None,
 			},
 		}]);
 	}
@@ -232,6 +238,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::Latest,
 				api_url: None,
+				exposed: None,
 			},
 		}]);
 	}
@@ -244,7 +251,7 @@ mod tests {
 				r#"
 				[tools]
 				"github:owner/repo" = { version = "0.26.0" }
-				"github:owner/other" = { version = "0.26.0", api_url = "http://127.0.0.1:8080" }
+				"github:owner/other" = { version = "0.26.0", api_url = "http://127.0.0.1:8080", exposed = ["tool", "bin/*"] }
 				"#,
 			)
 			.unwrap(),
@@ -257,6 +264,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::Exact("0.26.0".to_owned()),
 					api_url: Some("http://127.0.0.1:8080".to_owned()),
+					exposed: Some(vec!["tool".to_owned(), "bin/*".to_owned()]),
 				},
 			},
 			ToolRequestEntry {
@@ -266,6 +274,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::Exact("0.26.0".to_owned()),
 					api_url: None,
+					exposed: None,
 				},
 			},
 		]);
@@ -311,6 +320,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("1"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 			ToolRequestEntry {
@@ -320,6 +330,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("2"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 			// the same request from another file is still a separate entry
@@ -330,6 +341,7 @@ mod tests {
 					lane: String::new(),
 					version: Version::parse("1"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 		]);
@@ -385,6 +397,7 @@ mod group_tests {
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 			ToolRequestEntry {
@@ -394,6 +407,7 @@ mod group_tests {
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 			ToolRequestEntry {
@@ -403,6 +417,7 @@ mod group_tests {
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
 					api_url: None,
+					exposed: None,
 				},
 			},
 		];
@@ -413,6 +428,7 @@ mod group_tests {
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
 			api_url: None,
+			exposed: None,
 		});
 		assert_eq!(groups[0].origins, vec![PathBuf::from("a.toml"), PathBuf::from("b.toml")]);
 		assert_eq!(groups[1].tool, ToolRequest::Github {
@@ -420,6 +436,7 @@ mod group_tests {
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
 			api_url: None,
+			exposed: None,
 		});
 		assert_eq!(groups[1].origins, vec![PathBuf::from("c.toml")]);
 	}

@@ -48,13 +48,12 @@ pub(crate) fn install() -> Result<(), Error> {
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
-	let installed_artifacts = _update_lock_entries(&mut lock, &extractions);
+	let groups = _update_lock_entries(&mut lock, &extractions);
 	lock::write(config_dir, &lock)?;
 	// refresh binaries and shims for the newly installed tools
 	let (mut state, text) = state::read(config_dir)?;
 	state::register_config(&mut state, config_dir, &paths.project);
-	let install_paths: Vec<PathBuf> = extractions.iter().map(|(group, _)| PathBuf::from(group.artifact_key.as_str())).collect();
-	shims::index_installed_binaries(&mut state, tools_dir, &lock, &install_paths)?;
+	shims::index_installed_binaries(&mut state, tools_dir, &lock, &groups)?;
 	let index_err = shims::index_shims(&mut state, &lock).err();
 	state::write(config_dir, &state, text.as_deref())?;
 	let generate_err: Option<Error> = paths
@@ -64,7 +63,7 @@ pub(crate) fn install() -> Result<(), Error> {
 		.and_then(|dir| shims::generate(&state, dir, &lock).map_err(Error::from))
 		.err();
 	// representative rows are appended after duplicate rows
-	for tool in &lock.tools[lock.tools.len() - installed_artifacts..] {
+	for tool in &lock.tools[lock.tools.len() - groups.len()..] {
 		match tool {
 			LockedTool::Github {
 				full_name,
@@ -138,6 +137,7 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, 
 			lane,
 			version,
 			api_url,
+			..
 		} => {
 			let backend = GithubBackend::new(http, GithubOptions::from_process().with_api_url(api_url.as_deref()));
 			let release = backend.select_release(full_name, lane, version).await?;
@@ -152,8 +152,7 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, 
 	}
 }
 
-fn _update_lock_entries(lock: &mut Lock, installed: &[DownloadEntry]) -> usize {
-	let installed_artifacts = installed.len();
+fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionGroup> {
 	let groups: Vec<&ToolResolutionGroup> = installed.iter().map(|(group, _)| group).collect();
 	let row = |group: &ToolResolutionGroup, request: &ToolRequestGroup| match (&request.tool, &group.resolution) {
 		(ToolRequest::Github { full_name, lane, version, .. }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
@@ -181,7 +180,7 @@ fn _update_lock_entries(lock: &mut Lock, installed: &[DownloadEntry]) -> usize {
 	// drop entries replaced by a new install before appending
 	lock.tools.retain(|existing| !incoming.contains(&existing.identity()));
 	lock.tools.extend(rows);
-	installed_artifacts
+	groups
 }
 
 #[cfg(test)]
@@ -201,6 +200,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				api_url: None,
+				exposed: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -219,8 +219,8 @@ mod tests {
 			})
 			.collect();
 		let mut lock = Lock::default();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -247,6 +247,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("latest"),
 				api_url: None,
+				exposed: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -264,8 +265,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -292,6 +293,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				api_url: None,
+				exposed: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -309,8 +311,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),
@@ -349,6 +351,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				api_url: None,
+				exposed: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -366,8 +369,8 @@ mod tests {
 				})
 			})
 			.collect();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![other, LockedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
@@ -386,6 +389,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("latest"),
 				api_url: None,
+				exposed: None,
 			},
 		};
 		let exact = ToolRequestGroup {
@@ -395,6 +399,7 @@ mod tests {
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				api_url: None,
+				exposed: None,
 			},
 		};
 		let requests = vec![latest, exact];
@@ -419,8 +424,8 @@ mod tests {
 			})
 			.collect();
 		let mut lock = Lock::default();
-		let installed_artifacts = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(installed_artifacts, 1);
+		let groups = _update_lock_entries(&mut lock, &installed);
+		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
 				full_name: "owner/repo".to_owned(),

@@ -132,6 +132,7 @@ mod tests {
 			lane: String::new(),
 			version: Version::Latest,
 			api_url: None,
+			exposed: None,
 		};
 		assert!(latest.matches(&request));
 
@@ -140,6 +141,7 @@ mod tests {
 			lane: String::new(),
 			version: Version::Exact("1.0.0".to_owned()),
 			api_url: None,
+			exposed: None,
 		};
 		assert!(!latest.matches(&exact));
 
@@ -153,6 +155,7 @@ mod tests {
 			lane: "cli/".to_owned(),
 			version: Version::Exact("1.0.0".to_owned()),
 			api_url: None,
+			exposed: None,
 		};
 		assert!(lane.matches(&lane_request));
 		assert!(!lane.matches(&exact));
@@ -164,6 +167,7 @@ mod tests {
 			lane: "cli/".to_owned(),
 			version: Version::Latest,
 			api_url: None,
+			exposed: None,
 		}));
 		assert!(!any_lane_version.matches(&exact));
 		assert!(!any_lane_version.matches(&ToolRequest::Github {
@@ -171,6 +175,7 @@ mod tests {
 			lane: "other/".to_owned(),
 			version: Version::Latest,
 			api_url: None,
+			exposed: None,
 		}));
 	}
 
