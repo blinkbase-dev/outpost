@@ -201,6 +201,7 @@ mod tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -248,6 +249,7 @@ mod tests {
 				version: Version::parse("latest"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -294,6 +296,7 @@ mod tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -352,6 +355,7 @@ mod tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -390,6 +394,7 @@ mod tests {
 				version: Version::parse("latest"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		};
 		let exact = ToolRequestGroup {
@@ -400,6 +405,7 @@ mod tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		};
 		let requests = vec![latest, exact];

@@ -102,6 +102,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 			},
 			ToolRequestEntry {
@@ -112,6 +113,7 @@ mod tests {
 					version: Version::parse("2.0.0"),
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 			},
 		];
@@ -127,6 +129,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 			},
 			ToolStatus {
@@ -139,6 +142,7 @@ mod tests {
 					version: Version::parse("2.0.0"),
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 			},
 		]);
@@ -168,6 +172,7 @@ mod tests {
 				version: Version::parse("1.2.3"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		}];
 		let report = report(requests, &lock, &tools);
@@ -181,6 +186,7 @@ mod tests {
 				version: Version::parse("1.2.3"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		}]);
 		assert!(report.unrequested.is_empty());
@@ -229,6 +235,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 			},
 			ToolRequestEntry {
@@ -239,6 +246,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 			},
 		];
@@ -254,6 +262,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 			},
 			ToolStatus {
@@ -266,6 +275,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 			},
 		]);
@@ -294,6 +304,7 @@ mod tests {
 				version: Version::parse("1.2.3"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		}]);
 		assert!(missing_from_lock(requests, &lock, &tools).is_empty());
@@ -321,6 +332,7 @@ mod tests {
 				version: Version::parse("1.2.3"),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			},
 		}]);
 		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 1);
@@ -347,6 +359,7 @@ mod tests {
 			version: Version::parse("1.2.3"),
 			api_url: None,
 			exposed: None,
+			rename: None,
 		};
 		let other_version = ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
@@ -354,6 +367,7 @@ mod tests {
 			version: Version::parse("2.0.0"),
 			api_url: None,
 			exposed: None,
+			rename: None,
 		};
 		let requests = ToolRequestGroup::from_entries(vec![
 			ToolRequestEntry {
@@ -389,6 +403,7 @@ mod tests {
 			version: Version::parse("1.2.3"),
 			api_url: None,
 			exposed: None,
+			rename: None,
 		};
 		let missing = ToolRequest::Github {
 			full_name: "owner/other".to_owned(),
@@ -396,6 +411,7 @@ mod tests {
 			version: Version::parse("2.0.0"),
 			api_url: None,
 			exposed: None,
+			rename: None,
 		};
 		let requests = missing_from_lock(
 			ToolRequestGroup::from_entries(vec![

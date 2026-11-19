@@ -107,67 +107,8 @@ fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobS
 
 #[cfg(windows)]
 pub(crate) fn index_shims(state: &mut State, lock: &Lock) -> Result<(), ShimError> {
-	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();
-	let mut conflicts: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-	for tool in &lock.tools {
-		match tool {
-			LockedTool::Github {
-				full_name,
-				lane,
-				requested,
-				install_path,
-				..
-			} => {
-				let Some(binaries) = state.binaries.get(install_path) else {
-					continue;
-				};
-				let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
-				for binary in binaries {
-					let Some(name) = binary.file_stem().and_then(OsStr::to_str) else {
-						continue;
-					};
-					names.entry(name.to_ascii_lowercase()).or_default().push(binary);
-				}
-				for (name, binaries) in names {
-					// a name with more than one binary cannot be shimmed unambiguously
-					let [binary] = binaries.as_slice() else {
-						conflicts
-							.entry(name)
-							.or_default()
-							.extend(binaries.into_iter().map(|binary| install_path.join(binary)));
-						continue;
-					};
-					shims.entry(name).or_default().push(ShimEntry::Github {
-						full_name: full_name.clone(),
-						lane: lane.clone(),
-						requested: requested.clone(),
-						install_path: install_path.clone(),
-						binary: binary.to_path_buf(),
-					});
-				}
-			}
-		}
-	}
-	for (name, entries) in &shims {
-		// a name provided by more than one tool cannot be shimmed unambiguously
-		let mut tools: HashSet<(&str, &str, &str)> = HashSet::new();
-		for entry in entries {
-			tools.insert(match entry {
-				ShimEntry::Github { full_name, lane, .. } => ("github", full_name.as_str(), lane.as_str()),
-			});
-		}
-		if tools.len() > 1 || conflicts.contains_key(name) {
-			conflicts.entry(name.clone()).or_default().extend(entries.iter().map(|entry| match entry {
-				ShimEntry::Github { install_path, binary, .. } => install_path.join(binary),
-			}));
-		}
-	}
-	// drop stale entries so conflicted names stop resolving
-	for name in conflicts.keys() {
-		shims.remove(name);
-	}
+	let (shims, conflicts) = _index_shims(state, lock);
 	state.shims = shims;
-	let conflicts: Vec<ShimConflict> = conflicts.into_iter().map(|(name, paths)| ShimConflict { name, paths }).collect();
 	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
 }
 
@@ -238,62 +179,8 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, _lock: &Lock) -> Result<
 #[cfg(not(windows))]
 pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(), ShimError> {
 	std::fs::create_dir_all(shims_dir)?;
-	// the same index as windows, but only used to generate the scripts
-	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();
-	let mut conflicts: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-	for tool in &lock.tools {
-		match tool {
-			LockedTool::Github {
-				full_name,
-				lane,
-				requested,
-				install_path,
-				..
-			} => {
-				let Some(binaries) = state.binaries.get(install_path) else {
-					continue;
-				};
-				let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
-				for binary in binaries {
-					let Some(name) = binary.file_name().and_then(OsStr::to_str) else {
-						continue;
-					};
-					names.entry(name.to_owned()).or_default().push(binary);
-				}
-				for (name, binaries) in names {
-					// a name with more than one binary in one tool cannot be shimmed
-					let [binary] = binaries.as_slice() else {
-						conflicts
-							.entry(name)
-							.or_default()
-							.extend(binaries.into_iter().map(|binary| install_path.join(binary)));
-						continue;
-					};
-					shims.entry(name).or_default().push(ShimEntry::Github {
-						full_name: full_name.clone(),
-						lane: lane.clone(),
-						requested: requested.clone(),
-						install_path: install_path.clone(),
-						binary: binary.to_path_buf(),
-					});
-				}
-			}
-		}
-	}
+	let (shims, conflicts) = _index_shims(state, lock);
 	for (name, entries) in &shims {
-		// a name provided by more than one tool cannot be scripted unambiguously
-		let mut tools: HashSet<(&str, &str, &str)> = HashSet::new();
-		for entry in entries {
-			tools.insert(match entry {
-				ShimEntry::Github { full_name, lane, .. } => ("github", full_name.as_str(), lane.as_str()),
-			});
-		}
-		if tools.len() > 1 || conflicts.contains_key(name) {
-			conflicts.entry(name.clone()).or_default().extend(entries.iter().map(|entry| match entry {
-				ShimEntry::Github { install_path, binary, .. } => install_path.join(binary),
-			}));
-			continue;
-		}
 		let spec = match &entries[0] {
 			ShimEntry::Github { full_name, lane, .. } if !lane.is_empty() => format!("github:{full_name}@{lane}"),
 			ShimEntry::Github { full_name, .. } => format!("github:{full_name}"),
@@ -317,7 +204,6 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(
 		std::fs::write(&target, &script)?;
 		std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
 	}
-	let conflicts: Vec<ShimConflict> = conflicts.into_iter().map(|(name, paths)| ShimConflict { name, paths }).collect();
 	// drop stale scripts so conflicted names stop resolving
 	for conflict in &conflicts {
 		match std::fs::remove_file(shims_dir.join(&conflict.name)) {
@@ -327,6 +213,77 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(
 		}
 	}
 	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
+}
+
+// a shim name comes from a binary name and must be unique across tools
+fn _index_shims(state: &State, lock: &Lock) -> (BTreeMap<String, Vec<ShimEntry>>, Vec<ShimConflict>) {
+	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();
+	let mut conflicts: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+	for tool in &lock.tools {
+		match tool {
+			LockedTool::Github {
+				full_name,
+				lane,
+				requested,
+				install_path,
+				..
+			} => {
+				let Some(binaries) = state.binaries.get(install_path) else {
+					continue;
+				};
+				let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
+				for binary in binaries {
+					// windows strips the executable extension and folds case
+					let name = if cfg!(windows) {
+						binary.file_stem().and_then(OsStr::to_str).map(str::to_ascii_lowercase)
+					} else {
+						binary.file_name().and_then(OsStr::to_str).map(str::to_owned)
+					};
+					let Some(name) = name else {
+						continue;
+					};
+					names.entry(name).or_default().push(binary);
+				}
+				for (name, binaries) in names {
+					// a name with more than one binary cannot be shimmed unambiguously
+					let [binary] = binaries.as_slice() else {
+						conflicts
+							.entry(name)
+							.or_default()
+							.extend(binaries.into_iter().map(|binary| install_path.join(binary)));
+						continue;
+					};
+					shims.entry(name).or_default().push(ShimEntry::Github {
+						full_name: full_name.clone(),
+						lane: lane.clone(),
+						requested: requested.clone(),
+						install_path: install_path.clone(),
+						binary: binary.to_path_buf(),
+					});
+				}
+			}
+		}
+	}
+	for (name, entries) in &shims {
+		// a name provided by more than one tool cannot be shimmed unambiguously
+		let mut tools: HashSet<(&str, &str, &str)> = HashSet::new();
+		for entry in entries {
+			tools.insert(match entry {
+				ShimEntry::Github { full_name, lane, .. } => ("github", full_name.as_str(), lane.as_str()),
+			});
+		}
+		if tools.len() > 1 || conflicts.contains_key(name) {
+			conflicts.entry(name.clone()).or_default().extend(entries.iter().map(|entry| match entry {
+				ShimEntry::Github { install_path, binary, .. } => install_path.join(binary),
+			}));
+		}
+	}
+	let conflicts: Vec<ShimConflict> = conflicts.into_iter().map(|(name, paths)| ShimConflict { name, paths }).collect();
+	// conflicted names never resolve
+	for conflict in &conflicts {
+		shims.remove(&conflict.name);
+	}
+	(shims, conflicts)
 }
 
 #[cfg(windows)]
