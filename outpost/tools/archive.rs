@@ -340,7 +340,7 @@ mod download_parallel_tests {
 						version: Version::parse(&format!("1.0.{index}")),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				};
 				(request, ToolResolution::Github {
@@ -382,7 +382,7 @@ mod download_parallel_tests {
 						version: Version::parse(&format!("1.0.{index}")),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				};
 				(request, ToolResolution::Github {
@@ -421,7 +421,7 @@ mod download_parallel_tests {
 					version: Version::parse("latest"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolRequestGroup {
@@ -432,7 +432,7 @@ mod download_parallel_tests {
 					version: Version::parse("1.0.0"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 		];
@@ -478,7 +478,7 @@ mod download_parallel_tests {
 						version: Version::parse("1.0.0"),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				},
 				ToolResolution::Github {
@@ -497,7 +497,7 @@ mod download_parallel_tests {
 						version: Version::parse("1.1.0"),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				},
 				ToolResolution::Github {
@@ -516,7 +516,7 @@ mod download_parallel_tests {
 						version: Version::parse("latest"),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				},
 				ToolResolution::Github {
@@ -710,7 +710,7 @@ mod extract_parallel_tests {
 					version: Version::parse("1.0.0"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolResolution::Github {
@@ -743,7 +743,7 @@ mod extract_parallel_tests {
 					version: Version::parse("1.0.0"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolResolution::Github {
@@ -788,7 +788,7 @@ mod extract_parallel_tests {
 						version: Version::parse("1.0.0"),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				},
 				ToolResolution::Github {
@@ -807,7 +807,7 @@ mod extract_parallel_tests {
 						version: Version::parse("1.0.0"),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				},
 				ToolResolution::Github {
@@ -826,7 +826,7 @@ mod extract_parallel_tests {
 						version: Version::parse("1.0.0"),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				},
 				ToolResolution::Github {
@@ -871,7 +871,7 @@ mod extract_parallel_tests {
 						version: Version::parse("1.0.0"),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				},
 				ToolResolution::Github {
@@ -890,7 +890,7 @@ mod extract_parallel_tests {
 						version: Version::parse("1.0.0"),
 						api_url: None,
 						exposed: None,
-						rename: None,
+						rename_shims: None,
 					},
 				},
 				ToolResolution::Github {
@@ -930,7 +930,7 @@ mod resolution_group_tests {
 				version: Version::parse("latest"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let exact = ToolRequestGroup {
@@ -941,7 +941,7 @@ mod resolution_group_tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let artifact_key = ArtifactKey::new(&latest.tool, "v1.0.0");
@@ -975,7 +975,7 @@ mod resolution_group_tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let second = ToolRequestGroup {
@@ -986,7 +986,7 @@ mod resolution_group_tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let error = ToolResolutionGroup::from_entries(vec![

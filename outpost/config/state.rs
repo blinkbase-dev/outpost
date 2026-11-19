@@ -81,6 +81,21 @@ pub(crate) enum ShimEntry {
 	},
 }
 
+impl ShimEntry {
+	pub(crate) fn spec(&self) -> String {
+		match self {
+			Self::Github { full_name, lane, .. } if !lane.is_empty() => format!("github:{full_name}@{lane}"),
+			Self::Github { full_name, .. } => format!("github:{full_name}"),
+		}
+	}
+
+	pub(crate) fn binary(&self) -> &Path {
+		match self {
+			Self::Github { binary, .. } => binary,
+		}
+	}
+}
+
 #[derive(Debug)]
 pub(crate) enum StateError {
 	Io { path: PathBuf, source: std::io::Error },

@@ -57,7 +57,7 @@ pub(crate) enum InstallState {
 	Missing,
 }
 
-pub(crate) fn missing_from_lock(requests: Vec<ToolRequestGroup>, lock: &Lock, tools_dir: &Path) -> Vec<ToolRequestGroup> {
+pub(crate) fn missing_from_lock(requests: &[ToolRequestGroup], lock: &Lock, tools_dir: &Path) -> Vec<ToolRequestGroup> {
 	let installed: HashSet<Identity> = lock
 		.tools
 		.iter()
@@ -66,7 +66,7 @@ pub(crate) fn missing_from_lock(requests: Vec<ToolRequestGroup>, lock: &Lock, to
 		})
 		.map(LockedTool::identity)
 		.collect();
-	requests.into_iter().filter(|group| !installed.contains(&group.tool.identity())).collect()
+	requests.iter().filter(|group| !installed.contains(&group.tool.identity())).cloned().collect()
 }
 
 fn _installed(install_path: &Path, tools_dir: &Path) -> bool {
@@ -102,7 +102,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolRequestEntry {
@@ -113,7 +113,7 @@ mod tests {
 					version: Version::parse("2.0.0"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 		];
@@ -129,7 +129,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolStatus {
@@ -142,7 +142,7 @@ mod tests {
 					version: Version::parse("2.0.0"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 		]);
@@ -172,7 +172,7 @@ mod tests {
 				version: Version::parse("1.2.3"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}];
 		let report = report(requests, &lock, &tools);
@@ -186,7 +186,7 @@ mod tests {
 				version: Version::parse("1.2.3"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}]);
 		assert!(report.unrequested.is_empty());
@@ -235,7 +235,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolRequestEntry {
@@ -246,7 +246,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 		];
@@ -262,7 +262,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolStatus {
@@ -275,7 +275,7 @@ mod tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 		]);
@@ -304,10 +304,10 @@ mod tests {
 				version: Version::parse("1.2.3"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}]);
-		assert!(missing_from_lock(requests, &lock, &tools).is_empty());
+		assert!(missing_from_lock(&requests, &lock, &tools).is_empty());
 	}
 
 	#[test]
@@ -332,10 +332,10 @@ mod tests {
 				version: Version::parse("1.2.3"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}]);
-		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 1);
+		assert_eq!(missing_from_lock(&requests, &lock, &tools).len(), 1);
 	}
 
 	#[test]
@@ -359,7 +359,7 @@ mod tests {
 			version: Version::parse("1.2.3"),
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		};
 		let other_version = ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),
@@ -367,7 +367,7 @@ mod tests {
 			version: Version::parse("2.0.0"),
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		};
 		let requests = ToolRequestGroup::from_entries(vec![
 			ToolRequestEntry {
@@ -379,7 +379,7 @@ mod tests {
 				tool: other_version,
 			},
 		]);
-		assert_eq!(missing_from_lock(requests, &lock, &tools).len(), 2);
+		assert_eq!(missing_from_lock(&requests, &lock, &tools).len(), 2);
 	}
 
 	#[test]
@@ -403,7 +403,7 @@ mod tests {
 			version: Version::parse("1.2.3"),
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		};
 		let missing = ToolRequest::Github {
 			full_name: "owner/other".to_owned(),
@@ -411,10 +411,10 @@ mod tests {
 			version: Version::parse("2.0.0"),
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		};
 		let requests = missing_from_lock(
-			ToolRequestGroup::from_entries(vec![
+			&ToolRequestGroup::from_entries(vec![
 				ToolRequestEntry {
 					origin: PathBuf::new(),
 					tool: installed,

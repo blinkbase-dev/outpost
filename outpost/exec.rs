@@ -1,4 +1,5 @@
 use std::ffi::{OsStr, OsString};
+use std::path::{Component, Path};
 
 use clap::Args;
 
@@ -63,7 +64,13 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	let binary = binary.to_str().ok_or("binary name must be valid utf-8")?;
 	let install_dir = tools_dir.join(install_path);
 	let (state, _) = state::read(data_dir)?;
-	let matches = candidates::find_binaries_cached(&install_dir, binary, state.binaries.get(install_path).map(Vec::as_slice))?;
+	// shims pass an install-relative path so same-named binaries do not collide
+	let binary_path = Path::new(binary);
+	let matches = if binary_path.components().count() > 1 && binary_path.components().all(|component| matches!(component, Component::Normal(_))) {
+		vec![install_dir.join(binary_path)]
+	} else {
+		candidates::find_binaries_cached(&install_dir, binary, state.binaries.get(install_path).map(Vec::as_slice))?
+	};
 	let path = match matches.as_slice() {
 		[path] => path,
 		[] => {
@@ -91,8 +98,6 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 
 #[cfg(windows)]
 fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
-	use std::path::{Component, Path};
-
 	use crate::config::state::ShimEntry;
 
 	let cwd = std::env::current_dir()?;

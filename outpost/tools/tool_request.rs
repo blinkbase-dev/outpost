@@ -27,7 +27,7 @@ pub(crate) struct ToolRequestEntry {
 	pub(crate) tool: ToolRequest,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ToolRequest {
 	Github {
 		full_name: String,
@@ -35,7 +35,7 @@ pub(crate) enum ToolRequest {
 		version: Version,
 		api_url: Option<String>,
 		exposed: Option<Vec<String>>,
-		rename: Option<BTreeMap<String, String>>,
+		rename_shims: Option<BTreeMap<String, String>>,
 	},
 }
 
@@ -74,13 +74,14 @@ impl ToolRequest {
 					version: Version::parse(value),
 					api_url: table.api_url.clone(),
 					exposed: table.exposed.clone(),
-					rename: table.rename.clone(),
+					rename_shims: table.rename_shims.clone(),
 				})
 			}
 		}
 	}
 }
 
+#[derive(Clone)]
 pub(crate) struct ToolRequestGroup {
 	pub(crate) origins: Vec<PathBuf>,
 	pub(crate) tool: ToolRequest,
@@ -148,7 +149,7 @@ mod tests {
 				version: Version::Latest,
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}]);
 	}
@@ -173,7 +174,7 @@ mod tests {
 				version: Version::Exact("0.26.0".to_owned()),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}]);
 	}
@@ -198,7 +199,7 @@ mod tests {
 				version: Version::Exact("1.2.3".to_owned()),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}]);
 
@@ -220,7 +221,7 @@ mod tests {
 				version: Version::parse("10"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}]);
 	}
@@ -245,7 +246,7 @@ mod tests {
 				version: Version::Latest,
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		}]);
 	}
@@ -258,7 +259,7 @@ mod tests {
 				r#"
 				[tools]
 				"github:owner/repo" = { version = "0.26.0" }
-				"github:owner/other" = { version = "0.26.0", api_url = "http://127.0.0.1:8080", exposed = ["tool", "bin/*"], rename = { "tool_*" = "tool" } }
+				"github:owner/other" = { version = "0.26.0", api_url = "http://127.0.0.1:8080", exposed = ["tool", "bin/*"], rename_shims = { "tool_*" = "tool" } }
 				"#,
 			)
 			.unwrap(),
@@ -272,7 +273,7 @@ mod tests {
 					version: Version::Exact("0.26.0".to_owned()),
 					api_url: Some("http://127.0.0.1:8080".to_owned()),
 					exposed: Some(vec!["tool".to_owned(), "bin/*".to_owned()]),
-					rename: Some(BTreeMap::from([("tool_*".to_owned(), "tool".to_owned())])),
+					rename_shims: Some(BTreeMap::from([("tool_*".to_owned(), "tool".to_owned())])),
 				},
 			},
 			ToolRequestEntry {
@@ -283,7 +284,7 @@ mod tests {
 					version: Version::Exact("0.26.0".to_owned()),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 		]);
@@ -330,7 +331,7 @@ mod tests {
 					version: Version::parse("1"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolRequestEntry {
@@ -341,7 +342,7 @@ mod tests {
 					version: Version::parse("2"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			// the same request from another file is still a separate entry
@@ -353,7 +354,7 @@ mod tests {
 					version: Version::parse("1"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 		]);
@@ -410,7 +411,7 @@ mod group_tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolRequestEntry {
@@ -421,7 +422,7 @@ mod group_tests {
 					version: Version::parse("1.2.3"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 			ToolRequestEntry {
@@ -432,7 +433,7 @@ mod group_tests {
 					version: Version::parse("2.0.0"),
 					api_url: None,
 					exposed: None,
-					rename: None,
+					rename_shims: None,
 				},
 			},
 		];
@@ -444,7 +445,7 @@ mod group_tests {
 			version: Version::parse("1.2.3"),
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		});
 		assert_eq!(groups[0].origins, vec![PathBuf::from("a.toml"), PathBuf::from("b.toml")]);
 		assert_eq!(groups[1].tool, ToolRequest::Github {
@@ -453,7 +454,7 @@ mod group_tests {
 			version: Version::parse("2.0.0"),
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		});
 		assert_eq!(groups[1].origins, vec![PathBuf::from("c.toml")]);
 	}

@@ -133,7 +133,7 @@ mod tests {
 			version: Version::Latest,
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		};
 		assert!(latest.matches(&request));
 
@@ -143,7 +143,7 @@ mod tests {
 			version: Version::Exact("1.0.0".to_owned()),
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		};
 		assert!(!latest.matches(&exact));
 
@@ -158,7 +158,7 @@ mod tests {
 			version: Version::Exact("1.0.0".to_owned()),
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		};
 		assert!(lane.matches(&lane_request));
 		assert!(!lane.matches(&exact));
@@ -171,7 +171,7 @@ mod tests {
 			version: Version::Latest,
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		}));
 		assert!(!any_lane_version.matches(&exact));
 		assert!(!any_lane_version.matches(&ToolRequest::Github {
@@ -180,7 +180,7 @@ mod tests {
 			version: Version::Latest,
 			api_url: None,
 			exposed: None,
-			rename: None,
+			rename_shims: None,
 		}));
 	}
 

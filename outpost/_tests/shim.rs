@@ -483,3 +483,149 @@ mod exposed {
 		assert!(shims.join(name).exists());
 	}
 }
+
+mod rename_shims {
+	use indoc::{formatdoc, indoc};
+
+	use super::*;
+
+	const LOCK: &str = indoc! {r#"
+	version = 1
+
+	[[tool]]
+	backend = "github"
+	full_name = "a/repo"
+	lane = ""
+	requested = "1"
+	tag_name = "v1.0.0"
+	install_path = "github_a/1"
+	"#};
+
+	#[test]
+	fn renames_shims() {
+		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let renamed = if cfg!(windows) { "renamed.exe" } else { "renamed" };
+		let config = formatdoc! {r#"
+		[tools]
+		"github:a/repo" = {{ version = "1", rename_shims = {{ "{name}" = "renamed" }} }}
+		"#};
+		let fixture = Fixture::new(&config, LOCK);
+		fixture.tool("github_a/1", name);
+		let output = fixture.run(&fixture.config_dir, &[]);
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		let shims = fixture.config_dir.join("shims");
+		assert!(shims.join(renamed).exists());
+		assert!(!shims.join(name).exists());
+		// the shim still executes the stored path
+		#[cfg(not(windows))]
+		assert!(std::fs::read_to_string(shims.join(renamed)).unwrap().contains(&format!("-- '{name}'")));
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		#[cfg(windows)]
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
+
+		[binaries]
+		"github_a/1" = ["{name}"]
+
+		[[shims.renamed]]
+		backend = "github"
+		full_name = "a/repo"
+		lane = ""
+		requested = "1"
+		install_path = "github_a/1"
+		binary = "{name}"
+		"#};
+		#[cfg(not(windows))]
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
+
+		[binaries]
+		"github_a/1" = ["{name}"]
+		"#};
+		assert_eq!(state, expected);
+	}
+
+	#[test]
+	fn renames_duplicated_binaries_apart() {
+		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let nested = format!("nested/{name}");
+		let config = formatdoc! {r#"
+		[tools]
+		"github:a/repo" = {{ version = "1", rename_shims = {{ "{name}" = "top", "{nested}" = "deep" }} }}
+		"#};
+		let fixture = Fixture::new(&config, LOCK);
+		fixture.tool("github_a/1", name);
+		fixture.tool("github_a/1", &nested);
+		let output = fixture.run(&fixture.config_dir, &[]);
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		let shims = fixture.config_dir.join("shims");
+		let (top, deep) = if cfg!(windows) { ("top.exe", "deep.exe") } else { ("top", "deep") };
+		assert!(shims.join(top).exists());
+		assert!(shims.join(deep).exists());
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		#[cfg(windows)]
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
+
+		[binaries]
+		"github_a/1" = [
+		    "{name}",
+		    'nested\{name}',
+		]
+
+		[[shims.deep]]
+		backend = "github"
+		full_name = "a/repo"
+		lane = ""
+		requested = "1"
+		install_path = "github_a/1"
+		binary = 'nested\{name}'
+
+		[[shims.top]]
+		backend = "github"
+		full_name = "a/repo"
+		lane = ""
+		requested = "1"
+		install_path = "github_a/1"
+		binary = "{name}"
+		"#};
+		#[cfg(not(windows))]
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
+
+		[binaries]
+		"github_a/1" = [
+		    "{name}",
+		    "nested/{name}",
+		]
+		"#};
+		assert_eq!(state, expected);
+		// each shim wraps its own binary rather than resolving by name
+		#[cfg(not(windows))]
+		{
+			assert!(std::fs::read_to_string(shims.join(top)).unwrap().contains(&format!("-- '{name}'")));
+			assert!(std::fs::read_to_string(shims.join(deep)).unwrap().contains(&format!("-- '{nested}'")));
+		}
+	}
+
+	#[test]
+	fn rejects_conflicting_renames() {
+		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let config = formatdoc! {r#"
+		[tools]
+		"github:a/repo" = {{ version = "1", rename_shims = {{ "{name}" = "one", "**" = "two" }} }}
+		"#};
+		let fixture = Fixture::new(&config, LOCK);
+		fixture.tool("github_a/1", name);
+		let output = fixture.run(&fixture.config_dir, &[]);
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(!output.status.success(), "{stderr}");
+		assert!(stderr.contains("conflicting rename for '"), "{stderr}");
+	}
+}
