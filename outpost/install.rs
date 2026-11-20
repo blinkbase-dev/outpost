@@ -8,6 +8,7 @@ use tokio::sync::Semaphore;
 use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate, state};
 use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionGroup};
+use crate::tools::catalog::Catalog;
 use crate::tools::lock::{self, Identity, Lock, LockedTool};
 use crate::tools::tool_request::{self, ToolRequest, ToolRequestGroup};
 use crate::tools::{shims, status};
@@ -31,11 +32,11 @@ pub(crate) fn install() -> Result<(), Error> {
 	let configs = loader::load(&paths, &state.registered_paths)?;
 	let requests = tool_request::requests(&configs)?;
 	// group requests by identity so each tool resolves once
-	let requests = ToolRequestGroup::from_entries(requests);
+	let request_groups = ToolRequestGroup::from_entries(&requests);
 	// skip tools already recorded in the lock
 	let mut lock = lock::read(data_dir)?;
-	let requests = status::missing_from_lock(requests, &lock, tools_dir);
-	if requests.is_empty() {
+	let missing = status::missing_from_lock(&request_groups, &lock, tools_dir);
+	if missing.is_empty() {
 		// persist the project registration even when nothing needs installing
 		state::register_config(&mut state, &paths.system, &paths.project);
 		state::write(data_dir, &state, text.as_deref())?;
@@ -43,7 +44,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	}
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
-	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(requests, http.clone()))?;
+	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone()))?;
 	// group resolutions by artifact so each tool downloads once
 	let resolutions = ToolResolutionGroup::from_entries(resolutions)?;
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
@@ -53,14 +54,16 @@ pub(crate) fn install() -> Result<(), Error> {
 	lock::write(data_dir, &lock)?;
 	// refresh binaries and shims for the newly installed tools
 	state::register_config(&mut state, &paths.system, &paths.project);
-	shims::index_installed_binaries(&mut state, tools_dir, &lock, &groups)?;
-	let index_err = shims::index_shims(&mut state, &lock).err();
+	let catalog = Catalog::new(&lock, &requests);
+	let installations = catalog.installations_by_path();
+	shims::index_installed_binaries(&mut state, tools_dir, installations, &groups)?;
+	let index_err = shims::index_shims(&mut state, installations).err();
 	state::write(data_dir, &state, text.as_deref())?;
 	let generate_err: Option<Error> = paths
 		.shims_dir
 		.as_deref()
 		.ok_or_else(|| Error::from("no shims directory"))
-		.and_then(|dir| shims::generate(&state, dir, &lock).map_err(Error::from))
+		.and_then(|dir| shims::generate(&state, dir, installations).map_err(Error::from))
 		.err();
 	// representative rows are appended after duplicate rows
 	for tool in &lock.tools[lock.tools.len() - groups.len()..] {
@@ -201,7 +204,7 @@ mod tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -249,7 +252,7 @@ mod tests {
 				version: Version::parse("latest"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -296,7 +299,7 @@ mod tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -355,7 +358,7 @@ mod tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let entries = vec![(request, ToolResolution::Github {
@@ -394,7 +397,7 @@ mod tests {
 				version: Version::parse("latest"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let exact = ToolRequestGroup {
@@ -405,7 +408,7 @@ mod tests {
 				version: Version::parse("1.0.0"),
 				api_url: None,
 				exposed: None,
-				rename: None,
+				rename_shims: None,
 			},
 		};
 		let requests = vec![latest, exact];

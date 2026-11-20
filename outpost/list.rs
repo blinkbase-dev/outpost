@@ -1,4 +1,5 @@
 use crate::config::{loader, locate, state};
+use crate::tools::catalog::Catalog;
 use crate::tools::lock::{self, LockedTool};
 use crate::tools::status::{self, InstallState};
 use crate::tools::tool_request::{self, ToolRequest};
@@ -14,7 +15,8 @@ pub(crate) fn list() -> Result<(), Error> {
 	let configs = loader::load(&paths, &state.registered_paths)?;
 	let requests = tool_request::requests(&configs)?;
 	let lock = lock::read(data_dir)?;
-	let report = status::report(requests, &lock, tools_dir);
+	let catalog = Catalog::new(&lock, &requests);
+	let report = status::report(&catalog, tools_dir);
 	let mut rows = Vec::with_capacity(report.requested.len() + report.unrequested.len());
 	for entry in &report.requested {
 		let (tool, requested) = match &entry.tool {

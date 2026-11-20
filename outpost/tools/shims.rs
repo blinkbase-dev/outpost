@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 use super::archive::ToolResolutionGroup;
-use super::lock::{Identity, Lock, LockedTool};
-use super::tool_request::{ToolRequest, ToolRequestGroup};
+use super::catalog::{InstallationItem, Installations};
+use super::lock::LockedTool;
+use super::tool_request::ToolRequest;
 use crate::config::state::{ShimEntry, State, StateError};
 use crate::tools::candidates;
 
@@ -27,54 +28,42 @@ use unix_import::*;
 #[cfg(windows)]
 use windows_import::*;
 
-pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, groups: &[&ToolResolutionGroup]) -> Result<(), ShimError> {
-	let install_paths: Vec<PathBuf> = groups.iter().map(|group| PathBuf::from(group.artifact_key.as_str())).collect();
-	let mut indexed = candidates::find_binaries_by_tool(tools_dir, install_paths.iter().map(PathBuf::as_path))?;
-	for group in groups {
-		let Some(binaries) = indexed.get_mut(Path::new(group.artifact_key.as_str())) else {
+pub(crate) fn index_installed_binaries(
+	state: &mut State, tools_dir: &Path, installations: &Installations<'_>, groups: &[&ToolResolutionGroup],
+) -> Result<(), ShimError> {
+	let install_paths: Vec<&Path> = groups.iter().map(|group| Path::new(group.artifact_key.as_str())).collect();
+	let mut indexed = candidates::find_binaries_by_tool(tools_dir, install_paths.iter().copied())?;
+	for (install_path, items) in installations {
+		let Some(binaries) = indexed.get_mut(*install_path) else {
 			continue;
 		};
-		// identities sharing one artifact contribute to a single allowlist
-		let Some(exposed_patterns) = _exposed_patterns(group.requests.iter().map(|request| &request.tool)) else {
+		let requests: Vec<&ToolRequest> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
+		// an artifact with no requests stays unfiltered
+		if requests.is_empty() {
+			continue;
+		}
+		let Some(exposed_patterns) = _exposed_patterns(requests) else {
 			continue;
 		};
 		let set = _exposed_set(exposed_patterns)?;
 		binaries.retain(|binary| set.is_match(binary));
 	}
 	state.binaries.extend(indexed);
-	let locked_install_paths: HashSet<&Path> = lock
-		.tools
-		.iter()
-		.map(|tool| match tool {
-			LockedTool::Github { install_path, .. } => install_path.as_path(),
-		})
-		.collect();
-	state.binaries.retain(|path, _| locked_install_paths.contains(path.as_path()));
+	state.binaries.retain(|path, _| installations.contains_key(path.as_path()));
 	Ok(())
 }
 
-pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, requests: &[ToolRequestGroup]) -> Result<(), ShimError> {
-	// lock rows sharing an install path contribute to a single allowlist
-	let requests_by_identity: HashMap<Identity, &ToolRequest> = requests.iter().map(|group| (group.tool.identity(), &group.tool)).collect();
-	let mut requests_by_path: BTreeMap<&Path, Vec<&ToolRequest>> = BTreeMap::new();
-	for tool in &lock.tools {
-		let install_path = match tool {
-			LockedTool::Github { install_path, .. } => install_path,
+pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, installations: &Installations<'_>) -> Result<(), ShimError> {
+	let mut indexed = candidates::find_binaries_by_tool(tools_dir, installations.keys().copied())?;
+	for (install_path, items) in installations {
+		let Some(binaries) = indexed.get_mut(*install_path) else {
+			continue;
 		};
-		let requests = requests_by_path.entry(install_path.as_path()).or_default();
-		if let Some(request) = requests_by_identity.get(&tool.identity()).copied() {
-			requests.push(request);
-		}
-	}
-	let mut indexed = candidates::find_binaries_by_tool(tools_dir, requests_by_path.keys().copied())?;
-	for (install_path, requests) in requests_by_path {
-		// a row without a config entry leaves the artifact unfiltered
+		let requests: Vec<&ToolRequest> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
+		// an artifact with no requests stays unfiltered
 		if requests.is_empty() {
 			continue;
 		}
-		let Some(binaries) = indexed.get_mut(install_path) else {
-			continue;
-		};
 		let Some(exposed_patterns) = _exposed_patterns(requests) else {
 			continue;
 		};
@@ -86,14 +75,19 @@ pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, r
 }
 
 fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a ToolRequest>) -> Option<Vec<&'a str>> {
+	// a request without a list neither contributes nor clears the allowlist
+	let mut specified = false;
 	let mut patterns = Vec::new();
 	for request in requests {
 		match request {
-			ToolRequest::Github { exposed: Some(exposed), .. } => patterns.extend(exposed.iter().map(String::as_str)),
-			ToolRequest::Github { exposed: None, .. } => return None,
+			ToolRequest::Github { exposed: Some(exposed), .. } => {
+				specified = true;
+				patterns.extend(exposed.iter().map(String::as_str));
+			}
+			ToolRequest::Github { exposed: None, .. } => {}
 		}
 	}
-	Some(patterns)
+	specified.then_some(patterns)
 }
 
 fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobSet, ShimError> {
@@ -106,14 +100,18 @@ fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobS
 }
 
 #[cfg(windows)]
-pub(crate) fn index_shims(state: &mut State, lock: &Lock) -> Result<(), ShimError> {
-	let (shims, conflicts) = _index_shims(state, lock);
-	state.shims = shims;
-	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
+pub(crate) fn index_shims(state: &mut State, installations: &Installations<'_>) -> Result<(), ShimError> {
+	let index = _index_shims(state, installations)?;
+	state.shims = index.shims;
+	if index.conflicts.is_empty() {
+		Ok(())
+	} else {
+		Err(ShimError::Conflict(index.conflicts))
+	}
 }
 
 #[cfg(not(windows))]
-pub(crate) fn index_shims(_state: &mut State, _lock: &Lock) -> Result<(), ShimError> {
+pub(crate) fn index_shims(_state: &mut State, _installations: &Installations<'_>) -> Result<(), ShimError> {
 	Ok(())
 }
 
@@ -152,7 +150,7 @@ pub(crate) fn purge(shims_dir: &Path) -> Result<(), ShimError> {
 }
 
 #[cfg(windows)]
-pub(crate) fn generate(state: &State, shims_dir: &Path, _lock: &Lock) -> Result<(), ShimError> {
+pub(crate) fn generate(state: &State, shims_dir: &Path, _installations: &Installations<'_>) -> Result<(), ShimError> {
 	let trampoline = std::env::current_exe()?.with_file_name("op_shim.exe");
 	let bytes = std::fs::read(&trampoline).map_err(|source| ShimError::Trampoline { path: trampoline, source })?;
 	std::fs::create_dir_all(shims_dir)?;
@@ -177,18 +175,20 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, _lock: &Lock) -> Result<
 }
 
 #[cfg(not(windows))]
-pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(), ShimError> {
+pub(crate) fn generate(state: &State, shims_dir: &Path, installations: &Installations<'_>) -> Result<(), ShimError> {
 	std::fs::create_dir_all(shims_dir)?;
-	let (shims, conflicts) = _index_shims(state, lock);
-	for (name, entries) in &shims {
-		let spec = match &entries[0] {
-			ShimEntry::Github { full_name, lane, .. } if !lane.is_empty() => format!("github:{full_name}@{lane}"),
-			ShimEntry::Github { full_name, .. } => format!("github:{full_name}"),
+	let index = _index_shims(state, installations)?;
+	for (name, entries) in &index.shims {
+		let entry = &entries[0];
+		let spec = entry.spec();
+		// execute the stored binary path rather than the shim name
+		let Some(binary) = entry.binary().to_str() else {
+			continue;
 		};
 		let script = format!(
 			"#!/bin/sh\nexec op exec '{}' -- '{}' \"$@\"\n",
 			spec.replace('\'', "'\\''"),
-			name.replace('\'', "'\\''")
+			binary.replace('\'', "'\\''")
 		);
 		let target = shims_dir.join(name);
 		let size_matches = std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() == script.len() as u64);
@@ -205,61 +205,71 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, lock: &Lock) -> Result<(
 		std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
 	}
 	// drop stale scripts so conflicted names stop resolving
-	for conflict in &conflicts {
+	for conflict in &index.conflicts {
 		match std::fs::remove_file(shims_dir.join(&conflict.name)) {
 			Ok(()) => {}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 			Err(error) => return Err(error.into()),
 		}
 	}
-	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
+	if index.conflicts.is_empty() {
+		Ok(())
+	} else {
+		Err(ShimError::Conflict(index.conflicts))
+	}
+}
+
+struct ShimIndex {
+	shims: BTreeMap<String, Vec<ShimEntry>>,
+	conflicts: Vec<ShimConflict>,
 }
 
 // a shim name comes from a binary name and must be unique across tools
-fn _index_shims(state: &State, lock: &Lock) -> (BTreeMap<String, Vec<ShimEntry>>, Vec<ShimConflict>) {
+fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<ShimIndex, ShimError> {
 	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();
 	let mut conflicts: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-	for tool in &lock.tools {
-		match tool {
-			LockedTool::Github {
-				full_name,
-				lane,
-				requested,
-				install_path,
-				..
-			} => {
-				let Some(binaries) = state.binaries.get(install_path) else {
-					continue;
-				};
-				let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
-				for binary in binaries {
-					// windows strips the executable extension and folds case
-					let name = if cfg!(windows) {
-						binary.file_stem().and_then(OsStr::to_str).map(str::to_ascii_lowercase)
-					} else {
-						binary.file_name().and_then(OsStr::to_str).map(str::to_owned)
-					};
-					let Some(name) = name else {
-						continue;
-					};
-					names.entry(name).or_default().push(binary);
-				}
-				for (name, binaries) in names {
-					// a name with more than one binary cannot be shimmed unambiguously
-					let [binary] = binaries.as_slice() else {
-						conflicts
-							.entry(name)
-							.or_default()
-							.extend(binaries.into_iter().map(|binary| install_path.join(binary)));
-						continue;
-					};
-					shims.entry(name).or_default().push(ShimEntry::Github {
-						full_name: full_name.clone(),
-						lane: lane.clone(),
-						requested: requested.clone(),
-						install_path: install_path.clone(),
-						binary: binary.to_path_buf(),
-					});
+	for (install_path, items) in installations {
+		let install_path = *install_path;
+		let Some(binaries) = state.binaries.get(install_path) else {
+			continue;
+		};
+		let rules = _compile_rename_shims(items)?;
+		let mut names: BTreeMap<String, Vec<&PathBuf>> = BTreeMap::new();
+		for binary in binaries {
+			// windows strips the executable extension and folds case
+			let name = if cfg!(windows) {
+				binary.file_stem().and_then(OsStr::to_str).map(str::to_ascii_lowercase)
+			} else {
+				binary.file_name().and_then(OsStr::to_str).map(str::to_owned)
+			};
+			let Some(name) = name else {
+				continue;
+			};
+			let name = _apply_rename_shims(name, binary, rules.as_ref())?;
+			names.entry(name).or_default().push(binary);
+		}
+		for (name, binaries) in names {
+			// a name with more than one binary cannot be shimmed unambiguously
+			let [binary] = binaries.as_slice() else {
+				conflicts
+					.entry(name)
+					.or_default()
+					.extend(binaries.into_iter().map(|binary| install_path.join(binary)));
+				continue;
+			};
+			for item in items {
+				match item.locked {
+					LockedTool::Github {
+						full_name, lane, requested, ..
+					} => {
+						shims.entry(name.clone()).or_default().push(ShimEntry::Github {
+							full_name: full_name.clone(),
+							lane: lane.clone(),
+							requested: requested.clone(),
+							install_path: install_path.to_path_buf(),
+							binary: binary.to_path_buf(),
+						});
+					}
 				}
 			}
 		}
@@ -283,7 +293,58 @@ fn _index_shims(state: &State, lock: &Lock) -> (BTreeMap<String, Vec<ShimEntry>>
 	for conflict in &conflicts {
 		shims.remove(&conflict.name);
 	}
-	(shims, conflicts)
+	Ok(ShimIndex { shims, conflicts })
+}
+
+fn _compile_rename_shims(items: &[InstallationItem<'_>]) -> Result<Option<(GlobSet, Vec<String>)>, ShimError> {
+	// requests sharing an installation contribute one set of rename rules
+	let mut pairs: BTreeSet<(&str, &str)> = BTreeSet::new();
+	for item in items {
+		for request in &item.requests {
+			let rename_shims = match &request.tool {
+				ToolRequest::Github { rename_shims, .. } => rename_shims.as_ref(),
+			};
+			let Some(rename_shims) = rename_shims else {
+				continue;
+			};
+			for (source, target) in rename_shims {
+				pairs.insert((source.as_str(), target.as_str()));
+			}
+		}
+	}
+	if pairs.is_empty() {
+		return Ok(None);
+	}
+	let mut builder = GlobSetBuilder::new();
+	let mut targets = Vec::with_capacity(pairs.len());
+	for (source, target) in pairs {
+		builder.add(GlobBuilder::new(source).literal_separator(true).build().map_err(ShimError::Rename)?);
+		// windows shim names are lowercase
+		targets.push(if cfg!(windows) { target.to_ascii_lowercase() } else { target.to_owned() });
+	}
+	Ok(Some((builder.build().map_err(ShimError::Rename)?, targets)))
+}
+
+fn _apply_rename_shims(name: String, binary: &Path, rules: Option<&(GlobSet, Vec<String>)>) -> Result<String, ShimError> {
+	let Some((globset, targets)) = rules else {
+		return Ok(name);
+	};
+	// several rules can match one binary, so keep the distinct targets
+	let mut matched = BTreeSet::new();
+	for index in globset.matches(binary) {
+		matched.insert(targets[index].as_str());
+	}
+	let mut matched = matched.into_iter();
+	let Some(target) = matched.next() else {
+		return Ok(name);
+	};
+	// two targets mean the rules rename this binary differently
+	let Some(other) = matched.next() else {
+		return Ok(target.to_owned());
+	};
+	let mut conflicts = vec![target.to_owned(), other.to_owned()];
+	conflicts.extend(matched.map(str::to_owned));
+	Err(ShimError::RenameConflict { name, targets: conflicts })
 }
 
 #[cfg(windows)]
@@ -303,6 +364,11 @@ pub(crate) enum ShimError {
 	Io(std::io::Error),
 	State(StateError),
 	Exposed(globset::Error),
+	Rename(globset::Error),
+	RenameConflict {
+		name: String,
+		targets: Vec<String>,
+	},
 	Conflict(Vec<ShimConflict>),
 	#[cfg(windows)]
 	InUse(Vec<PathBuf>),
@@ -331,6 +397,8 @@ impl fmt::Display for ShimError {
 			Self::Io(error) => fmt::Display::fmt(error, f),
 			Self::State(error) => fmt::Display::fmt(error, f),
 			Self::Exposed(error) => write!(f, "invalid exposed pattern: {error}"),
+			Self::Rename(error) => write!(f, "invalid rename pattern: {error}"),
+			Self::RenameConflict { name, targets } => write!(f, "conflicting rename for '{name}':\n  {}", targets.join("\n  ")),
 			Self::Conflict(conflicts) => {
 				f.write_str("conflicting binaries, cannot generate shims:")?;
 				for conflict in conflicts {
@@ -361,6 +429,8 @@ impl std::error::Error for ShimError {
 			Self::Io(error) => Some(error),
 			Self::State(error) => Some(error),
 			Self::Exposed(error) => Some(error),
+			Self::Rename(error) => Some(error),
+			Self::RenameConflict { .. } => None,
 			Self::Conflict(_) => None,
 			#[cfg(windows)]
 			Self::InUse(_) => None,
