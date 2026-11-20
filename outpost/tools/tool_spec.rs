@@ -2,7 +2,7 @@ use std::fmt;
 
 use regex::regex;
 
-use super::tool_request::ToolRequest;
+use super::tool_request::RequestedTool;
 use super::version::{Version, split_lane};
 
 #[derive(Debug, PartialEq)]
@@ -46,11 +46,11 @@ impl ToolSpec {
 		}
 	}
 
-	pub(crate) fn matches(&self, request: &ToolRequest) -> bool {
+	pub(crate) fn matches(&self, request: &RequestedTool) -> bool {
 		match (self, request) {
 			(
 				Self::Github { full_name, lane, version },
-				ToolRequest::Github {
+				RequestedTool::Github {
 					full_name: request_name,
 					lane: request_lane,
 					version: request_version,
@@ -127,7 +127,7 @@ mod tests {
 	#[test]
 	fn matches_requests() {
 		let latest = ToolSpec::parse("github:owner/repo@latest").unwrap();
-		let request = ToolRequest::Github {
+		let request = RequestedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::Latest,
@@ -137,7 +137,7 @@ mod tests {
 		};
 		assert!(latest.matches(&request));
 
-		let exact = ToolRequest::Github {
+		let exact = RequestedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::Exact("1.0.0".to_owned()),
@@ -152,7 +152,7 @@ mod tests {
 		assert!(any.matches(&exact));
 
 		let lane = ToolSpec::parse("github:owner/repo@cli/1.0.0").unwrap();
-		let lane_request = ToolRequest::Github {
+		let lane_request = RequestedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			version: Version::Exact("1.0.0".to_owned()),
@@ -165,7 +165,7 @@ mod tests {
 
 		let any_lane_version = ToolSpec::parse("github:owner/repo@cli/").unwrap();
 		assert!(any_lane_version.matches(&lane_request));
-		assert!(any_lane_version.matches(&ToolRequest::Github {
+		assert!(any_lane_version.matches(&RequestedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			version: Version::Latest,
@@ -174,7 +174,7 @@ mod tests {
 			rename_shims: None,
 		}));
 		assert!(!any_lane_version.matches(&exact));
-		assert!(!any_lane_version.matches(&ToolRequest::Github {
+		assert!(!any_lane_version.matches(&RequestedTool::Github {
 			full_name: "owner/repo".to_owned(),
 			lane: "other/".to_owned(),
 			version: Version::Latest,

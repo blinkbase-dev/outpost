@@ -3,19 +3,19 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use super::lock::{Identity, Lock, LockedTool};
-use super::tool_request::ToolRequestEntry;
+use super::tool_request::ToolRequest;
 
 // builds identity indexes for config requests and lock rows on demand
 pub(crate) struct Catalog<'a> {
 	lock: &'a Lock,
-	requests: &'a [ToolRequestEntry],
-	requests_by_identity: OnceCell<HashMap<Identity, Vec<&'a ToolRequestEntry>>>,
+	requests: &'a [ToolRequest],
+	requests_by_identity: OnceCell<HashMap<Identity, Vec<&'a ToolRequest>>>,
 	locked_by_identity: OnceCell<HashMap<Identity, &'a LockedTool>>,
 	installations: OnceCell<Installations<'a>>,
 }
 
 impl<'a> Catalog<'a> {
-	pub(crate) fn new(lock: &'a Lock, requests: &'a [ToolRequestEntry]) -> Self {
+	pub(crate) fn new(lock: &'a Lock, requests: &'a [ToolRequest]) -> Self {
 		Self {
 			lock,
 			requests,
@@ -29,14 +29,14 @@ impl<'a> Catalog<'a> {
 		self.lock
 	}
 
-	pub(crate) fn requests(&self) -> &'a [ToolRequestEntry] {
+	pub(crate) fn requests(&self) -> &'a [ToolRequest] {
 		self.requests
 	}
 
-	pub(crate) fn request_for(&self, identity: &Identity) -> &[&'a ToolRequestEntry] {
+	pub(crate) fn request_for(&self, identity: &Identity) -> &[&'a ToolRequest] {
 		// every entry for an identity is kept so consumers own the precedence rule
 		let index = self.requests_by_identity.get_or_init(|| {
-			let mut index: HashMap<Identity, Vec<&'a ToolRequestEntry>> = HashMap::with_capacity(self.requests.len());
+			let mut index: HashMap<Identity, Vec<&'a ToolRequest>> = HashMap::with_capacity(self.requests.len());
 			for request in self.requests {
 				index.entry(request.tool.identity()).or_default().push(request);
 			}
@@ -72,7 +72,7 @@ pub(crate) type Installations<'a> = BTreeMap<&'a Path, Vec<InstallationItem<'a>>
 
 pub(crate) struct InstallationItem<'a> {
 	pub(crate) locked: &'a LockedTool,
-	pub(crate) requests: Vec<&'a ToolRequestEntry>,
+	pub(crate) requests: Vec<&'a ToolRequest>,
 }
 
 #[cfg(test)]
@@ -80,13 +80,13 @@ mod tests {
 	use std::path::{Path, PathBuf};
 
 	use super::*;
-	use crate::tools::tool_request::ToolRequest;
+	use crate::tools::tool_request::RequestedTool;
 	use crate::tools::version::Version;
 
-	fn _request(version: &str) -> ToolRequestEntry {
-		ToolRequestEntry {
+	fn _request(version: &str) -> ToolRequest {
+		ToolRequest {
 			origin: PathBuf::from("outpost.toml"),
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse(version),
