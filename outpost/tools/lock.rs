@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::version::Version;
 
-pub(crate) type Identity = (&'static str, String, String, Version);
-
 pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 	match std::fs::read_to_string(data_dir.join("outpost.lock")) {
 		Ok(text) if text.trim().is_empty() => Ok(Lock::default()),
@@ -43,7 +41,7 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 
 pub(crate) fn write(data_dir: &Path, lock: &Lock) -> Result<(), LockError> {
 	let mut tools = lock.tools.clone();
-	tools.sort_by(|a, b| a.key().cmp(&b.key()));
+	tools.sort_by_cached_key(LockedTool::identity);
 	let text = toml::to_string_pretty(&Lock { version: lock.version, tools })?;
 	let path = data_dir.join("outpost.lock");
 	let temp = path.with_extension("lock.tmp");
@@ -82,10 +80,41 @@ impl Default for Lock {
 	}
 }
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum Identity {
+	Github {
+		api_url: String,
+		full_name: String,
+		lane: String,
+		version: Version,
+	},
+}
+
+impl fmt::Display for Identity {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Github {
+				api_url,
+				full_name,
+				lane,
+				version,
+			} => {
+				write!(f, "github:{full_name}@{lane}{version}")?;
+				if !api_url.is_empty() {
+					write!(f, " ({api_url})")?;
+				}
+				Ok(())
+			}
+		}
+	}
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub(crate) enum LockedTool {
 	Github {
+		#[serde(default)]
+		api_url: String,
 		full_name: String,
 		lane: String,
 		requested: Version,
@@ -95,19 +124,20 @@ pub(crate) enum LockedTool {
 }
 
 impl LockedTool {
-	pub(crate) fn key(&self) -> (&'static str, &str, &str, &Version) {
-		match self {
-			Self::Github {
-				full_name, lane, requested, ..
-			} => ("github", full_name, lane, requested),
-		}
-	}
-
 	pub(crate) fn identity(&self) -> Identity {
 		match self {
 			Self::Github {
-				full_name, lane, requested, ..
-			} => ("github", full_name.clone(), lane.clone(), requested.clone()),
+				api_url,
+				full_name,
+				lane,
+				requested,
+				..
+			} => Identity::Github {
+				api_url: api_url.clone(),
+				full_name: full_name.clone(),
+				lane: lane.clone(),
+				version: requested.clone(),
+			},
 		}
 	}
 }
@@ -149,9 +179,7 @@ impl fmt::Display for LockError {
 			Self::Serialize(error) => write!(f, "lock file serialize failed: {error}"),
 			Self::Busy => write!(f, "another outpost install is already running"),
 			Self::UnsupportedVersion(version) => write!(f, "unsupported lock version {version}, expected 1"),
-			Self::DuplicateIdentity((backend, full_name, lane, version)) => {
-				write!(f, "duplicate {backend} tool '{full_name}' (lane '{lane}', version '{version}') in lock")
-			}
+			Self::DuplicateIdentity(identity) => write!(f, "duplicate tool '{identity}' in lock"),
 			Self::InvalidPath(path) => write!(f, "invalid install path '{}' in lock", path.display()),
 		}
 	}
@@ -202,6 +230,7 @@ mod tests {
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "owner/repo"
 lane = ""
 requested = "1.0.0"
@@ -210,6 +239,7 @@ install_path = "github_owner_repo/1.0.0"
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "owner/repo"
 lane = ""
 requested = "1.0.0"
@@ -226,6 +256,7 @@ install_path = "github_owner_repo/1.0.1"
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "owner/repo"
 lane = ""
 requested = "1.0.0"
@@ -248,6 +279,7 @@ install_path = "{}"
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "owner/repo"
 lane = ""
 requested = "1.0.0"
@@ -264,6 +296,7 @@ install_path = "C:"
 		let lock = Lock {
 			version: 1,
 			tools: vec![LockedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("2.20"),
@@ -282,6 +315,7 @@ install_path = "C:"
 			version: 1,
 			tools: vec![
 				LockedTool::Github {
+					api_url: String::new(),
 					full_name: "z/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("1"),
@@ -289,6 +323,7 @@ install_path = "C:"
 					install_path: PathBuf::from("github_z_repo/1"),
 				},
 				LockedTool::Github {
+					api_url: String::new(),
 					full_name: "a/repo".to_owned(),
 					lane: "cli/".to_owned(),
 					requested: Version::parse("1"),
@@ -296,6 +331,7 @@ install_path = "C:"
 					install_path: PathBuf::from("github_a_repo/1"),
 				},
 				LockedTool::Github {
+					api_url: String::new(),
 					full_name: "a/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("2"),
@@ -306,13 +342,26 @@ install_path = "C:"
 		};
 		write(dir.path(), &lock).unwrap();
 		let lock = read(dir.path()).unwrap();
-		let one = Version::parse("1");
-		let two = Version::parse("2");
-		let order: Vec<_> = lock.tools.iter().map(|tool| tool.key()).collect();
+		let order: Vec<Identity> = lock.tools.iter().map(LockedTool::identity).collect();
 		assert_eq!(order, vec![
-			("github", "a/repo", "", &two),
-			("github", "a/repo", "cli/", &one),
-			("github", "z/repo", "", &one),
+			Identity::Github {
+				api_url: String::new(),
+				full_name: "a/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("2"),
+			},
+			Identity::Github {
+				api_url: String::new(),
+				full_name: "a/repo".to_owned(),
+				lane: "cli/".to_owned(),
+				version: Version::parse("1"),
+			},
+			Identity::Github {
+				api_url: String::new(),
+				full_name: "z/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1"),
+			},
 		]);
 	}
 
@@ -322,6 +371,7 @@ install_path = "C:"
 		let lock = Lock {
 			version: 1,
 			tools: vec![LockedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("2.20"),
@@ -335,6 +385,7 @@ install_path = "C:"
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "owner/repo"
 lane = ""
 requested = "2.20"

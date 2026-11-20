@@ -68,14 +68,14 @@ fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 				// shorthand form fills the same table
 				toml::Value::String(version) => GithubOptionsTable {
 					version,
-					api_url: None,
+					api_url: String::new(),
 					exposed: None,
 					rename_shims: None,
 				},
 				table => table.try_into().map_err(|error| format!("invalid options for '{key}': {error}"))?,
 			};
 			// trim so the url can be concatenated with paths
-			options.api_url = options.api_url.map(|api_url| api_url.trim().trim_end_matches('/').to_owned());
+			options.api_url = options.api_url.trim().trim_end_matches('/').to_owned();
 			// reject blank patterns since they cannot match a binary
 			if let Some(exposed) = options.exposed.as_ref()
 				&& exposed.iter().any(|pattern| pattern.trim().is_empty())
@@ -115,7 +115,7 @@ pub(crate) enum ToolOptions {
 pub(crate) struct GithubOptionsTable {
 	pub(crate) version: String,
 	#[serde(default)]
-	pub(crate) api_url: Option<String>,
+	pub(crate) api_url: String,
 	#[serde(default)]
 	pub(crate) exposed: Option<Vec<String>>,
 	#[serde(default)]
@@ -208,7 +208,7 @@ mod tests {
 			files[0].config.tools["github:owner/repo"],
 			ToolOptions::Github(GithubOptionsTable {
 				version: "latest".to_owned(),
-				api_url: None,
+				api_url: String::new(),
 				exposed: None,
 				rename_shims: None,
 			})
@@ -237,7 +237,7 @@ mod tests {
 			files[0].config.tools["github:owner/repo"],
 			ToolOptions::Github(GithubOptionsTable {
 				version: "0.26.0".to_owned(),
-				api_url: None,
+				api_url: String::new(),
 				exposed: None,
 				rename_shims: None,
 			})
@@ -246,7 +246,7 @@ mod tests {
 			files[0].config.tools["github:owner/other"],
 			ToolOptions::Github(GithubOptionsTable {
 				version: "0.26.0".to_owned(),
-				api_url: Some("http://127.0.0.1:8080".to_owned()),
+				api_url: "http://127.0.0.1:8080".to_owned(),
 				exposed: None,
 				rename_shims: None,
 			})
@@ -255,7 +255,7 @@ mod tests {
 			files[0].config.tools["github:owner/empty"],
 			ToolOptions::Github(GithubOptionsTable {
 				version: "0.26.0".to_owned(),
-				api_url: None,
+				api_url: String::new(),
 				exposed: Some(Vec::new()),
 				rename_shims: None,
 			})
@@ -264,7 +264,7 @@ mod tests {
 			files[0].config.tools["github:owner/exposed"],
 			ToolOptions::Github(GithubOptionsTable {
 				version: "0.26.0".to_owned(),
-				api_url: None,
+				api_url: String::new(),
 				exposed: Some(vec!["tool".to_owned(), "bin/*".to_owned()]),
 				rename_shims: None,
 			})
@@ -273,7 +273,7 @@ mod tests {
 			files[0].config.tools["github:owner/rename"],
 			ToolOptions::Github(GithubOptionsTable {
 				version: "0.26.0".to_owned(),
-				api_url: None,
+				api_url: String::new(),
 				exposed: None,
 				rename_shims: Some(BTreeMap::from([
 					("bin/helper".to_owned(), "repo-helper".to_owned()),

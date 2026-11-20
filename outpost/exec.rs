@@ -126,6 +126,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 					requested,
 					install_path,
 					binary,
+					..
 				},
 			) => (full_name == request_name && lane == request_lane && requested == version).then_some((install_path, binary)),
 		}) else {

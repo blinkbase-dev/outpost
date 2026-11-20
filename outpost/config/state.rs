@@ -73,6 +73,8 @@ impl Default for State {
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub(crate) enum ShimEntry {
 	Github {
+		#[serde(default)]
+		api_url: String,
 		full_name: String,
 		lane: String,
 		requested: Version,
@@ -156,6 +158,7 @@ mod tests {
 			registered_paths: vec![PathBuf::from("project/outpost.toml")],
 			binaries: BTreeMap::from([(PathBuf::from("github_owner_repo/1.2.3"), vec![PathBuf::from("rg"), PathBuf::from("doc/rg")])]),
 			shims: BTreeMap::from([("rg".to_owned(), vec![ShimEntry::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
