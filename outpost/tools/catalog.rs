@@ -87,10 +87,10 @@ mod tests {
 		ToolRequest {
 			origin: PathBuf::from("outpost.toml"),
 			tool: RequestedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse(version),
-				api_url: None,
 				exposed: None,
 				rename_shims: None,
 			},
@@ -104,6 +104,7 @@ mod tests {
 	fn _locked(requested: &str, installed_version: &str) -> LockedTool {
 		let version = installed_version.strip_prefix('v').unwrap_or(installed_version);
 		LockedTool::Github {
+			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse(requested),

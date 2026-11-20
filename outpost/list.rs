@@ -92,10 +92,7 @@ fn _print(rows: &[Row]) {
 		_print_stacked(rows);
 		return;
 	};
-	println!(
-		"{:<tool_width$}  {:<requested_width$}  {:<version_width$}  SOURCE",
-		"TOOL", "REQUESTED", "VERSION"
-	);
+	println!("{:<tool_width$}  {:<requested_width$}  {:<version_width$}  SOURCE", "TOOL", "REQUESTED", "VERSION");
 	for row in rows {
 		let tool = _truncate(&row.tool, tool_width);
 		let requested = _truncate(&row.requested, requested_width);
