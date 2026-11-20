@@ -88,18 +88,18 @@ pub(crate) struct ToolRequestGroup {
 }
 
 impl ToolRequestGroup {
-	pub(crate) fn from_entries(entries: Vec<ToolRequestEntry>) -> Vec<Self> {
+	pub(crate) fn from_entries(entries: &[ToolRequestEntry]) -> Vec<Self> {
 		let mut index: HashMap<Identity, usize> = HashMap::with_capacity(entries.len());
 		let mut groups: Vec<Self> = Vec::with_capacity(entries.len());
 		for entry in entries {
 			let identity = entry.tool.identity();
 			match index.get(&identity) {
-				Some(&index) => groups[index].origins.push(entry.origin),
+				Some(&index) => groups[index].origins.push(entry.origin.clone()),
 				None => {
 					index.insert(identity, groups.len());
 					groups.push(Self {
-						origins: vec![entry.origin],
-						tool: entry.tool,
+						origins: vec![entry.origin.clone()],
+						tool: entry.tool.clone(),
 					});
 				}
 			}
@@ -437,7 +437,7 @@ mod group_tests {
 				},
 			},
 		];
-		let groups = ToolRequestGroup::from_entries(requests);
+		let groups = ToolRequestGroup::from_entries(&requests);
 		assert_eq!(groups.len(), 2);
 		assert_eq!(groups[0].tool, ToolRequest::Github {
 			full_name: "owner/repo".to_owned(),

@@ -7,7 +7,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 use super::archive::ToolResolutionGroup;
 use super::catalog::{InstallationItem, Installations};
-use super::lock::{Lock, LockedTool};
+use super::lock::LockedTool;
 use super::tool_request::ToolRequest;
 use crate::config::state::{ShimEntry, State, StateError};
 use crate::tools::candidates;
@@ -28,43 +28,42 @@ use unix_import::*;
 #[cfg(windows)]
 use windows_import::*;
 
-pub(crate) fn index_installed_binaries(state: &mut State, tools_dir: &Path, lock: &Lock, groups: &[&ToolResolutionGroup]) -> Result<(), ShimError> {
-	let install_paths: Vec<PathBuf> = groups.iter().map(|group| PathBuf::from(group.artifact_key.as_str())).collect();
-	let mut indexed = candidates::find_binaries_by_tool(tools_dir, install_paths.iter().map(PathBuf::as_path))?;
-	for group in groups {
-		let Some(binaries) = indexed.get_mut(Path::new(group.artifact_key.as_str())) else {
+pub(crate) fn index_installed_binaries(
+	state: &mut State, tools_dir: &Path, installations: &Installations<'_>, groups: &[&ToolResolutionGroup],
+) -> Result<(), ShimError> {
+	let install_paths: Vec<&Path> = groups.iter().map(|group| Path::new(group.artifact_key.as_str())).collect();
+	let mut indexed = candidates::find_binaries_by_tool(tools_dir, install_paths.iter().copied())?;
+	for (install_path, items) in installations {
+		let Some(binaries) = indexed.get_mut(*install_path) else {
 			continue;
 		};
-		// requests sharing one artifact contribute to a single allowlist
-		let Some(exposed_patterns) = _exposed_patterns(group.requests.iter().map(|request| &request.tool)) else {
+		let requests: Vec<&ToolRequest> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
+		// an artifact with no requests stays unfiltered
+		if requests.is_empty() {
+			continue;
+		}
+		let Some(exposed_patterns) = _exposed_patterns(requests) else {
 			continue;
 		};
 		let set = _exposed_set(exposed_patterns)?;
 		binaries.retain(|binary| set.is_match(binary));
 	}
 	state.binaries.extend(indexed);
-	let locked_install_paths: HashSet<&Path> = lock
-		.tools
-		.iter()
-		.map(|tool| match tool {
-			LockedTool::Github { install_path, .. } => install_path.as_path(),
-		})
-		.collect();
-	state.binaries.retain(|path, _| locked_install_paths.contains(path.as_path()));
+	state.binaries.retain(|path, _| installations.contains_key(path.as_path()));
 	Ok(())
 }
 
 pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, installations: &Installations<'_>) -> Result<(), ShimError> {
 	let mut indexed = candidates::find_binaries_by_tool(tools_dir, installations.keys().copied())?;
 	for (install_path, items) in installations {
-		let requests: Vec<&ToolRequest> = items.iter().filter_map(|item| item.requests).map(|requests| &requests.tool).collect();
-		// a row without a config entry leaves the artifact unfiltered
-		if requests.is_empty() {
-			continue;
-		}
 		let Some(binaries) = indexed.get_mut(*install_path) else {
 			continue;
 		};
+		let requests: Vec<&ToolRequest> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
+		// an artifact with no requests stays unfiltered
+		if requests.is_empty() {
+			continue;
+		}
 		let Some(exposed_patterns) = _exposed_patterns(requests) else {
 			continue;
 		};
@@ -76,14 +75,19 @@ pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, installations:
 }
 
 fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a ToolRequest>) -> Option<Vec<&'a str>> {
+	// a request without a list neither contributes nor clears the allowlist
+	let mut specified = false;
 	let mut patterns = Vec::new();
 	for request in requests {
 		match request {
-			ToolRequest::Github { exposed: Some(exposed), .. } => patterns.extend(exposed.iter().map(String::as_str)),
-			ToolRequest::Github { exposed: None, .. } => return None,
+			ToolRequest::Github { exposed: Some(exposed), .. } => {
+				specified = true;
+				patterns.extend(exposed.iter().map(String::as_str));
+			}
+			ToolRequest::Github { exposed: None, .. } => {}
 		}
 	}
-	Some(patterns)
+	specified.then_some(patterns)
 }
 
 fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobSet, ShimError> {
@@ -97,9 +101,13 @@ fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobS
 
 #[cfg(windows)]
 pub(crate) fn index_shims(state: &mut State, installations: &Installations<'_>) -> Result<(), ShimError> {
-	let (shims, conflicts) = _index_shims(state, installations)?;
-	state.shims = shims;
-	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
+	let index = _index_shims(state, installations)?;
+	state.shims = index.shims;
+	if index.conflicts.is_empty() {
+		Ok(())
+	} else {
+		Err(ShimError::Conflict(index.conflicts))
+	}
 }
 
 #[cfg(not(windows))]
@@ -169,8 +177,8 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, _installations: &Install
 #[cfg(not(windows))]
 pub(crate) fn generate(state: &State, shims_dir: &Path, installations: &Installations<'_>) -> Result<(), ShimError> {
 	std::fs::create_dir_all(shims_dir)?;
-	let (shims, conflicts) = _index_shims(state, installations)?;
-	for (name, entries) in &shims {
+	let index = _index_shims(state, installations)?;
+	for (name, entries) in &index.shims {
 		let entry = &entries[0];
 		let spec = entry.spec();
 		// execute the stored binary path rather than the shim name
@@ -197,18 +205,27 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, installations: &Installa
 		std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
 	}
 	// drop stale scripts so conflicted names stop resolving
-	for conflict in &conflicts {
+	for conflict in &index.conflicts {
 		match std::fs::remove_file(shims_dir.join(&conflict.name)) {
 			Ok(()) => {}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 			Err(error) => return Err(error.into()),
 		}
 	}
-	if conflicts.is_empty() { Ok(()) } else { Err(ShimError::Conflict(conflicts)) }
+	if index.conflicts.is_empty() {
+		Ok(())
+	} else {
+		Err(ShimError::Conflict(index.conflicts))
+	}
+}
+
+struct ShimIndex {
+	shims: BTreeMap<String, Vec<ShimEntry>>,
+	conflicts: Vec<ShimConflict>,
 }
 
 // a shim name comes from a binary name and must be unique across tools
-fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<(BTreeMap<String, Vec<ShimEntry>>, Vec<ShimConflict>), ShimError> {
+fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<ShimIndex, ShimError> {
 	let mut shims: BTreeMap<String, Vec<ShimEntry>> = BTreeMap::new();
 	let mut conflicts: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
 	for (install_path, items) in installations {
@@ -276,24 +293,23 @@ fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<(BTr
 	for conflict in &conflicts {
 		shims.remove(&conflict.name);
 	}
-	Ok((shims, conflicts))
+	Ok(ShimIndex { shims, conflicts })
 }
 
 fn _compile_rename_shims(items: &[InstallationItem<'_>]) -> Result<Option<(GlobSet, Vec<String>)>, ShimError> {
 	// requests sharing an installation contribute one set of rename rules
 	let mut pairs: BTreeSet<(&str, &str)> = BTreeSet::new();
 	for item in items {
-		let Some(requests) = item.requests else {
-			continue;
-		};
-		let rename_shims = match &requests.tool {
-			ToolRequest::Github { rename_shims, .. } => rename_shims.as_ref(),
-		};
-		let Some(rename_shims) = rename_shims else {
-			continue;
-		};
-		for (source, target) in rename_shims {
-			pairs.insert((source.as_str(), target.as_str()));
+		for request in &item.requests {
+			let rename_shims = match &request.tool {
+				ToolRequest::Github { rename_shims, .. } => rename_shims.as_ref(),
+			};
+			let Some(rename_shims) = rename_shims else {
+				continue;
+			};
+			for (source, target) in rename_shims {
+				pairs.insert((source.as_str(), target.as_str()));
+			}
 		}
 	}
 	if pairs.is_empty() {

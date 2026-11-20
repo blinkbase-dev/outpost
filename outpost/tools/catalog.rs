@@ -3,37 +3,49 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use super::lock::{Identity, Lock, LockedTool};
-use super::tool_request::ToolRequestGroup;
+use super::tool_request::ToolRequestEntry;
 
 // builds identity indexes for config requests and lock rows on demand
 pub(crate) struct Catalog<'a> {
 	lock: &'a Lock,
-	requests: &'a [ToolRequestGroup],
-	requests_by_identity: OnceCell<HashMap<Identity, &'a ToolRequestGroup>>,
+	requests: &'a [ToolRequestEntry],
+	requests_by_identity: OnceCell<HashMap<Identity, Vec<&'a ToolRequestEntry>>>,
 	locked_by_identity: OnceCell<HashMap<Identity, &'a LockedTool>>,
 	installations: OnceCell<Installations<'a>>,
 }
 
 impl<'a> Catalog<'a> {
-	pub(crate) fn new(lock: &'a Lock, requests: &'a [ToolRequestGroup]) -> Self {
+	pub(crate) fn new(lock: &'a Lock, requests: &'a [ToolRequestEntry]) -> Self {
 		Self {
 			lock,
 			requests,
-			requests_by_identity: OnceCell::new(),
 			locked_by_identity: OnceCell::new(),
+			requests_by_identity: OnceCell::new(),
 			installations: OnceCell::new(),
 		}
 	}
 
-	pub(crate) fn request(&self, identity: &Identity) -> Option<&'a ToolRequestGroup> {
-		self
-			.requests_by_identity
-			.get_or_init(|| self.requests.iter().map(|group| (group.tool.identity(), group)).collect())
-			.get(identity)
-			.copied()
+	pub(crate) fn lock(&self) -> &'a Lock {
+		self.lock
 	}
 
-	pub(crate) fn locked(&self, identity: &Identity) -> Option<&'a LockedTool> {
+	pub(crate) fn requests(&self) -> &'a [ToolRequestEntry] {
+		self.requests
+	}
+
+	pub(crate) fn request_for(&self, identity: &Identity) -> &[&'a ToolRequestEntry] {
+		// every entry for an identity is kept so consumers own the precedence rule
+		let index = self.requests_by_identity.get_or_init(|| {
+			let mut index: HashMap<Identity, Vec<&'a ToolRequestEntry>> = HashMap::with_capacity(self.requests.len());
+			for request in self.requests {
+				index.entry(request.tool.identity()).or_default().push(request);
+			}
+			index
+		});
+		index.get(identity).map_or(&[], Vec::as_slice)
+	}
+
+	pub(crate) fn lock_for(&self, identity: &Identity) -> Option<&'a LockedTool> {
 		self
 			.locked_by_identity
 			.get_or_init(|| self.lock.tools.iter().map(|tool| (tool.identity(), tool)).collect())
@@ -41,17 +53,15 @@ impl<'a> Catalog<'a> {
 			.copied()
 	}
 
-	pub(crate) fn installations(&self) -> &Installations<'a> {
+	pub(crate) fn installations_by_path(&self) -> &Installations<'a> {
 		self.installations.get_or_init(|| {
 			let mut items_by_path: BTreeMap<&'a Path, Vec<InstallationItem<'a>>> = BTreeMap::new();
 			for tool in &self.lock.tools {
 				let install_path = match tool {
 					LockedTool::Github { install_path, .. } => install_path.as_path(),
 				};
-				items_by_path.entry(install_path).or_default().push(InstallationItem {
-					locked: tool,
-					requests: self.request(&tool.identity()),
-				});
+				let requests = self.request_for(&tool.identity()).to_vec();
+				items_by_path.entry(install_path).or_default().push(InstallationItem { locked: tool, requests });
 			}
 			items_by_path
 		})
@@ -62,7 +72,7 @@ pub(crate) type Installations<'a> = BTreeMap<&'a Path, Vec<InstallationItem<'a>>
 
 pub(crate) struct InstallationItem<'a> {
 	pub(crate) locked: &'a LockedTool,
-	pub(crate) requests: Option<&'a ToolRequestGroup>,
+	pub(crate) requests: Vec<&'a ToolRequestEntry>,
 }
 
 #[cfg(test)]
@@ -73,9 +83,9 @@ mod tests {
 	use crate::tools::tool_request::ToolRequest;
 	use crate::tools::version::Version;
 
-	fn _request_group(version: &str) -> ToolRequestGroup {
-		ToolRequestGroup {
-			origins: Vec::new(),
+	fn _request(version: &str) -> ToolRequestEntry {
+		ToolRequestEntry {
+			origin: PathBuf::from("outpost.toml"),
 			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
@@ -104,28 +114,27 @@ mod tests {
 
 	#[test]
 	fn looks_up_requests_and_lock_rows_by_identity() {
-		let group = _request_group("1.0.0");
+		let request = _request("1.0.0");
 		let lock = _lock(vec![_locked("1.0.0", "v1.0.0")]);
-		let catalog = Catalog::new(&lock, std::slice::from_ref(&group));
-		let identity = group.tool.identity();
-		assert!(catalog.request(&identity).is_some());
-		assert!(catalog.locked(&identity).is_some());
-		let missing = _request_group("2.0.0").tool.identity();
-		assert!(catalog.request(&missing).is_none());
-		assert!(catalog.locked(&missing).is_none());
+		let catalog = Catalog::new(&lock, std::slice::from_ref(&request));
+		let identity = request.tool.identity();
+		assert_eq!(catalog.request_for(&identity).len(), 1);
+		assert!(catalog.lock_for(&identity).is_some());
+		let missing = _request("2.0.0").tool.identity();
+		assert!(catalog.request_for(&missing).is_empty());
+		assert!(catalog.lock_for(&missing).is_none());
 	}
 
 	#[test]
 	fn groups_installation_items_by_install_path() {
 		let lock = _lock(vec![_locked("latest", "v1.0.0"), _locked("1.0.0", "v1.0.0"), _locked("2.0.0", "v2.0.0")]);
-		let requests = [_request_group("latest"), _request_group("1.0.0")];
+		let requests = [_request("latest"), _request("1.0.0")];
 		let catalog = Catalog::new(&lock, &requests);
-		let installations = catalog.installations();
+		let installations = catalog.installations_by_path();
 		assert_eq!(installations.len(), 2);
 		let shared = installations.get(Path::new("github_owner_repo/1.0.0")).unwrap();
 		assert_eq!(shared.len(), 2);
-		assert!(shared.iter().all(|item| item.requests.is_some()));
 		let separate = installations.get(Path::new("github_owner_repo/2.0.0")).unwrap();
-		assert!(separate[0].requests.is_none());
+		assert_eq!(separate.len(), 1);
 	}
 }

@@ -2,8 +2,7 @@ use clap::Args;
 
 use crate::config::{loader, locate, state};
 use crate::tools::catalog::Catalog;
-use crate::tools::tool_request::{self, ToolRequestGroup};
-use crate::tools::{lock, shims};
+use crate::tools::{lock, shims, tool_request};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -17,9 +16,9 @@ pub(crate) fn shim(args: ShimArgs) -> Result<(), Error> {
 	let lock = lock::read(data_dir)?;
 	let (mut state, text) = state::read(data_dir)?;
 	let configs = loader::load(&paths, &state.registered_paths)?;
-	let requests = ToolRequestGroup::from_entries(tool_request::requests(&configs)?);
+	let requests = tool_request::requests(&configs)?;
 	let catalog = Catalog::new(&lock, &requests);
-	let installations = catalog.installations();
+	let installations = catalog.installations_by_path();
 	shims::index_binaries(&mut state, tools_dir, installations)?;
 	let index_err = shims::index_shims(&mut state, installations).err();
 	state::write(data_dir, &state, text.as_deref())?;

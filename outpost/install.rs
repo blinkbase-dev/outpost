@@ -32,10 +32,10 @@ pub(crate) fn install() -> Result<(), Error> {
 	let configs = loader::load(&paths, &state.registered_paths)?;
 	let requests = tool_request::requests(&configs)?;
 	// group requests by identity so each tool resolves once
-	let requests = ToolRequestGroup::from_entries(requests);
+	let request_groups = ToolRequestGroup::from_entries(&requests);
 	// skip tools already recorded in the lock
 	let mut lock = lock::read(data_dir)?;
-	let missing = status::missing_from_lock(&requests, &lock, tools_dir);
+	let missing = status::missing_from_lock(&request_groups, &lock, tools_dir);
 	if missing.is_empty() {
 		// persist the project registration even when nothing needs installing
 		state::register_config(&mut state, &paths.system, &paths.project);
@@ -54,9 +54,9 @@ pub(crate) fn install() -> Result<(), Error> {
 	lock::write(data_dir, &lock)?;
 	// refresh binaries and shims for the newly installed tools
 	state::register_config(&mut state, &paths.system, &paths.project);
-	shims::index_installed_binaries(&mut state, tools_dir, &lock, &groups)?;
 	let catalog = Catalog::new(&lock, &requests);
-	let installations = catalog.installations();
+	let installations = catalog.installations_by_path();
+	shims::index_installed_binaries(&mut state, tools_dir, installations, &groups)?;
 	let index_err = shims::index_shims(&mut state, installations).err();
 	state::write(data_dir, &state, text.as_deref())?;
 	let generate_err: Option<Error> = paths

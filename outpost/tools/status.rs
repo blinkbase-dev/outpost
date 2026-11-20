@@ -1,17 +1,18 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use super::catalog::Catalog;
 use super::lock::{Identity, Lock, LockedTool};
-use super::tool_request::{ToolRequest, ToolRequestEntry, ToolRequestGroup};
+use super::tool_request::{ToolRequest, ToolRequestGroup};
 
-pub(crate) fn report(requests: Vec<ToolRequestEntry>, lock: &Lock, tools_dir: &Path) -> Report {
-	let locked_entries: HashMap<Identity, &LockedTool> = lock.tools.iter().map(|tool| (tool.identity(), tool)).collect();
+pub(crate) fn report(catalog: &Catalog<'_>, tools_dir: &Path) -> Report {
+	let requests = catalog.requests();
 	let mut requested_identities = HashSet::with_capacity(requests.len());
 	let mut requested = Vec::with_capacity(requests.len());
 	for request in requests {
 		let identity = request.tool.identity();
 		requested_identities.insert(identity.clone());
-		let (install_state, installed_version) = match locked_entries.get(&identity).copied() {
+		let (install_state, installed_version) = match catalog.lock_for(&identity) {
 			Some(LockedTool::Github { tag_name, install_path, .. }) => {
 				let install_state = if _installed(install_path, tools_dir) {
 					InstallState::Installed
@@ -23,14 +24,14 @@ pub(crate) fn report(requests: Vec<ToolRequestEntry>, lock: &Lock, tools_dir: &P
 			None => (InstallState::Missing, None),
 		};
 		requested.push(ToolStatus {
-			origin: request.origin,
+			origin: request.origin.clone(),
 			install_state,
 			installed_version,
-			tool: request.tool,
+			tool: request.tool.clone(),
 		});
 	}
 	let mut unrequested = Vec::new();
-	for tool in &lock.tools {
+	for tool in &catalog.lock().tools {
 		if !requested_identities.contains(&tool.identity()) {
 			unrequested.push(tool.clone());
 		}
@@ -76,6 +77,7 @@ fn _installed(install_path: &Path, tools_dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::tools::tool_request::ToolRequestEntry;
 	use crate::tools::version::Version;
 
 	#[test]
@@ -117,7 +119,7 @@ mod tests {
 				},
 			},
 		];
-		let report = report(requests, &lock, &tools);
+		let report = report(&Catalog::new(&lock, &requests), &tools);
 		assert_eq!(report.requested, vec![
 			ToolStatus {
 				origin: PathBuf::from("outpost.toml"),
@@ -175,7 +177,7 @@ mod tests {
 				rename_shims: None,
 			},
 		}];
-		let report = report(requests, &lock, &tools);
+		let report = report(&Catalog::new(&lock, &requests), &tools);
 		assert_eq!(report.requested, vec![ToolStatus {
 			origin: PathBuf::from("outpost.toml"),
 			install_state: InstallState::Missing,
@@ -206,7 +208,7 @@ mod tests {
 				install_path: PathBuf::from("github_old_repo/9.0.0"),
 			}],
 		};
-		let report = report(Vec::new(), &lock, &tools);
+		let report = report(&Catalog::new(&lock, &[]), &tools);
 		assert!(report.requested.is_empty());
 		assert_eq!(report.unrequested, lock.tools);
 	}
@@ -250,7 +252,7 @@ mod tests {
 				},
 			},
 		];
-		let report = report(requests, &lock, &tools);
+		let report = report(&Catalog::new(&lock, &requests), &tools);
 		assert_eq!(report.requested, vec![
 			ToolStatus {
 				origin: PathBuf::from("system/outpost.toml"),
@@ -296,7 +298,7 @@ mod tests {
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
-		let requests = ToolRequestGroup::from_entries(vec![ToolRequestEntry {
+		let requests = ToolRequestGroup::from_entries(&[ToolRequestEntry {
 			origin: PathBuf::new(),
 			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
@@ -324,7 +326,7 @@ mod tests {
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 			}],
 		};
-		let requests = ToolRequestGroup::from_entries(vec![ToolRequestEntry {
+		let requests = ToolRequestGroup::from_entries(&[ToolRequestEntry {
 			origin: PathBuf::new(),
 			tool: ToolRequest::Github {
 				full_name: "owner/repo".to_owned(),
@@ -369,7 +371,7 @@ mod tests {
 			exposed: None,
 			rename_shims: None,
 		};
-		let requests = ToolRequestGroup::from_entries(vec![
+		let requests = ToolRequestGroup::from_entries(&[
 			ToolRequestEntry {
 				origin: PathBuf::new(),
 				tool: other_lane,
@@ -413,20 +415,17 @@ mod tests {
 			exposed: None,
 			rename_shims: None,
 		};
-		let requests = missing_from_lock(
-			&ToolRequestGroup::from_entries(vec![
-				ToolRequestEntry {
-					origin: PathBuf::new(),
-					tool: installed,
-				},
-				ToolRequestEntry {
-					origin: PathBuf::new(),
-					tool: missing,
-				},
-			]),
-			&lock,
-			&tools,
-		);
+		let entries = [
+			ToolRequestEntry {
+				origin: PathBuf::new(),
+				tool: installed,
+			},
+			ToolRequestEntry {
+				origin: PathBuf::new(),
+				tool: missing,
+			},
+		];
+		let requests = missing_from_lock(&ToolRequestGroup::from_entries(&entries), &lock, &tools);
 		assert_eq!(requests.len(), 1);
 		assert!(matches!(&requests[0].tool, ToolRequest::Github { full_name, .. } if full_name == "owner/other"));
 	}
