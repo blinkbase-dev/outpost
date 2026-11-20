@@ -70,6 +70,7 @@ fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 					version,
 					api_url: None,
 					exposed: None,
+					rename: None,
 				},
 				table => table.try_into().map_err(|error| format!("invalid options for '{key}': {error}"))?,
 			};
@@ -81,10 +82,27 @@ fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 			{
 				return Err(format!("invalid 'exposed' for '{key}': expected non-empty patterns"));
 			}
+			// rename sources are globs matched against binary names, targets are
+			// plain shim names
+			if let Some(rename) = options.rename.as_ref() {
+				for (from, to) in rename {
+					if from.trim().is_empty() || !_is_plain_name(from) {
+						return Err(format!("invalid 'rename' for '{key}': expected non-empty name patterns"));
+					}
+					if to.trim().is_empty() || !_is_plain_name(to) {
+						return Err(format!("invalid 'rename' for '{key}': expected non-empty plain names"));
+					}
+				}
+			}
 			Ok(ToolOptions::Github(options))
 		}
 		_ => Err(format!("unsupported backend '{backend}' in '{key}'")),
 	}
+}
+
+fn _is_plain_name(name: &str) -> bool {
+	let mut components = std::path::Path::new(name).components();
+	matches!(components.next(), Some(std::path::Component::Normal(_))) && components.next().is_none()
 }
 
 #[derive(Debug, PartialEq)]
@@ -100,6 +118,8 @@ pub(crate) struct GithubOptionsTable {
 	pub(crate) api_url: Option<String>,
 	#[serde(default)]
 	pub(crate) exposed: Option<Vec<String>>,
+	#[serde(default)]
+	pub(crate) rename: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug)]
@@ -190,6 +210,7 @@ mod tests {
 				version: "latest".to_owned(),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			})
 		);
 	}
@@ -200,7 +221,8 @@ mod tests {
 		let tools = r#""github:owner/repo" = { version = "0.26.0" }
 "github:owner/other" = { version = "0.26.0", api_url = " http://127.0.0.1:8080/ " }
 "github:owner/empty" = { version = "0.26.0", exposed = [] }
-"github:owner/exposed" = { version = "0.26.0", exposed = ["tool", "bin/*"] }"#;
+"github:owner/exposed" = { version = "0.26.0", exposed = ["tool", "bin/*"] }
+"github:owner/rename" = { version = "0.26.0", rename = { "tool_*" = "tool", "helper" = "repo-helper" } }"#;
 		let path = _config(tmp.path(), "outpost.toml", tools);
 		let files = load(
 			&ConfigPaths {
@@ -217,6 +239,7 @@ mod tests {
 				version: "0.26.0".to_owned(),
 				api_url: None,
 				exposed: None,
+				rename: None,
 			})
 		);
 		assert_eq!(
@@ -225,6 +248,7 @@ mod tests {
 				version: "0.26.0".to_owned(),
 				api_url: Some("http://127.0.0.1:8080".to_owned()),
 				exposed: None,
+				rename: None,
 			})
 		);
 		assert_eq!(
@@ -233,6 +257,7 @@ mod tests {
 				version: "0.26.0".to_owned(),
 				api_url: None,
 				exposed: Some(Vec::new()),
+				rename: None,
 			})
 		);
 		assert_eq!(
@@ -241,6 +266,19 @@ mod tests {
 				version: "0.26.0".to_owned(),
 				api_url: None,
 				exposed: Some(vec!["tool".to_owned(), "bin/*".to_owned()]),
+				rename: None,
+			})
+		);
+		assert_eq!(
+			files[0].config.tools["github:owner/rename"],
+			ToolOptions::Github(GithubOptionsTable {
+				version: "0.26.0".to_owned(),
+				api_url: None,
+				exposed: None,
+				rename: Some(BTreeMap::from([
+					("helper".to_owned(), "repo-helper".to_owned()),
+					("tool_*".to_owned(), "tool".to_owned())
+				])),
 			})
 		);
 	}
@@ -344,12 +382,16 @@ mod tests {
 
 	#[test]
 	fn rejects_invalid_tool_options() {
+		#[rustfmt::skip]
 		let cases = [
 			(r#""github:owner/repo" = { version = "1", token = "x" }"#, "unknown field"),
 			(r#""gitlab:owner/repo" = { version = "1" }"#, "unsupported backend 'gitlab'"),
 			(r#""gitlab:owner/repo" = "1""#, "unsupported backend 'gitlab'"),
 			(r#""owner/repo" = "1""#, "missing backend in 'owner/repo'"),
 			(r#""github:owner/repo" = { version = "1", exposed = ["tool", ""] }"#, "invalid 'exposed'"),
+			(r#""github:owner/repo" = { version = "1", rename = { "" = "tool" } }"#, "invalid 'rename'"),
+			(r#""github:owner/repo" = { version = "1", rename = { "bin/tool" = "tool" } }"#, "invalid 'rename'"),
+			(r#""github:owner/repo" = { version = "1", rename = { "tool" = "bin/tool" } }"#, "invalid 'rename'"),
 		];
 		for (tools, needle) in cases {
 			let tmp = tempfile::tempdir().unwrap();
