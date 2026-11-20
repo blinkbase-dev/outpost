@@ -10,12 +10,12 @@ use crate::config::{loader, locate, state};
 use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionGroup};
 use crate::tools::catalog::Catalog;
 use crate::tools::lock::{self, Identity, Lock, LockedTool};
-use crate::tools::tool_request::{self, ToolRequest, ToolRequestGroup};
+use crate::tools::tool_request::{self, RequestedTool, ToolRequestSet};
 use crate::tools::{shims, status};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
-type ResolutionEntry = (ToolRequestGroup, ToolResolution);
-type ResolutionFailure = (ToolRequestGroup, Error);
+type ResolutionEntry = (ToolRequestSet, ToolResolution);
+type ResolutionFailure = (ToolRequestSet, Error);
 type DownloadEntry = (ToolResolutionGroup, ToolArchive);
 
 pub(crate) fn install() -> Result<(), Error> {
@@ -31,11 +31,11 @@ pub(crate) fn install() -> Result<(), Error> {
 	let (mut state, text) = state::read(data_dir)?;
 	let configs = loader::load(&paths, &state.registered_paths)?;
 	let requests = tool_request::requests(&configs)?;
-	// group requests by identity so each tool resolves once
-	let request_groups = ToolRequestGroup::from_entries(&requests);
+	// one set per identity so each tool resolves once
+	let request_sets = ToolRequestSet::from_requests(&requests);
 	// skip tools already recorded in the lock
 	let mut lock = lock::read(data_dir)?;
-	let missing = status::missing_from_lock(&request_groups, &lock, tools_dir);
+	let missing = status::missing_from_lock(&request_sets, &lock, tools_dir);
 	if missing.is_empty() {
 		// persist the project registration even when nothing needs installing
 		state::register_config(&mut state, &paths.system, &paths.project);
@@ -85,7 +85,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	for (requests, error) in &failures {
 		for request in requests {
 			match &request.tool {
-				ToolRequest::Github { full_name, lane, version, .. } => {
+				RequestedTool::Github { full_name, lane, version, .. } => {
 					eprintln!("{full_name} {lane}{version}: {error}");
 				}
 			}
@@ -107,7 +107,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	message.map_or(Ok(()), |message| Err(message.into()))
 }
 
-async fn resolve_parallel(requests: Vec<ToolRequestGroup>, http: Client) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>), Error> {
+async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(requests.len());
 	for request in requests {
@@ -133,9 +133,9 @@ async fn resolve_parallel(requests: Vec<ToolRequestGroup>, http: Client) -> Resu
 	Ok((resolutions, failures))
 }
 
-async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, Error> {
+async fn resolve(http: Client, request: &RequestedTool) -> Result<ToolResolution, Error> {
 	match request {
-		ToolRequest::Github {
+		RequestedTool::Github {
 			full_name,
 			lane,
 			version,
@@ -157,8 +157,8 @@ async fn resolve(http: Client, request: &ToolRequest) -> Result<ToolResolution, 
 
 fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionGroup> {
 	let groups: Vec<&ToolResolutionGroup> = installed.iter().map(|(group, _)| group).collect();
-	let row = |group: &ToolResolutionGroup, request: &ToolRequestGroup| match (&request.tool, &group.resolution) {
-		(ToolRequest::Github { full_name, lane, version, .. }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
+	let row = |group: &ToolResolutionGroup, request: &ToolRequestSet| match (&request.tool, &group.resolution) {
+		(RequestedTool::Github { full_name, lane, version, .. }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
 			full_name: full_name.clone(),
 			lane: lane.clone(),
 			requested: version.clone(),
@@ -196,9 +196,9 @@ mod tests {
 
 	#[test]
 	fn locks_installed_tools() {
-		let request = ToolRequestGroup {
+		let request = ToolRequestSet {
 			origins: Vec::new(),
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
@@ -244,9 +244,9 @@ mod tests {
 			tag_name: "v1.0.0".to_owned(),
 			install_path: PathBuf::from("github_owner_repo/1.0.0"),
 		});
-		let request = ToolRequestGroup {
+		let request = ToolRequestSet {
 			origins: Vec::new(),
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
@@ -291,9 +291,9 @@ mod tests {
 			tag_name: "cli/v1.0.0".to_owned(),
 			install_path: PathBuf::from("github_owner_repo/cli_v1.0.0"),
 		});
-		let request = ToolRequestGroup {
+		let request = ToolRequestSet {
 			origins: Vec::new(),
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
@@ -350,9 +350,9 @@ mod tests {
 			version: 1,
 			tools: vec![other.clone()],
 		};
-		let request = ToolRequestGroup {
+		let request = ToolRequestSet {
 			origins: Vec::new(),
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
@@ -389,9 +389,9 @@ mod tests {
 
 	#[test]
 	fn locks_duplicate_requests() {
-		let latest = ToolRequestGroup {
+		let latest = ToolRequestSet {
 			origins: Vec::new(),
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
@@ -400,9 +400,9 @@ mod tests {
 				rename_shims: None,
 			},
 		};
-		let exact = ToolRequestGroup {
+		let exact = ToolRequestSet {
 			origins: Vec::new(),
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),

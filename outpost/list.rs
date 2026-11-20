@@ -2,7 +2,7 @@ use crate::config::{loader, locate, state};
 use crate::tools::catalog::Catalog;
 use crate::tools::lock::{self, LockedTool};
 use crate::tools::status::{self, InstallState};
-use crate::tools::tool_request::{self, ToolRequest};
+use crate::tools::tool_request::{self, RequestedTool};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -20,7 +20,7 @@ pub(crate) fn list() -> Result<(), Error> {
 	let mut rows = Vec::with_capacity(report.requested.len() + report.unrequested.len());
 	for entry in &report.requested {
 		let (tool, requested) = match &entry.tool {
-			ToolRequest::Github { full_name, lane, version, .. } => (format!("github:{full_name}"), format!("{lane}{version}")),
+			RequestedTool::Github { full_name, lane, version, .. } => (format!("github:{full_name}"), format!("{lane}{version}")),
 		};
 		let version = match &entry.installed_version {
 			Some(version) => match entry.install_state {

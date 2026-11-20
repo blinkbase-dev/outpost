@@ -8,7 +8,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use super::archive::ToolResolutionGroup;
 use super::catalog::{InstallationItem, Installations};
 use super::lock::LockedTool;
-use super::tool_request::ToolRequest;
+use super::tool_request::RequestedTool;
 use crate::config::state::{ShimEntry, State, StateError};
 use crate::tools::candidates;
 
@@ -37,7 +37,7 @@ pub(crate) fn index_installed_binaries(
 		let Some(binaries) = indexed.get_mut(*install_path) else {
 			continue;
 		};
-		let requests: Vec<&ToolRequest> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
+		let requests: Vec<&RequestedTool> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
 		// an artifact with no requests stays unfiltered
 		if requests.is_empty() {
 			continue;
@@ -59,7 +59,7 @@ pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, installations:
 		let Some(binaries) = indexed.get_mut(*install_path) else {
 			continue;
 		};
-		let requests: Vec<&ToolRequest> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
+		let requests: Vec<&RequestedTool> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
 		// an artifact with no requests stays unfiltered
 		if requests.is_empty() {
 			continue;
@@ -74,17 +74,17 @@ pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, installations:
 	Ok(())
 }
 
-fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a ToolRequest>) -> Option<Vec<&'a str>> {
+fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a RequestedTool>) -> Option<Vec<&'a str>> {
 	// a request without a list neither contributes nor clears the allowlist
 	let mut specified = false;
 	let mut patterns = Vec::new();
 	for request in requests {
 		match request {
-			ToolRequest::Github { exposed: Some(exposed), .. } => {
+			RequestedTool::Github { exposed: Some(exposed), .. } => {
 				specified = true;
 				patterns.extend(exposed.iter().map(String::as_str));
 			}
-			ToolRequest::Github { exposed: None, .. } => {}
+			RequestedTool::Github { exposed: None, .. } => {}
 		}
 	}
 	specified.then_some(patterns)
@@ -302,7 +302,7 @@ fn _compile_rename_shims(items: &[InstallationItem<'_>]) -> Result<Option<(GlobS
 	for item in items {
 		for request in &item.requests {
 			let rename_shims = match &request.tool {
-				ToolRequest::Github { rename_shims, .. } => rename_shims.as_ref(),
+				RequestedTool::Github { rename_shims, .. } => rename_shims.as_ref(),
 			};
 			let Some(rename_shims) = rename_shims else {
 				continue;

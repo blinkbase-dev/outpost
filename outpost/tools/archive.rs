@@ -11,10 +11,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::backend::_backend::ArchiveFormat;
-use crate::tools::tool_request::{ToolRequest, ToolRequestGroup};
+use crate::tools::tool_request::{RequestedTool, ToolRequestSet};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
-type ResolutionEntry = (ToolRequestGroup, ToolResolution);
+type ResolutionEntry = (ToolRequestSet, ToolResolution);
 type DownloadEntry = (ToolResolutionGroup, ToolArchive);
 type GroupFailure = (ToolResolutionGroup, Error);
 
@@ -147,7 +147,7 @@ pub(crate) enum ToolResolution {
 
 pub(crate) struct ToolResolutionGroup {
 	pub(crate) artifact_key: ArtifactKey,
-	pub(crate) requests: Vec<ToolRequestGroup>,
+	pub(crate) requests: Vec<ToolRequestSet>,
 	pub(crate) resolution: ToolResolution,
 }
 
@@ -196,9 +196,9 @@ pub(crate) enum ToolArchive {
 pub(crate) struct ArtifactKey(String);
 
 impl ArtifactKey {
-	pub(crate) fn new(request: &ToolRequest, version: &str) -> Self {
+	pub(crate) fn new(request: &RequestedTool, version: &str) -> Self {
 		match request {
-			ToolRequest::Github { full_name, .. } => {
+			RequestedTool::Github { full_name, .. } => {
 				let tag = version.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(version).to_lowercase();
 				Self(format!(
 					"github_{}/{}",
@@ -332,9 +332,9 @@ mod download_parallel_tests {
 		let dir = tempfile::tempdir().unwrap();
 		let entries = (0..16)
 			.map(|index| {
-				let request = ToolRequestGroup {
+				let request = ToolRequestSet {
 					origins: Vec::new(),
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse(&format!("1.0.{index}")),
@@ -374,9 +374,9 @@ mod download_parallel_tests {
 		let dir = tempfile::tempdir().unwrap();
 		let entries = (0..10)
 			.map(|index| {
-				let request = ToolRequestGroup {
+				let request = ToolRequestSet {
 					origins: Vec::new(),
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse(&format!("1.0.{index}")),
@@ -413,9 +413,9 @@ mod download_parallel_tests {
 			.await;
 		let dir = tempfile::tempdir().unwrap();
 		let requests = vec![
-			ToolRequestGroup {
+			ToolRequestSet {
 				origins: vec![PathBuf::from("/a/outpost.toml")],
-				tool: ToolRequest::Github {
+				tool: RequestedTool::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("latest"),
@@ -424,9 +424,9 @@ mod download_parallel_tests {
 					rename_shims: None,
 				},
 			},
-			ToolRequestGroup {
+			ToolRequestSet {
 				origins: vec![PathBuf::from("/b/outpost.toml")],
-				tool: ToolRequest::Github {
+				tool: RequestedTool::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
@@ -470,9 +470,9 @@ mod download_parallel_tests {
 		let dir = tempfile::tempdir().unwrap();
 		let entries = vec![
 			(
-				ToolRequestGroup {
+				ToolRequestSet {
 					origins: vec![PathBuf::from("/a/outpost.toml")],
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
@@ -489,9 +489,9 @@ mod download_parallel_tests {
 				},
 			),
 			(
-				ToolRequestGroup {
+				ToolRequestSet {
 					origins: vec![PathBuf::from("/b/outpost.toml")],
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.1.0"),
@@ -508,9 +508,9 @@ mod download_parallel_tests {
 				},
 			),
 			(
-				ToolRequestGroup {
+				ToolRequestSet {
 					origins: vec![PathBuf::from("/c/outpost.toml")],
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("latest"),
@@ -702,9 +702,9 @@ mod extract_parallel_tests {
 		let archive = downloads.join("tool.tar.gz");
 		std::fs::write(&archive, tar_gz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
 		let entries = vec![(
-			ToolRequestGroup {
+			ToolRequestSet {
 				origins: Vec::new(),
-				tool: ToolRequest::Github {
+				tool: RequestedTool::Github {
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
@@ -735,9 +735,9 @@ mod extract_parallel_tests {
 		let archive = downloads.join("magika.tar.gz");
 		std::fs::write(&archive, tar_gz(&[("tool-1.0.0/example-tool", b"binary")])).unwrap();
 		let entries = vec![(
-			ToolRequestGroup {
+			ToolRequestSet {
 				origins: Vec::new(),
-				tool: ToolRequest::Github {
+				tool: RequestedTool::Github {
 					full_name: "google/magika".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
@@ -780,9 +780,9 @@ mod extract_parallel_tests {
 		let tools = dir.path().join("tools");
 		let entries = vec![
 			(
-				ToolRequestGroup {
+				ToolRequestSet {
 					origins: Vec::new(),
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/tar-gz".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
@@ -799,9 +799,9 @@ mod extract_parallel_tests {
 				},
 			),
 			(
-				ToolRequestGroup {
+				ToolRequestSet {
 					origins: Vec::new(),
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/tar-xz".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
@@ -818,9 +818,9 @@ mod extract_parallel_tests {
 				},
 			),
 			(
-				ToolRequestGroup {
+				ToolRequestSet {
 					origins: Vec::new(),
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/zip".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
@@ -863,9 +863,9 @@ mod extract_parallel_tests {
 		let tools = dir.path().join("tools");
 		let entries = vec![
 			(
-				ToolRequestGroup {
+				ToolRequestSet {
 					origins: Vec::new(),
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/good".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
@@ -882,9 +882,9 @@ mod extract_parallel_tests {
 				},
 			),
 			(
-				ToolRequestGroup {
+				ToolRequestSet {
 					origins: Vec::new(),
-					tool: ToolRequest::Github {
+					tool: RequestedTool::Github {
 						full_name: "owner/bad".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
@@ -922,9 +922,9 @@ mod resolution_group_tests {
 
 	#[test]
 	fn groups_requests_by_artifact_key() {
-		let latest = ToolRequestGroup {
+		let latest = ToolRequestSet {
 			origins: vec![PathBuf::from("/a/outpost.toml")],
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
@@ -933,9 +933,9 @@ mod resolution_group_tests {
 				rename_shims: None,
 			},
 		};
-		let exact = ToolRequestGroup {
+		let exact = ToolRequestSet {
 			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
@@ -967,9 +967,9 @@ mod resolution_group_tests {
 
 	#[test]
 	fn rejects_artifact_collisions() {
-		let first = ToolRequestGroup {
+		let first = ToolRequestSet {
 			origins: vec![PathBuf::from("/a/outpost.toml")],
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
@@ -978,9 +978,9 @@ mod resolution_group_tests {
 				rename_shims: None,
 			},
 		};
-		let second = ToolRequestGroup {
+		let second = ToolRequestSet {
 			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: ToolRequest::Github {
+			tool: RequestedTool::Github {
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),

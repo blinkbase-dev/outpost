@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::{fmt, fs, io};
 
-use super::tool_request::{self, ToolRequestEntry, ToolRequestError};
+use super::tool_request::{self, ToolRequest, ToolRequestError};
 use crate::config::loader;
 use crate::config::loader::LoadError;
 use crate::config::locate::ConfigPaths;
@@ -12,7 +12,7 @@ use crate::config::locate::ConfigPaths;
 // binaries live at the install root or one directory below
 const MAX_BINARY_DEPTH: usize = 1;
 
-pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequestEntry>, CandidatesError> {
+pub(crate) fn requests(paths: &ConfigPaths) -> Result<Vec<ToolRequest>, CandidatesError> {
 	let configs = loader::load_paths(paths.project.iter().chain(paths.system.iter()))?;
 	Ok(tool_request::requests(&configs)?)
 }
@@ -277,7 +277,7 @@ mod tests {
 	use std::path::{Path, PathBuf};
 
 	use super::*;
-	use crate::tools::tool_request::ToolRequest;
+	use crate::tools::tool_request::RequestedTool;
 
 	fn write(root: &Path, relative: &str, keys: &[&str]) -> PathBuf {
 		let path = root.join(relative);
@@ -316,7 +316,7 @@ mod tests {
 		let names: Vec<_> = requests
 			.iter()
 			.map(|entry| match &entry.tool {
-				ToolRequest::Github { full_name, .. } => full_name.as_str(),
+				RequestedTool::Github { full_name, .. } => full_name.as_str(),
 			})
 			.collect();
 		assert_eq!(names, vec!["o/inner", "o/outer", "o/dev", "o/prod", "o/base"]);

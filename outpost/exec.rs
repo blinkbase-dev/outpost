@@ -4,7 +4,7 @@ use std::path::{Component, Path};
 use clap::Args;
 
 use crate::config::{locate, state};
-use crate::tools::tool_request::ToolRequest;
+use crate::tools::tool_request::RequestedTool;
 use crate::tools::tool_spec::ToolSpec;
 use crate::tools::{candidates, lock};
 
@@ -35,7 +35,7 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	};
 	let Some((install_path, installed_version)) = lock.tools.iter().find_map(|tool| match (&request.tool, tool) {
 		(
-			ToolRequest::Github {
+			RequestedTool::Github {
 				full_name: request_name,
 				lane: request_lane,
 				version,
@@ -114,7 +114,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 	for request in &requests {
 		let Some((install_path, binary)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
 			(
-				ToolRequest::Github {
+				RequestedTool::Github {
 					full_name: request_name,
 					lane: request_lane,
 					version,
@@ -150,7 +150,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 	// the config requests this tool, but not a version that is installed
 	for request in &requests {
 		let spec = match &request.tool {
-			ToolRequest::Github { full_name, lane, version, .. } => {
+			RequestedTool::Github { full_name, lane, version, .. } => {
 				let installed = shims.iter().any(|entry| match entry {
 					ShimEntry::Github { full_name: installed_name, .. } => installed_name == full_name,
 				});
