@@ -37,7 +37,7 @@ pub(crate) fn index_installed_binaries(
 			continue;
 		};
 		let requests = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool);
-		// an artifact with no requests stays unfiltered
+		// no request has an exposed list, so keep all binaries
 		let Some(exposed_patterns) = _exposed_patterns(requests) else {
 			continue;
 		};
@@ -55,11 +55,8 @@ pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, installations:
 		let Some(binaries) = indexed.get_mut(*install_path) else {
 			continue;
 		};
-		let requests: Vec<&RequestedTool> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
-		// an artifact with no requests stays unfiltered
-		if requests.is_empty() {
-			continue;
-		}
+		let requests = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool);
+		// no request has an exposed list, so keep all binaries
 		let Some(exposed_patterns) = _exposed_patterns(requests) else {
 			continue;
 		};
