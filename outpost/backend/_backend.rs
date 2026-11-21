@@ -19,7 +19,7 @@ pub(crate) const PATH_SEGMENT: &AsciiSet = &CONTROLS
 	.add(b'|')
 	.add(b'}');
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum ArchiveFormat {
 	TarGz,
 	TarXz,
