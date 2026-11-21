@@ -62,7 +62,7 @@ pub(crate) fn install() -> Result<(), Error> {
 		.shims_dir
 		.as_deref()
 		.ok_or_else(|| Error::from("no shims directory"))
-		.and_then(|dir| shims::generate(&state, dir, installations).map_err(Error::from))
+		.and_then(|dir| shims::generate(&state, dir).map_err(Error::from))
 		.err();
 	// representative rows are appended after duplicate rows
 	for tool in &lock.tools[lock.tools.len() - groups.len()..] {
@@ -95,7 +95,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	}
 	let failed = failures.iter().map(|(requests, _)| requests.len()).sum::<usize>();
 	let mut message = (failed > 0).then(|| format!("failed to install {failed} tool(s)"));
-	// conflicts surface while indexing on windows and while generating on unix
+	// conflicts surface while indexing
 	if let Some(error) = index_err.map(Error::from).or(generate_err) {
 		let error = error.to_string();
 		match &mut message {

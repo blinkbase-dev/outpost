@@ -26,8 +26,8 @@ pub(crate) fn shim(args: ShimArgs) -> Result<(), Error> {
 	if args.force {
 		shims::purge(shims_dir)?;
 	}
-	let generate_err = shims::generate(&state, shims_dir, installations).err();
-	// conflicts surface while indexing on windows and while generating on unix
+	let generate_err = shims::generate(&state, shims_dir).err();
+	// conflicts surface while indexing
 	match index_err.or(generate_err) {
 		Some(error) => Err(error.into()),
 		None => Ok(()),

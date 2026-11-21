@@ -85,11 +85,11 @@ fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
 			// rename_shims sources are globs matched against install-relative paths,
 			// targets are plain shim names
 			if let Some(rename_shims) = options.rename_shims.as_ref() {
-				for (from, to) in rename_shims {
-					if from.trim().is_empty() {
+				for (source, target) in rename_shims {
+					if source.trim().is_empty() {
 						return Err(format!("invalid 'rename_shims' for '{key}': expected non-empty path patterns"));
 					}
-					if to.trim().is_empty() || !_is_plain_name(to) {
+					if target.trim().is_empty() || !_is_plain_name(target) {
 						return Err(format!("invalid 'rename_shims' for '{key}': expected non-empty plain names"));
 					}
 				}
@@ -222,7 +222,7 @@ mod tests {
 "github:owner/other" = { version = "0.26.0", api_url = " http://127.0.0.1:8080/ " }
 "github:owner/empty" = { version = "0.26.0", exposed = [] }
 "github:owner/exposed" = { version = "0.26.0", exposed = ["tool", "bin/*"] }
-"github:owner/rename" = { version = "0.26.0", rename_shims = { "tool_*" = "tool", "bin/helper" = "repo-helper" } }"#;
+"github:owner/renamed" = { version = "0.26.0", rename_shims = { "tool_*" = "tool", "bin/helper" = "repo-helper" } }"#;
 		let path = _config(tmp.path(), "outpost.toml", tools);
 		let files = load(
 			&ConfigPaths {
@@ -270,7 +270,7 @@ mod tests {
 			})
 		);
 		assert_eq!(
-			files[0].config.tools["github:owner/rename"],
+			files[0].config.tools["github:owner/renamed"],
 			ToolOptions::Github(GithubOptionsTable {
 				version: "0.26.0".to_owned(),
 				api_url: String::new(),

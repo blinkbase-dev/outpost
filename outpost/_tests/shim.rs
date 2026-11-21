@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[cfg(not(windows))]
+const SHIM_SCRIPT: &str = "#!/bin/sh\nexec op exec --shim -- \"${0##*/}\" \"$@\"\n";
+
 struct Fixture {
 	_dir: tempfile::TempDir,
 	config_dir: PathBuf,
@@ -75,7 +78,6 @@ install_path = "github_a/cli_1"
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-	#[cfg(windows)]
 	let template = r#"version = 1
 registered_paths = []
 
@@ -101,14 +103,6 @@ requested = "1"
 install_path = "github_a/1"
 binary = "{name}"
 "#;
-	#[cfg(not(windows))]
-	let template = r#"version = 1
-registered_paths = []
-
-[binaries]
-"github_a/1" = ["{name}"]
-"github_a/cli_1" = ["{other}"]
-"#;
 	assert_eq!(state, template.replace("{name}", name).replace("{other}", other));
 	let shim = fixture.config_dir.join("shims").join(name);
 	assert!(shim.exists());
@@ -118,14 +112,8 @@ registered_paths = []
 	{
 		use std::os::unix::fs::PermissionsExt;
 		assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o111, 0o111);
-		assert_eq!(
-			std::fs::read_to_string(&shim).unwrap(),
-			"#!/bin/sh\nexec op exec 'github:a/repo' -- 'tool' \"$@\"\n"
-		);
-		assert_eq!(
-			std::fs::read_to_string(&other_shim).unwrap(),
-			"#!/bin/sh\nexec op exec 'github:a/repo@cli/' -- 'other' \"$@\"\n"
-		);
+		assert_eq!(std::fs::read_to_string(&shim).unwrap(), SHIM_SCRIPT);
+		assert_eq!(std::fs::read_to_string(&other_shim).unwrap(), SHIM_SCRIPT);
 	}
 }
 
@@ -155,7 +143,6 @@ install_path = "github_a/1"
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-	#[cfg(windows)]
 	let template = r#"version = 1
 registered_paths = []
 
@@ -170,13 +157,6 @@ lane = ""
 requested = "1"
 install_path = "github_a/1"
 binary = "{name}"
-"#;
-	#[cfg(not(windows))]
-	let template = r#"version = 1
-registered_paths = []
-
-[binaries]
-"github_a/1" = ["{name}"]
 "#;
 	assert_eq!(state, template.replace("{name}", name));
 	let shim = fixture.config_dir.join("shims").join(name);
@@ -217,7 +197,6 @@ install_path = "github_b/1"
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-	#[cfg(windows)]
 	let template = r#"version = 1
 registered_paths = []
 
@@ -232,13 +211,6 @@ lane = ""
 requested = "1"
 install_path = "github_a/1"
 binary = "{name}"
-"#;
-	#[cfg(not(windows))]
-	let template = r#"version = 1
-registered_paths = []
-
-[binaries]
-"github_a/1" = ["{name}"]
 "#;
 	assert_eq!(state, template.replace("{name}", name));
 	let shim = fixture.config_dir.join("shims").join(name);
@@ -438,6 +410,15 @@ mod exposed {
 
 	[binaries]
 	"github_a/1" = ["tool"]
+
+	[[shims.tool]]
+	backend = "github"
+	api_url = ""
+	full_name = "a/repo"
+	lane = ""
+	requested = "1"
+	install_path = "github_a/1"
+	binary = "tool"
 	"#};
 
 	#[test]
@@ -528,11 +509,10 @@ mod rename_shims {
 		let shims = fixture.config_dir.join("shims");
 		assert!(shims.join(renamed).exists());
 		assert!(!shims.join(name).exists());
-		// the shim still executes the stored path
+		// the shim resolves the binary from the invoked name
 		#[cfg(not(windows))]
-		assert!(std::fs::read_to_string(shims.join(renamed)).unwrap().contains(&format!("-- '{name}'")));
+		assert_eq!(std::fs::read_to_string(shims.join(renamed)).unwrap(), SHIM_SCRIPT);
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-		#[cfg(windows)]
 		let expected = formatdoc! {r#"
 		version = 1
 		registered_paths = []
@@ -548,14 +528,6 @@ mod rename_shims {
 		requested = "1"
 		install_path = "github_a/1"
 		binary = "{name}"
-		"#};
-		#[cfg(not(windows))]
-		let expected = formatdoc! {r#"
-		version = 1
-		registered_paths = []
-
-		[binaries]
-		"github_a/1" = ["{name}"]
 		"#};
 		assert_eq!(state, expected);
 	}
@@ -579,7 +551,11 @@ mod rename_shims {
 		assert!(shims.join(top).exists());
 		assert!(shims.join(deep).exists());
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-		#[cfg(windows)]
+		let nested_toml = if cfg!(windows) {
+			format!("'nested\\{name}'")
+		} else {
+			format!("\"nested/{name}\"")
+		};
 		let expected = formatdoc! {r#"
 		version = 1
 		registered_paths = []
@@ -587,7 +563,7 @@ mod rename_shims {
 		[binaries]
 		"github_a/1" = [
 		    "{name}",
-		    'nested\{name}',
+		    {nested_toml},
 		]
 
 		[[shims.deep]]
@@ -597,7 +573,7 @@ mod rename_shims {
 		lane = ""
 		requested = "1"
 		install_path = "github_a/1"
-		binary = 'nested\{name}'
+		binary = {nested_toml}
 
 		[[shims.top]]
 		backend = "github"
@@ -608,23 +584,12 @@ mod rename_shims {
 		install_path = "github_a/1"
 		binary = "{name}"
 		"#};
-		#[cfg(not(windows))]
-		let expected = formatdoc! {r#"
-		version = 1
-		registered_paths = []
-
-		[binaries]
-		"github_a/1" = [
-		    "{name}",
-		    "nested/{name}",
-		]
-		"#};
 		assert_eq!(state, expected);
-		// each shim wraps its own binary rather than resolving by name
+		// both shims resolve their binary from the invoked name
 		#[cfg(not(windows))]
 		{
-			assert!(std::fs::read_to_string(shims.join(top)).unwrap().contains(&format!("-- '{name}'")));
-			assert!(std::fs::read_to_string(shims.join(deep)).unwrap().contains(&format!("-- '{nested}'")));
+			assert_eq!(std::fs::read_to_string(shims.join(top)).unwrap(), SHIM_SCRIPT);
+			assert_eq!(std::fs::read_to_string(shims.join(deep)).unwrap(), SHIM_SCRIPT);
 		}
 	}
 

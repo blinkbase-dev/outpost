@@ -3,6 +3,7 @@ use std::path::{Component, Path};
 
 use clap::Args;
 
+use crate::config::state::ShimEntry;
 use crate::config::{locate, state};
 use crate::tools::tool_request::RequestedTool;
 use crate::tools::tool_spec::ToolSpec;
@@ -98,21 +99,19 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	Ok(candidates::run(path, command)?)
 }
 
-#[cfg(windows)]
 fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
-	use crate::config::state::ShimEntry;
-
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
-	let name = Path::new(shim).file_stem().and_then(OsStr::to_str).ok_or("invalid shim name")?;
+	let name = _shim_name(shim)?;
 	let (state, _) = state::read(data_dir)?;
-	let Some(shims) = state.shims.get(&name.to_ascii_lowercase()) else {
+	let Some(shims) = state.shims.get(&name) else {
 		return Err(format!("no installed tool provides '{name}'").into());
 	};
 	let requests = candidates::requests(&paths)?;
 	let mut missing = None;
+	// several versions can share a name, so the first configured request wins
 	for request in &requests {
 		let Some((install_path, binary)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
 			(
@@ -177,9 +176,17 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 	Err(message.into())
 }
 
+// windows strips .exe and lowercases, unix keeps the full file name
+#[cfg(windows)]
+fn _shim_name(shim: &OsStr) -> Result<String, Error> {
+	let name = Path::new(shim).file_stem().and_then(OsStr::to_str).ok_or("invalid shim name")?;
+	Ok(name.to_ascii_lowercase())
+}
+
 #[cfg(not(windows))]
-fn exec_shim(_shim: &OsStr, _args: &[OsString]) -> Result<i32, Error> {
-	Ok(0)
+fn _shim_name(shim: &OsStr) -> Result<String, Error> {
+	let name = Path::new(shim).file_name().and_then(OsStr::to_str).ok_or("invalid shim name")?;
+	Ok(name.to_owned())
 }
 
 #[derive(Args)]

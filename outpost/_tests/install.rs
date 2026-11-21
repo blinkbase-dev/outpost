@@ -158,15 +158,15 @@ fn installs_github_release_asset() {
 	assert_eq!(lock, expected_lock);
 	// the binary is indexed and a shim is generated for it
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-	#[cfg(windows)]
+	let helper_toml = if cfg!(windows) { "'bin\\helper.exe'" } else { "\"bin/helper\"" };
 	let expected_state = formatdoc! {r#"
 	version = 1
 	registered_paths = []
 
 	[binaries]
 	"{install_path}" = [
-	    "tool.exe",
-	    'bin\helper.exe',
+	    "{binary}",
+	    {helper_toml},
 	]
 
 	[[shims.helper]]
@@ -176,7 +176,7 @@ fn installs_github_release_asset() {
 	lane = ""
 	requested = "1.0.0"
 	install_path = "{install_path}"
-	binary = 'bin\helper.exe'
+	binary = {helper_toml}
 
 	[[shims.tool]]
 	backend = "github"
@@ -185,18 +185,7 @@ fn installs_github_release_asset() {
 	lane = ""
 	requested = "1.0.0"
 	install_path = "{install_path}"
-	binary = "tool.exe"
-	"#};
-	#[cfg(not(windows))]
-	let expected_state = formatdoc! {r#"
-	version = 1
-	registered_paths = []
-
-	[binaries]
-	"{install_path}" = [
-	    "tool",
-	    "bin/helper",
-	]
+	binary = "{binary}"
 	"#};
 	assert_eq!(state, expected_state);
 	let shim = fixture.config_dir.join("shims").join(binary);
@@ -291,7 +280,7 @@ fn installs_same_version_from_two_origins() {
 	"#};
 	let two = formatdoc! {r#"
 	[tools]
-	"github:owner/repo" = {{ version = "1.0.0", api_url = "{two_url}" }}
+	"github:owner/repo" = {{ version = "1.0.0", api_url = "{two_url}", rename_shims = {{ "tool*" = "tool-two", "**/helper*" = "helper-two" }} }}
 	"#};
 	let fixture = Fixture::new(&one, None);
 	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
@@ -320,6 +309,22 @@ fn installs_same_version_from_two_origins() {
 		install_path = "{install_path}"
 		"#};
 		assert!(lock.contains(&row), "{lock}");
+	}
+	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+	assert!(state.contains("[[shims.tool]]"), "{state}");
+	assert!(state.contains("[[shims.tool-two]]"), "{state}");
+	assert!(state.contains("[[shims.helper]]"), "{state}");
+	assert!(state.contains("[[shims.helper-two]]"), "{state}");
+	for (api_url, install_path) in [(&one_url, &one_path), (&two_url, &two_path)] {
+		let entry = formatdoc! {r#"
+		api_url = "{api_url}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "{install_path}"
+		binary = "{binary}"
+		"#};
+		assert!(state.contains(&entry), "{state}");
 	}
 	// each origin resolves and downloads its own artifact
 	let mut paths: Vec<String> = runtime
@@ -401,7 +406,6 @@ mod exposed {
 		assert!(output.status.success(), "{stderr}");
 		// `*` does not cross `/`, so the nested helper stays hidden
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-		#[cfg(windows)]
 		let expected = formatdoc! {r#"
 		version = 1
 		registered_paths = []
@@ -417,14 +421,6 @@ mod exposed {
 		requested = "1.0.0"
 		install_path = "{install_path}"
 		binary = "{binary}"
-		"#};
-		#[cfg(not(windows))]
-		let expected = formatdoc! {r#"
-		version = 1
-		registered_paths = []
-
-		[binaries]
-		"{install_path}" = ["{binary}"]
 		"#};
 		assert_eq!(state, expected);
 		assert!(fixture.config_dir.join("shims").join(binary).exists());
@@ -449,13 +445,17 @@ mod exposed {
 		assert!(output.status.success(), "{stderr}");
 		// '**' crosses '/', so the nested helper is exposed and the tool is not
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-		#[cfg(windows)]
+		let nested_binary = if cfg!(windows) {
+			format!("'bin\\{helper}'")
+		} else {
+			format!("\"bin/{helper}\"")
+		};
 		let expected = formatdoc! {r#"
 		version = 1
 		registered_paths = []
 
 		[binaries]
-		"{install_path}" = ['bin\helper.exe']
+		"{install_path}" = [{nested_binary}]
 
 		[[shims.helper]]
 		backend = "github"
@@ -464,15 +464,7 @@ mod exposed {
 		lane = ""
 		requested = "1.0.0"
 		install_path = "{install_path}"
-		binary = 'bin\helper.exe'
-		"#};
-		#[cfg(not(windows))]
-		let expected = formatdoc! {r#"
-		version = 1
-		registered_paths = []
-
-		[binaries]
-		"{install_path}" = ["bin/helper"]
+		binary = {nested_binary}
 		"#};
 		assert_eq!(state, expected);
 		assert!(fixture.config_dir.join("shims").join(helper).exists());
@@ -502,7 +494,11 @@ mod exposed {
 		assert!(output.status.success(), "{stderr}");
 		// both allowlists apply to the shared artifact
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-		#[cfg(windows)]
+		let nested_binary = if cfg!(windows) {
+			format!("'bin\\{helper}'")
+		} else {
+			format!("\"bin/{helper}\"")
+		};
 		let expected = formatdoc! {r#"
 		version = 1
 		registered_paths = []
@@ -510,7 +506,7 @@ mod exposed {
 		[binaries]
 		"{install_path}" = [
 		    "{binary}",
-		    'bin\helper.exe',
+		    {nested_binary},
 		]
 
 		[[shims.helper]]
@@ -520,7 +516,7 @@ mod exposed {
 		lane = ""
 		requested = "1.0.0"
 		install_path = "{install_path}"
-		binary = 'bin\helper.exe'
+		binary = {nested_binary}
 
 		[[shims.helper]]
 		backend = "github"
@@ -529,7 +525,7 @@ mod exposed {
 		lane = ""
 		requested = "v1.0.0"
 		install_path = "{install_path}"
-		binary = 'bin\helper.exe'
+		binary = {nested_binary}
 
 		[[shims.tool]]
 		backend = "github"
@@ -548,20 +544,45 @@ mod exposed {
 		requested = "v1.0.0"
 		install_path = "{install_path}"
 		binary = "{binary}"
-		"#};
-		#[cfg(not(windows))]
-		let expected = formatdoc! {r#"
-		version = 1
-		registered_paths = []
-
-		[binaries]
-		"{install_path}" = [
-		    "{binary}",
-		    "bin/helper",
-		]
 		"#};
 		assert_eq!(state, expected);
 		assert!(fixture.config_dir.join("shims").join(binary).exists());
 		assert!(fixture.config_dir.join("shims").join(helper).exists());
+	}
+}
+
+mod rename_shims {
+	use super::*;
+
+	#[test]
+	fn rejects_two_origins_with_one_shim_name() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let one_server = runtime.block_on(MockServer::start());
+		let two_server = runtime.block_on(MockServer::start());
+		let one_url = one_server.uri();
+		let two_url = two_server.uri();
+		let (_, binary) = runtime.block_on(_mock_release(&one_server, "1.0.0"));
+		runtime.block_on(_mock_release(&two_server, "1.0.0"));
+		let one = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{one_url}" }}
+		"#};
+		let two = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{two_url}" }}
+		"#};
+		let fixture = Fixture::new(&one, None);
+		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
+		let output = fixture.run();
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(!output.status.success(), "{stderr}");
+		assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
+		assert!(stderr.contains("tool"), "{stderr}");
+		// the artifacts are installed even though the shim name conflicts
+		let one_path = _install_path(&one_url, "owner_repo", "1.0.0");
+		let two_path = _install_path(&two_url, "owner_repo", "1.0.0");
+		let tools = fixture.config_dir.join("tools");
+		assert_eq!(std::fs::read(tools.join(&one_path).join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		assert_eq!(std::fs::read(tools.join(&two_path).join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 	}
 }
