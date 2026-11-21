@@ -31,17 +31,13 @@ use windows_import::*;
 pub(crate) fn index_installed_binaries(
 	state: &mut State, tools_dir: &Path, installations: &Installations<'_>, groups: &[&ToolResolutionGroup],
 ) -> Result<(), ShimError> {
-	let install_paths: Vec<&Path> = groups.iter().map(|group| group.install_path.as_path()).collect();
-	let mut indexed = candidates::find_binaries_by_tool(tools_dir, install_paths.iter().copied())?;
-	for (install_path, items) in installations {
-		let Some(binaries) = indexed.get_mut(*install_path) else {
+	let mut indexed = candidates::find_binaries_by_tool(tools_dir, groups.iter().map(|group| group.install_path.as_path()))?;
+	for (install_path, binaries) in &mut indexed {
+		let Some(items) = installations.get(install_path.as_path()) else {
 			continue;
 		};
-		let requests: Vec<&RequestedTool> = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool).collect();
+		let requests = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool);
 		// an artifact with no requests stays unfiltered
-		if requests.is_empty() {
-			continue;
-		}
 		let Some(exposed_patterns) = _exposed_patterns(requests) else {
 			continue;
 		};
