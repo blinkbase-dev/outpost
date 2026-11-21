@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -136,13 +135,13 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client) -> Result
 async fn resolve(http: Client, request: &RequestedTool) -> Result<ToolResolution, Error> {
 	match request {
 		RequestedTool::Github {
+			api_url,
 			full_name,
 			lane,
 			version,
-			api_url,
 			..
 		} => {
-			let backend = GithubBackend::new(http, GithubOptions::from_process().with_api_url(api_url.as_deref()));
+			let backend = GithubBackend::new(http, GithubOptions::from_process().with_api_url(api_url));
 			let release = backend.select_release(full_name, lane, version).await?;
 			let (url, size, format) = backend.select_asset(full_name, &release)?;
 			Ok(ToolResolution::Github {
@@ -158,12 +157,22 @@ async fn resolve(http: Client, request: &RequestedTool) -> Result<ToolResolution
 fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionGroup> {
 	let groups: Vec<&ToolResolutionGroup> = installed.iter().map(|(group, _)| group).collect();
 	let row = |group: &ToolResolutionGroup, request: &ToolRequestSet| match (&request.tool, &group.resolution) {
-		(RequestedTool::Github { full_name, lane, version, .. }, ToolResolution::Github { tag_name, .. }) => LockedTool::Github {
+		(
+			RequestedTool::Github {
+				api_url,
+				full_name,
+				lane,
+				version,
+				..
+			},
+			ToolResolution::Github { tag_name, .. },
+		) => LockedTool::Github {
+			api_url: api_url.clone(),
 			full_name: full_name.clone(),
 			lane: lane.clone(),
 			requested: version.clone(),
 			tag_name: tag_name.clone(),
-			install_path: PathBuf::from(group.artifact_key.as_str()),
+			install_path: group.install_path.clone(),
 		},
 	};
 	let mut rows = Vec::new();
@@ -199,10 +208,10 @@ mod tests {
 		let request = ToolRequestSet {
 			origins: Vec::new(),
 			tool: RequestedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
-				api_url: None,
 				exposed: None,
 				rename_shims: None,
 			},
@@ -226,6 +235,7 @@ mod tests {
 		let groups = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
+			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("1.0.0"),
@@ -238,6 +248,7 @@ mod tests {
 	fn locks_newer_tag_replacing_older() {
 		let mut lock = Lock::default();
 		lock.tools.push(LockedTool::Github {
+			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("latest"),
@@ -247,10 +258,10 @@ mod tests {
 		let request = ToolRequestSet {
 			origins: Vec::new(),
 			tool: RequestedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
-				api_url: None,
 				exposed: None,
 				rename_shims: None,
 			},
@@ -273,6 +284,7 @@ mod tests {
 		let groups = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github {
+			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("latest"),
@@ -285,6 +297,7 @@ mod tests {
 	fn locks_requests_separately() {
 		let mut lock = Lock::default();
 		lock.tools.push(LockedTool::Github {
+			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			requested: Version::parse("1"),
@@ -294,10 +307,10 @@ mod tests {
 		let request = ToolRequestSet {
 			origins: Vec::new(),
 			tool: RequestedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
-				api_url: None,
 				exposed: None,
 				rename_shims: None,
 			},
@@ -321,6 +334,7 @@ mod tests {
 		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: "cli/".to_owned(),
 				requested: Version::parse("1"),
@@ -328,6 +342,7 @@ mod tests {
 				install_path: PathBuf::from("github_owner_repo/cli_v1.0.0"),
 			},
 			LockedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.0.0"),
@@ -340,6 +355,7 @@ mod tests {
 	#[test]
 	fn locks_unrelated_tools() {
 		let other = LockedTool::Github {
+			api_url: String::new(),
 			full_name: "other/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("1.0.0"),
@@ -353,10 +369,10 @@ mod tests {
 		let request = ToolRequestSet {
 			origins: Vec::new(),
 			tool: RequestedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
-				api_url: None,
 				exposed: None,
 				rename_shims: None,
 			},
@@ -379,6 +395,7 @@ mod tests {
 		let groups = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![other, LockedTool::Github {
+			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("1.0.0"),
@@ -392,10 +409,10 @@ mod tests {
 		let latest = ToolRequestSet {
 			origins: Vec::new(),
 			tool: RequestedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
-				api_url: None,
 				exposed: None,
 				rename_shims: None,
 			},
@@ -403,10 +420,10 @@ mod tests {
 		let exact = ToolRequestSet {
 			origins: Vec::new(),
 			tool: RequestedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
-				api_url: None,
 				exposed: None,
 				rename_shims: None,
 			},
@@ -437,6 +454,7 @@ mod tests {
 		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.0.0"),
@@ -444,6 +462,7 @@ mod tests {
 				install_path: PathBuf::from("github_owner_repo/1.0.0"),
 			},
 			LockedTool::Github {
+				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("latest"),

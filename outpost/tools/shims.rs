@@ -31,7 +31,7 @@ use windows_import::*;
 pub(crate) fn index_installed_binaries(
 	state: &mut State, tools_dir: &Path, installations: &Installations<'_>, groups: &[&ToolResolutionGroup],
 ) -> Result<(), ShimError> {
-	let install_paths: Vec<&Path> = groups.iter().map(|group| Path::new(group.artifact_key.as_str())).collect();
+	let install_paths: Vec<&Path> = groups.iter().map(|group| group.install_path.as_path()).collect();
 	let mut indexed = candidates::find_binaries_by_tool(tools_dir, install_paths.iter().copied())?;
 	for (install_path, items) in installations {
 		let Some(binaries) = indexed.get_mut(*install_path) else {
@@ -260,9 +260,14 @@ fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<Shim
 			for item in items {
 				match item.locked {
 					LockedTool::Github {
-						full_name, lane, requested, ..
+						api_url,
+						full_name,
+						lane,
+						requested,
+						..
 					} => {
 						shims.entry(name.clone()).or_default().push(ShimEntry::Github {
+							api_url: api_url.clone(),
 							full_name: full_name.clone(),
 							lane: lane.clone(),
 							requested: requested.clone(),

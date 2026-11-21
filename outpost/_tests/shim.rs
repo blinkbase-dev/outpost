@@ -50,6 +50,7 @@ version = 1
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
@@ -58,6 +59,7 @@ install_path = "github_a/1"
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = "cli/"
 requested = "1"
@@ -83,6 +85,7 @@ registered_paths = []
 
 [[shims.other]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = "cli/"
 requested = "1"
@@ -91,6 +94,7 @@ binary = "{other}"
 
 [[shims.tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
@@ -132,6 +136,7 @@ version = 1
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
@@ -159,6 +164,7 @@ registered_paths = []
 
 [[shims.tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
@@ -189,6 +195,7 @@ version = 1
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
@@ -219,6 +226,7 @@ registered_paths = []
 
 [[shims.tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
@@ -250,6 +258,7 @@ version = 1
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
@@ -261,6 +270,7 @@ version = 1
 
 [[tool]]
 backend = "github"
+api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
@@ -414,6 +424,7 @@ mod exposed {
 
 	[[shims.tool]]
 	backend = "github"
+	api_url = ""
 	full_name = "a/repo"
 	lane = ""
 	requested = "1"
@@ -531,6 +542,7 @@ mod rename_shims {
 
 		[[shims.renamed]]
 		backend = "github"
+		api_url = ""
 		full_name = "a/repo"
 		lane = ""
 		requested = "1"
@@ -580,6 +592,7 @@ mod rename_shims {
 
 		[[shims.deep]]
 		backend = "github"
+		api_url = ""
 		full_name = "a/repo"
 		lane = ""
 		requested = "1"
@@ -588,6 +601,7 @@ mod rename_shims {
 
 		[[shims.top]]
 		backend = "github"
+		api_url = ""
 		full_name = "a/repo"
 		lane = ""
 		requested = "1"
