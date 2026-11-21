@@ -40,9 +40,9 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 }
 
 pub(crate) fn write(data_dir: &Path, lock: &Lock) -> Result<(), LockError> {
-	let mut tools = lock.tools.clone();
-	tools.sort_by_cached_key(LockedTool::identity);
-	let text = toml::to_string_pretty(&Lock { version: lock.version, tools })?;
+	let mut tools: Vec<&LockedTool> = lock.tools.iter().collect();
+	tools.sort();
+	let text = toml::to_string_pretty(&LockRef { version: lock.version, tools })?;
 	let path = data_dir.join("outpost.lock");
 	let temp = path.with_extension("lock.tmp");
 	let mut file = std::fs::File::create(&temp)?;
@@ -67,11 +67,18 @@ pub(crate) fn acquire(data_dir: &Path) -> Result<File, LockError> {
 	}
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 pub(crate) struct Lock {
 	pub(crate) version: u32,
 	#[serde(default, rename = "tool")]
 	pub(crate) tools: Vec<LockedTool>,
+}
+
+#[derive(Serialize)]
+struct LockRef<'a> {
+	version: u32,
+	#[serde(rename = "tool")]
+	tools: Vec<&'a LockedTool>,
 }
 
 impl Default for Lock {
@@ -80,7 +87,7 @@ impl Default for Lock {
 	}
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum Identity {
 	Github {
 		api_url: String,
@@ -109,7 +116,7 @@ impl fmt::Display for Identity {
 	}
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub(crate) enum LockedTool {
 	Github {
