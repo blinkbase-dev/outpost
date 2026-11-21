@@ -154,9 +154,20 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 	// the config requests this tool, but not a version that is installed
 	for request in &requests {
 		let spec = match &request.tool {
-			RequestedTool::Github { full_name, lane, version, .. } => {
+			RequestedTool::Github {
+				api_url,
+				full_name,
+				lane,
+				version,
+				..
+			} => {
 				let installed = shims.iter().any(|entry| match entry {
-					ShimEntry::Github { full_name: installed_name, .. } => installed_name == full_name,
+					ShimEntry::Github {
+						api_url: installed_url,
+						full_name: installed_name,
+						lane: installed_lane,
+						..
+					} => installed_url == api_url && installed_name == full_name && installed_lane == lane,
 				});
 				installed.then(|| format!("github:{full_name}@{lane}{version}"))
 			}
