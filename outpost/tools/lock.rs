@@ -140,6 +140,12 @@ impl LockedTool {
 			},
 		}
 	}
+
+	pub(crate) fn install_path(&self) -> &Path {
+		match self {
+			Self::Github { install_path, .. } => install_path,
+		}
+	}
 }
 
 #[derive(Debug)]
