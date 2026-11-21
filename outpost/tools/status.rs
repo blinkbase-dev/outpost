@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::catalog::Catalog;
@@ -9,12 +9,13 @@ pub(crate) fn report(catalog: &Catalog<'_>, tools_dir: &Path) -> Report {
 	let requests = catalog.requests();
 	let mut requested_identities = HashSet::with_capacity(requests.len());
 	let mut requested = Vec::with_capacity(requests.len());
+	let mut checked: HashMap<&Path, bool> = HashMap::with_capacity(requests.len());
 	for request in requests {
 		let identity = request.tool.identity();
 		requested_identities.insert(identity.clone());
 		let (install_state, installed_version) = match catalog.lock_for(&identity) {
 			Some(LockedTool::Github { tag_name, install_path, .. }) => {
-				let install_state = if _installed(install_path, tools_dir) {
+				let install_state = if _installed_cached(&mut checked, tools_dir, install_path.as_path()) {
 					InstallState::Installed
 				} else {
 					InstallState::Missing
@@ -59,17 +60,18 @@ pub(crate) enum InstallState {
 }
 
 pub(crate) fn missing_from_lock(request_sets: &[ToolRequestSet], lock: &Lock, tools_dir: &Path) -> Vec<ToolRequestSet> {
-	let installed: HashSet<Identity> = lock
-		.tools
-		.iter()
-		.filter(|tool| _installed(tool.install_path(), tools_dir))
-		.map(LockedTool::identity)
-		.collect();
+	let mut checked: HashMap<&Path, bool> = HashMap::with_capacity(lock.tools.len());
+	let mut installed: HashSet<Identity> = HashSet::with_capacity(lock.tools.len());
+	for tool in &lock.tools {
+		if _installed_cached(&mut checked, tools_dir, tool.install_path()) {
+			installed.insert(tool.identity());
+		}
+	}
 	request_sets.iter().filter(|set| !installed.contains(&set.tool.identity())).cloned().collect()
 }
 
-fn _installed(install_path: &Path, tools_dir: &Path) -> bool {
-	tools_dir.join(install_path).exists()
+fn _installed_cached<'a>(cache: &mut HashMap<&'a Path, bool>, tools_dir: &Path, install_path: &'a Path) -> bool {
+	*cache.entry(install_path).or_insert_with(|| tools_dir.join(install_path).exists())
 }
 
 #[cfg(test)]
@@ -283,6 +285,118 @@ mod tests {
 				},
 			},
 		]);
+	}
+
+	#[test]
+	fn reports_installed_requests_that_share_one_path() {
+		let dir = tempfile::tempdir().unwrap();
+		let tools = dir.path().join("tools");
+		std::fs::create_dir_all(tools.join("github_owner_repo/1.0.0")).unwrap();
+		let lock = Lock {
+			version: 1,
+			tools: vec![
+				LockedTool::Github {
+					api_url: String::new(),
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					requested: Version::parse("latest"),
+					tag_name: "v1.0.0".to_owned(),
+					install_path: PathBuf::from("github_owner_repo/1.0.0"),
+				},
+				LockedTool::Github {
+					api_url: String::new(),
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					requested: Version::parse("1.0.0"),
+					tag_name: "v1.0.0".to_owned(),
+					install_path: PathBuf::from("github_owner_repo/1.0.0"),
+				},
+			],
+		};
+		let requests = vec![
+			ToolRequest {
+				origin: PathBuf::from("outpost.toml"),
+				tool: RequestedTool::Github {
+					api_url: String::new(),
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("latest"),
+					exposed: None,
+					rename_shims: None,
+				},
+			},
+			ToolRequest {
+				origin: PathBuf::from("outpost.toml"),
+				tool: RequestedTool::Github {
+					api_url: String::new(),
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.0.0"),
+					exposed: None,
+					rename_shims: None,
+				},
+			},
+		];
+		let report = report(&Catalog::new(&lock, &requests), &tools);
+		assert_eq!(report.requested.len(), 2);
+		for status in &report.requested {
+			assert_eq!(status.install_state, InstallState::Installed);
+			assert_eq!(status.installed_version.as_deref(), Some("v1.0.0"));
+		}
+		assert!(report.unrequested.is_empty());
+	}
+
+	#[test]
+	fn treats_shared_install_path_as_installed() {
+		let dir = tempfile::tempdir().unwrap();
+		let tools = dir.path().join("tools");
+		std::fs::create_dir_all(tools.join("github_owner_repo/1.0.0")).unwrap();
+		let lock = Lock {
+			version: 1,
+			tools: vec![
+				LockedTool::Github {
+					api_url: String::new(),
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					requested: Version::parse("latest"),
+					tag_name: "v1.0.0".to_owned(),
+					install_path: PathBuf::from("github_owner_repo/1.0.0"),
+				},
+				LockedTool::Github {
+					api_url: String::new(),
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					requested: Version::parse("1.0.0"),
+					tag_name: "v1.0.0".to_owned(),
+					install_path: PathBuf::from("github_owner_repo/1.0.0"),
+				},
+			],
+		};
+		let request_sets = ToolRequestSet::from_requests(&[
+			ToolRequest {
+				origin: PathBuf::new(),
+				tool: RequestedTool::Github {
+					api_url: String::new(),
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("latest"),
+					exposed: None,
+					rename_shims: None,
+				},
+			},
+			ToolRequest {
+				origin: PathBuf::new(),
+				tool: RequestedTool::Github {
+					api_url: String::new(),
+					full_name: "owner/repo".to_owned(),
+					lane: String::new(),
+					version: Version::parse("1.0.0"),
+					exposed: None,
+					rename_shims: None,
+				},
+			},
+		]);
+		assert!(missing_from_lock(&request_sets, &lock, &tools).is_empty());
 	}
 
 	#[test]
