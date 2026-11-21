@@ -62,9 +62,7 @@ pub(crate) fn missing_from_lock(request_sets: &[ToolRequestSet], lock: &Lock, to
 	let installed: HashSet<Identity> = lock
 		.tools
 		.iter()
-		.filter(|tool| match tool {
-			LockedTool::Github { install_path, .. } => _installed(install_path, tools_dir),
-		})
+		.filter(|tool| _installed(tool.install_path(), tools_dir))
 		.map(LockedTool::identity)
 		.collect();
 	request_sets.iter().filter(|set| !installed.contains(&set.tool.identity())).cloned().collect()
