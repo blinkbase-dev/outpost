@@ -36,12 +36,14 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	let Some((install_path, installed_version)) = lock.tools.iter().find_map(|tool| match (&request.tool, tool) {
 		(
 			RequestedTool::Github {
+				api_url: request_url,
 				full_name: request_name,
 				lane: request_lane,
 				version,
 				..
 			},
 			lock::LockedTool::Github {
+				api_url,
 				full_name,
 				lane,
 				requested,
@@ -49,7 +51,7 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 				tag_name,
 				..
 			},
-		) => (full_name == request_name && lane == request_lane && requested == version).then_some((install_path, tag_name)),
+		) => (api_url == request_url && full_name == request_name && lane == request_lane && requested == version).then_some((install_path, tag_name)),
 	}) else {
 		return Err(
 			format!(
@@ -115,12 +117,14 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		let Some((install_path, binary)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
 			(
 				RequestedTool::Github {
+					api_url: request_url,
 					full_name: request_name,
 					lane: request_lane,
 					version,
 					..
 				},
 				ShimEntry::Github {
+					api_url,
 					full_name,
 					lane,
 					requested,
@@ -128,7 +132,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 					binary,
 					..
 				},
-			) => (full_name == request_name && lane == request_lane && requested == version).then_some((install_path, binary)),
+			) => (api_url == request_url && full_name == request_name && lane == request_lane && requested == version).then_some((install_path, binary)),
 		}) else {
 			continue;
 		};
