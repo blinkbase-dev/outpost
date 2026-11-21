@@ -266,86 +266,6 @@ fn installs_two_versions_of_same_tool() {
 }
 
 #[test]
-fn installs_same_version_from_two_origins() {
-	let runtime = tokio::runtime::Runtime::new().unwrap();
-	let one_server = runtime.block_on(MockServer::start());
-	let two_server = runtime.block_on(MockServer::start());
-	let one_url = one_server.uri();
-	let two_url = two_server.uri();
-	let (asset, binary) = runtime.block_on(_mock_release(&one_server, "1.0.0"));
-	runtime.block_on(_mock_release(&two_server, "1.0.0"));
-	let one = formatdoc! {r#"
-	[tools]
-	"github:owner/repo" = {{ version = "1.0.0", api_url = "{one_url}" }}
-	"#};
-	let two = formatdoc! {r#"
-	[tools]
-	"github:owner/repo" = {{ version = "1.0.0", api_url = "{two_url}", rename_shims = {{ "tool*" = "tool-two", "**/helper*" = "helper-two" }} }}
-	"#};
-	let fixture = Fixture::new(&one, None);
-	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
-	let output = fixture.run();
-	let stderr = String::from_utf8(output.stderr).unwrap();
-	assert!(output.status.success(), "{stderr}");
-	// origins do not merge, so both artifacts are installed
-	let stdout = String::from_utf8(output.stdout).unwrap();
-	assert_eq!(stdout.lines().count(), 2, "{stdout}");
-	assert!(stdout.contains("owner/repo v1.0.0"), "{stdout}");
-	let one_path = _install_path(&one_url, "owner_repo", "1.0.0");
-	let two_path = _install_path(&two_url, "owner_repo", "1.0.0");
-	let tools = fixture.config_dir.join("tools");
-	assert_eq!(std::fs::read(tools.join(&one_path).join(binary)).unwrap(), b"binary 1.0.0".as_slice());
-	assert_eq!(std::fs::read(tools.join(&two_path).join(binary)).unwrap(), b"binary 1.0.0".as_slice());
-	// the lock carries a row per origin
-	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
-	assert_eq!(lock.matches("[[tool]]").count(), 2, "{lock}");
-	for (api_url, install_path) in [(&one_url, &one_path), (&two_url, &two_path)] {
-		let row = formatdoc! {r#"
-		api_url = "{api_url}"
-		full_name = "owner/repo"
-		lane = ""
-		requested = "1.0.0"
-		tag_name = "v1.0.0"
-		install_path = "{install_path}"
-		"#};
-		assert!(lock.contains(&row), "{lock}");
-	}
-	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-	assert!(state.contains("[[shims.tool]]"), "{state}");
-	assert!(state.contains("[[shims.tool-two]]"), "{state}");
-	assert!(state.contains("[[shims.helper]]"), "{state}");
-	assert!(state.contains("[[shims.helper-two]]"), "{state}");
-	for (api_url, install_path) in [(&one_url, &one_path), (&two_url, &two_path)] {
-		let entry = formatdoc! {r#"
-		api_url = "{api_url}"
-		full_name = "owner/repo"
-		lane = ""
-		requested = "1.0.0"
-		install_path = "{install_path}"
-		binary = "{binary}"
-		"#};
-		assert!(state.contains(&entry), "{state}");
-	}
-	// each origin resolves and downloads its own artifact
-	let mut paths: Vec<String> = runtime
-		.block_on(one_server.received_requests())
-		.unwrap()
-		.iter()
-		.map(|request| request.url.path().to_owned())
-		.collect();
-	paths.sort();
-	assert_eq!(paths, vec![format!("/download/1.0.0/{asset}"), "/repos/owner/repo/releases/tags/1.0.0".to_owned(),]);
-	let mut paths: Vec<String> = runtime
-		.block_on(two_server.received_requests())
-		.unwrap()
-		.iter()
-		.map(|request| request.url.path().to_owned())
-		.collect();
-	paths.sort();
-	assert_eq!(paths, vec![format!("/download/1.0.0/{asset}"), "/repos/owner/repo/releases/tags/1.0.0".to_owned(),]);
-}
-
-#[test]
 fn reports_failed_install_per_origin() {
 	let runtime = tokio::runtime::Runtime::new().unwrap();
 	let server = runtime.block_on(MockServer::start());
@@ -553,6 +473,86 @@ mod exposed {
 
 mod rename_shims {
 	use super::*;
+
+	#[test]
+	fn installs_same_version_from_two_origins() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let one_server = runtime.block_on(MockServer::start());
+		let two_server = runtime.block_on(MockServer::start());
+		let one_url = one_server.uri();
+		let two_url = two_server.uri();
+		let (asset, binary) = runtime.block_on(_mock_release(&one_server, "1.0.0"));
+		runtime.block_on(_mock_release(&two_server, "1.0.0"));
+		let one = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{one_url}" }}
+		"#};
+		let two = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{two_url}", rename_shims = {{ "tool*" = "tool-two", "**/helper*" = "helper-two" }} }}
+		"#};
+		let fixture = Fixture::new(&one, None);
+		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
+		let output = fixture.run();
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		// origins do not merge, so both artifacts are installed
+		let stdout = String::from_utf8(output.stdout).unwrap();
+		assert_eq!(stdout.lines().count(), 2, "{stdout}");
+		assert!(stdout.contains("owner/repo v1.0.0"), "{stdout}");
+		let one_path = _install_path(&one_url, "owner_repo", "1.0.0");
+		let two_path = _install_path(&two_url, "owner_repo", "1.0.0");
+		let tools = fixture.config_dir.join("tools");
+		assert_eq!(std::fs::read(tools.join(&one_path).join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		assert_eq!(std::fs::read(tools.join(&two_path).join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		// the lock carries a row per origin
+		let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
+		assert_eq!(lock.matches("[[tool]]").count(), 2, "{lock}");
+		for (api_url, install_path) in [(&one_url, &one_path), (&two_url, &two_path)] {
+			let row = formatdoc! {r#"
+			api_url = "{api_url}"
+			full_name = "owner/repo"
+			lane = ""
+			requested = "1.0.0"
+			tag_name = "v1.0.0"
+			install_path = "{install_path}"
+			"#};
+			assert!(lock.contains(&row), "{lock}");
+		}
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		assert!(state.contains("[[shims.tool]]"), "{state}");
+		assert!(state.contains("[[shims.tool-two]]"), "{state}");
+		assert!(state.contains("[[shims.helper]]"), "{state}");
+		assert!(state.contains("[[shims.helper-two]]"), "{state}");
+		for (api_url, install_path) in [(&one_url, &one_path), (&two_url, &two_path)] {
+			let entry = formatdoc! {r#"
+			api_url = "{api_url}"
+			full_name = "owner/repo"
+			lane = ""
+			requested = "1.0.0"
+			install_path = "{install_path}"
+			binary = "{binary}"
+			"#};
+			assert!(state.contains(&entry), "{state}");
+		}
+		// each origin resolves and downloads its own artifact
+		let mut paths: Vec<String> = runtime
+			.block_on(one_server.received_requests())
+			.unwrap()
+			.iter()
+			.map(|request| request.url.path().to_owned())
+			.collect();
+		paths.sort();
+		assert_eq!(paths, vec![format!("/download/1.0.0/{asset}"), "/repos/owner/repo/releases/tags/1.0.0".to_owned(),]);
+		let mut paths: Vec<String> = runtime
+			.block_on(two_server.received_requests())
+			.unwrap()
+			.iter()
+			.map(|request| request.url.path().to_owned())
+			.collect();
+		paths.sort();
+		assert_eq!(paths, vec![format!("/download/1.0.0/{asset}"), "/repos/owner/repo/releases/tags/1.0.0".to_owned(),]);
+	}
 
 	#[test]
 	fn rejects_two_origins_with_one_shim_name() {
