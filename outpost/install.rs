@@ -45,7 +45,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
 	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone()))?;
 	// group resolutions by artifact so each tool downloads once
-	let resolutions = ToolResolutionGroup::from_entries(resolutions)?;
+	let resolutions = ToolResolutionGroup::from_entries(resolutions, &lock)?;
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
@@ -222,7 +222,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -272,7 +272,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -321,7 +321,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -383,7 +383,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -440,7 +440,7 @@ mod tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
