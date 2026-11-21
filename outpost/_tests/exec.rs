@@ -154,7 +154,6 @@ install_path = "github_owner_repo/1.2.3"
 	assert!(stderr.contains("is not requested by the current config"), "{stderr}");
 }
 
-#[cfg(windows)]
 #[test]
 fn runs_shim_from_shims() {
 	let lock = r#"
@@ -172,9 +171,9 @@ install_path = "github_owner_repo/1.2.3"
 "github:owner/repo" = "1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
-	fixture.script("github_owner_repo/1.2.3", "tool.cmd", 7);
-	std::fs::write(
-		fixture.config_dir.join("state.toml"),
+	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
+	fixture.script("github_owner_repo/1.2.3", name, 7);
+	let state = format!(
 		r#"version = 1
 [[shims.tool]]
 backend = "github"
@@ -182,10 +181,10 @@ full_name = "owner/repo"
 lane = ""
 requested = "1.2.3"
 install_path = "github_owner_repo/1.2.3"
-binary = "tool.cmd"
-"#,
-	)
-	.unwrap();
+binary = "{name}"
+"#
+	);
+	std::fs::write(fixture.config_dir.join("state.toml"), &state).unwrap();
 	let output = fixture.run(&["exec", "--shim", "--", "tool", "shimmed"], None);
 	let stdout = String::from_utf8(output.stdout).unwrap();
 	let stderr = String::from_utf8(output.stderr).unwrap();
@@ -193,7 +192,6 @@ binary = "tool.cmd"
 	assert!(stdout.contains("shimmed"), "{stdout}");
 }
 
-#[cfg(windows)]
 #[test]
 fn reports_shim_failures() {
 	let lock = r#"
@@ -207,15 +205,18 @@ requested = "1.2.3"
 tag_name = "v1.2.3"
 install_path = "github_owner_repo/1.2.3"
 "#;
-	let state = r#"version = 1
+	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
+	let state = format!(
+		r#"version = 1
 [[shims.tool]]
 backend = "github"
 full_name = "owner/repo"
 lane = ""
 requested = "1.2.3"
 install_path = "github_owner_repo/1.2.3"
-binary = "tool.cmd"
-"#;
+binary = "{name}"
+"#
+	);
 	let requested = r#"[tools]
 "github:owner/repo" = "1.2.3"
 "#;
@@ -227,7 +228,7 @@ binary = "tool.cmd"
 "#;
 	// the shim name is not indexed
 	let fixture = Fixture::new(requested, lock);
-	fixture.script("github_owner_repo/1.2.3", "tool.cmd", 7);
+	fixture.script("github_owner_repo/1.2.3", name, 7);
 	std::fs::write(fixture.config_dir.join("state.toml"), state.replace("[[shims.tool]]", "[[shims.other]]")).unwrap();
 	let output = fixture.run(&["exec", "--shim", "--", "tool"], None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
@@ -235,16 +236,16 @@ binary = "tool.cmd"
 	assert!(stderr.contains("no installed tool provides 'tool'"), "{stderr}");
 	// indexed, but the config asks for another version
 	let fixture = Fixture::new(other, lock);
-	fixture.script("github_owner_repo/1.2.3", "tool.cmd", 7);
-	std::fs::write(fixture.config_dir.join("state.toml"), state).unwrap();
+	fixture.script("github_owner_repo/1.2.3", name, 7);
+	std::fs::write(fixture.config_dir.join("state.toml"), &state).unwrap();
 	let output = fixture.run(&["exec", "--shim", "--", "tool"], None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
 	assert!(stderr.contains("'tool' is not installed for 'github:owner/repo@2.0.0'"), "{stderr}");
 	// indexed, but the config requests a different tool
 	let fixture = Fixture::new(unrelated, lock);
-	fixture.script("github_owner_repo/1.2.3", "tool.cmd", 7);
-	std::fs::write(fixture.config_dir.join("state.toml"), state).unwrap();
+	fixture.script("github_owner_repo/1.2.3", name, 7);
+	std::fs::write(fixture.config_dir.join("state.toml"), &state).unwrap();
 	let output = fixture.run(&["exec", "--shim", "--", "tool"], None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
@@ -252,7 +253,7 @@ binary = "tool.cmd"
 	assert!(stderr.contains("github:owner/repo 1.2.3"), "{stderr}");
 	// indexed and requested, but the binary is gone
 	let fixture = Fixture::new(requested, lock);
-	std::fs::write(fixture.config_dir.join("state.toml"), state).unwrap();
+	std::fs::write(fixture.config_dir.join("state.toml"), &state).unwrap();
 	let output = fixture.run(&["exec", "--shim", "--", "tool"], None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
@@ -321,9 +322,73 @@ mod github {
 		assert_eq!(output.status.code(), Some(8), "{stderr}");
 	}
 
-	#[cfg(windows)]
 	#[test]
-	fn runs_shim_from_the_requested_origin() {
+	fn runs_binary_from_the_version_selected_by_precedence() {
+		let path_one = _install_path("", "owner_repo", "1.0.0");
+		let path_two = _install_path("", "owner_repo", "2.0.0");
+		let lock = formatdoc! {r#"
+		version = 1
+
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		tag_name = "v1.0.0"
+		install_path = "{path_one}"
+
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "2.0.0"
+		tag_name = "v2.0.0"
+		install_path = "{path_two}"
+		"#};
+		let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
+		let nested = format!("bin/{name}");
+		let base = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = "1.0.0"
+		"#};
+		let dev = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = "2.0.0"
+		"#};
+		let state = formatdoc! {r#"
+		version = 1
+		[[shims.tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "{path_one}"
+		binary = "{nested}"
+
+		[[shims.tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "2.0.0"
+		install_path = "{path_two}"
+		binary = "{name}"
+		"#};
+		let fixture = Fixture::new(&base, &lock);
+		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), &dev).unwrap();
+		fixture.script(&path_one, &nested, 7);
+		fixture.script(&path_two, name, 8);
+		std::fs::write(fixture.config_dir.join("state.toml"), &state).unwrap();
+		let output = fixture.run(&["exec", "--shim", "--", "tool"], Some("dev"));
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert_eq!(output.status.code(), Some(8), "{stderr}");
+	}
+
+	#[test]
+	fn runs_renamed_shim_from_the_requested_origin() {
 		let origin_a = "https://a.example.com";
 		let origin_b = "https://b.example.com";
 		let path_a = _install_path(origin_a, "owner_repo", "1.2.3");
@@ -349,13 +414,14 @@ mod github {
 		tag_name = "v1.2.3"
 		install_path = "{path_b}"
 		"#};
+		let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
 		let base = formatdoc! {r#"
 		[tools]
 		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
 		"#};
 		let dev = formatdoc! {r#"
 		[tools]
-		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}" }}
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}", rename_shims = {{ "{name}" = "tool-two" }} }}
 		"#};
 		let state = formatdoc! {r#"
 		version = 1
@@ -366,23 +432,23 @@ mod github {
 		lane = ""
 		requested = "1.2.3"
 		install_path = "{path_a}"
-		binary = "tool.cmd"
+		binary = "{name}"
 
-		[[shims.tool]]
+		[[shims.tool-two]]
 		backend = "github"
 		api_url = "{origin_b}"
 		full_name = "owner/repo"
 		lane = ""
 		requested = "1.2.3"
 		install_path = "{path_b}"
-		binary = "tool.cmd"
+		binary = "{name}"
 		"#};
 		let fixture = Fixture::new(&base, &lock);
 		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), &dev).unwrap();
-		fixture.script(&path_a, "tool.cmd", 7);
-		fixture.script(&path_b, "tool.cmd", 8);
-		std::fs::write(fixture.config_dir.join("state.toml"), state).unwrap();
-		let output = fixture.run(&["exec", "--shim", "--", "tool"], Some("dev"));
+		fixture.script(&path_a, name, 7);
+		fixture.script(&path_b, name, 8);
+		std::fs::write(fixture.config_dir.join("state.toml"), &state).unwrap();
+		let output = fixture.run(&["exec", "--shim", "--", "tool-two"], Some("dev"));
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert_eq!(output.status.code(), Some(8), "{stderr}");
 	}

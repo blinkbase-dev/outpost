@@ -53,7 +53,8 @@ pub(crate) struct State {
 	// executable paths relative to the install directory, keyed by install path
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub(crate) binaries: BTreeMap<PathBuf, Vec<PathBuf>>,
-	// shim name -> requests that provide it (windows only)
+	// shim name -> one entry per installed version with its identity, install
+	// path, and binary
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub(crate) shims: BTreeMap<String, Vec<ShimEntry>>,
 }
@@ -84,16 +85,11 @@ pub(crate) enum ShimEntry {
 }
 
 impl ShimEntry {
-	pub(crate) fn spec(&self) -> String {
+	// key identifies a tool, so a shim name is rejected when more than one tool
+	// provides the same binary, and the names would collide
+	pub(crate) fn tool_key(&self) -> String {
 		match self {
-			Self::Github { full_name, lane, .. } if !lane.is_empty() => format!("github:{full_name}@{lane}"),
-			Self::Github { full_name, .. } => format!("github:{full_name}"),
-		}
-	}
-
-	pub(crate) fn binary(&self) -> &Path {
-		match self {
-			Self::Github { binary, .. } => binary,
+			Self::Github { api_url, full_name, lane, .. } => format!("github:{api_url}:{full_name}@{lane}"),
 		}
 	}
 }

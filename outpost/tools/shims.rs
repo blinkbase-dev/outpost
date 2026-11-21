@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
@@ -15,7 +15,6 @@ use crate::tools::candidates;
 #[cfg(windows)]
 mod windows_import {
 	pub(super) use std::os::windows::fs::OpenOptionsExt;
-	pub(super) use std::path::Component;
 }
 
 #[cfg(not(windows))]
@@ -92,7 +91,6 @@ fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobS
 	builder.build().map_err(ShimError::Exposed)
 }
 
-#[cfg(windows)]
 pub(crate) fn index_shims(state: &mut State, installations: &Installations<'_>) -> Result<(), ShimError> {
 	let index = _index_shims(state, installations)?;
 	state.shims = index.shims;
@@ -101,11 +99,6 @@ pub(crate) fn index_shims(state: &mut State, installations: &Installations<'_>) 
 	} else {
 		Err(ShimError::Conflict(index.conflicts))
 	}
-}
-
-#[cfg(not(windows))]
-pub(crate) fn index_shims(_state: &mut State, _installations: &Installations<'_>) -> Result<(), ShimError> {
-	Ok(())
 }
 
 pub(crate) fn purge(shims_dir: &Path) -> Result<(), ShimError> {
@@ -143,11 +136,11 @@ pub(crate) fn purge(shims_dir: &Path) -> Result<(), ShimError> {
 }
 
 #[cfg(windows)]
-pub(crate) fn generate(state: &State, shims_dir: &Path, _installations: &Installations<'_>) -> Result<(), ShimError> {
+pub(crate) fn generate(state: &State, shims_dir: &Path) -> Result<(), ShimError> {
 	let trampoline = std::env::current_exe()?.with_file_name("op_shim.exe");
 	let bytes = std::fs::read(&trampoline).map_err(|source| ShimError::Trampoline { path: trampoline, source })?;
 	std::fs::create_dir_all(shims_dir)?;
-	for name in state.shims.keys().map(String::as_str) {
+	for name in state.shims.keys() {
 		if !_is_plain_file_name(name) {
 			continue;
 		}
@@ -168,24 +161,16 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, _installations: &Install
 }
 
 #[cfg(not(windows))]
-pub(crate) fn generate(state: &State, shims_dir: &Path, installations: &Installations<'_>) -> Result<(), ShimError> {
+pub(crate) fn generate(state: &State, shims_dir: &Path) -> Result<(), ShimError> {
 	std::fs::create_dir_all(shims_dir)?;
-	let index = _index_shims(state, installations)?;
-	for (name, entries) in &index.shims {
-		let entry = &entries[0];
-		let spec = entry.spec();
-		// execute the stored binary path rather than the shim name
-		let Some(binary) = entry.binary().to_str() else {
+	const SCRIPT: &str = "#!/bin/sh\nexec op exec --shim -- \"${0##*/}\" \"$@\"\n";
+	for name in state.shims.keys() {
+		if !_is_plain_file_name(name) {
 			continue;
-		};
-		let script = format!(
-			"#!/bin/sh\nexec op exec '{}' -- '{}' \"$@\"\n",
-			spec.replace('\'', "'\\''"),
-			binary.replace('\'', "'\\''")
-		);
+		}
 		let target = shims_dir.join(name);
-		let size_matches = std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() == script.len() as u64);
-		if size_matches && std::fs::read_to_string(&target).is_ok_and(|existing| existing == script) {
+		let size_matches = std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() == SCRIPT.len() as u64);
+		if size_matches && std::fs::read_to_string(&target).is_ok_and(|existing| existing == SCRIPT) {
 			continue;
 		}
 		let temp = shims_dir.join(format!("{name}.tmp"));
@@ -194,22 +179,10 @@ pub(crate) fn generate(state: &State, shims_dir: &Path, installations: &Installa
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 			Err(error) => return Err(error.into()),
 		}
-		std::fs::write(&target, &script)?;
+		std::fs::write(&target, SCRIPT)?;
 		std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
 	}
-	// drop stale scripts so conflicted names stop resolving
-	for conflict in &index.conflicts {
-		match std::fs::remove_file(shims_dir.join(&conflict.name)) {
-			Ok(()) => {}
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-			Err(error) => return Err(error.into()),
-		}
-	}
-	if index.conflicts.is_empty() {
-		Ok(())
-	} else {
-		Err(ShimError::Conflict(index.conflicts))
-	}
+	Ok(())
 }
 
 struct ShimIndex {
@@ -272,13 +245,13 @@ fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<Shim
 			}
 		}
 	}
+	// this loop compares tools, not binaries, so exec must pick the real binary
+	// at run time for versions that share a name with different layouts
 	for (name, entries) in &shims {
 		// a name provided by more than one tool cannot be shimmed unambiguously
-		let mut tools: HashSet<(&str, &str, &str)> = HashSet::new();
+		let mut tools: HashSet<String> = HashSet::new();
 		for entry in entries {
-			tools.insert(match entry {
-				ShimEntry::Github { full_name, lane, .. } => ("github", full_name.as_str(), lane.as_str()),
-			});
+			tools.insert(entry.tool_key());
 		}
 		if tools.len() > 1 || conflicts.contains_key(name) {
 			conflicts.entry(name.clone()).or_default().extend(entries.iter().map(|entry| match entry {
@@ -345,7 +318,6 @@ fn _apply_rename_shims(name: String, binary: &Path, rules: Option<&(GlobSet, Vec
 	Err(ShimError::RenameConflict { name, targets: conflicts })
 }
 
-#[cfg(windows)]
 fn _is_plain_file_name(name: &str) -> bool {
 	let mut components = Path::new(name).components();
 	matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
@@ -395,7 +367,7 @@ impl fmt::Display for ShimError {
 			Self::Io(error) => fmt::Display::fmt(error, f),
 			Self::State(error) => fmt::Display::fmt(error, f),
 			Self::Exposed(error) => write!(f, "invalid exposed pattern: {error}"),
-			Self::Rename(error) => write!(f, "invalid rename pattern: {error}"),
+			Self::Rename(error) => write!(f, "invalid rename_shims pattern: {error}"),
 			Self::RenameConflict { name, targets } => write!(f, "conflicting rename for '{name}':\n  {}", targets.join("\n  ")),
 			Self::Conflict(conflicts) => {
 				f.write_str("conflicting binaries, cannot generate shims:")?;
