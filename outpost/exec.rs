@@ -110,7 +110,9 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		return Err(format!("no installed tool provides '{name}'").into());
 	};
 	let requests = candidates::requests(&paths)?;
+	let mut invalid = false;
 	let mut missing = None;
+	let mut mismatch = None;
 	// several versions can share a name, so the first configured request wins
 	for request in &requests {
 		let Some((install_path, binary)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
@@ -131,50 +133,42 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 					binary,
 					..
 				},
-			) => (api_url == request_url && full_name == request_name && lane == request_lane && requested == version).then_some((install_path, binary)),
+			) => {
+				if api_url != request_url || full_name != request_name || lane != request_lane {
+					None
+				} else if requested == version {
+					Some((install_path, binary))
+				} else {
+					mismatch.get_or_insert_with(|| format!("github:{request_name}@{request_lane}{version}"));
+					None
+				}
+			}
 		}) else {
 			continue;
 		};
 		if !install_path.components().all(|component| matches!(component, Component::Normal(_))) {
+			invalid = true;
 			continue;
 		}
 		if !binary.components().all(|component| matches!(component, Component::Normal(_))) {
+			invalid = true;
 			continue;
 		}
 		let path = tools_dir.join(install_path).join(binary);
 		if !path.is_file() {
-			missing = Some(tools_dir.join(install_path));
+			missing.get_or_insert_with(|| tools_dir.join(install_path));
 			continue;
 		}
 		return Ok(candidates::run(&path, args)?);
 	}
+	if invalid {
+		return Err(format!("'{name}' has an invalid shim target\nrun 'op shim' to rebuild it").into());
+	}
 	if let Some(dir) = missing {
 		return Err(format!("'{name}' was not found in {}", dir.display()).into());
 	}
-	// the config requests this tool, but not a version that is installed
-	for request in &requests {
-		let spec = match &request.tool {
-			RequestedTool::Github {
-				api_url,
-				full_name,
-				lane,
-				version,
-				..
-			} => {
-				let installed = shims.iter().any(|entry| match entry {
-					ShimEntry::Github {
-						api_url: installed_url,
-						full_name: installed_name,
-						lane: installed_lane,
-						..
-					} => installed_url == api_url && installed_name == full_name && installed_lane == lane,
-				});
-				installed.then(|| format!("github:{full_name}@{lane}{version}"))
-			}
-		};
-		if let Some(spec) = spec {
-			return Err(format!("'{name}' is not installed for '{spec}'\nrun 'op install' to install it").into());
-		}
+	if let Some(spec) = mismatch {
+		return Err(format!("'{name}' is not installed for '{spec}'\nrun 'op install' to install it").into());
 	}
 	let mut message = format!("'{name}' is not requested by the current config:");
 	for entry in shims {
