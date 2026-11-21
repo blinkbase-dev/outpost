@@ -57,11 +57,11 @@ impl<'a> Catalog<'a> {
 		self.installations.get_or_init(|| {
 			let mut items_by_path: BTreeMap<&'a Path, Vec<InstallationItem<'a>>> = BTreeMap::new();
 			for tool in &self.lock.tools {
-				let install_path = match tool {
-					LockedTool::Github { install_path, .. } => install_path.as_path(),
-				};
 				let requests = self.request_for(&tool.identity()).to_vec();
-				items_by_path.entry(install_path).or_default().push(InstallationItem { locked: tool, requests });
+				items_by_path
+					.entry(tool.install_path())
+					.or_default()
+					.push(InstallationItem { locked: tool, requests });
 			}
 			items_by_path
 		})

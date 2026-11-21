@@ -154,24 +154,27 @@ pub(crate) struct ToolResolutionGroup {
 
 impl ToolResolutionGroup {
 	pub(crate) fn from_entries(entries: Vec<ResolutionEntry>, lock: &Lock) -> Result<Vec<Self>, Error> {
-		let mut groups: Vec<Self> = Vec::new();
-		let mut index_by_install_path: HashMap<PathBuf, usize> = HashMap::new();
+		let mut groups: Vec<Self> = Vec::with_capacity(entries.len());
+		let mut index_by_install_path: HashMap<PathBuf, usize> = HashMap::with_capacity(entries.len());
+		let mut locked_by_install_path: HashMap<&Path, Vec<&LockedTool>> = HashMap::with_capacity(lock.tools.len());
+		for locked in &lock.tools {
+			locked_by_install_path.entry(locked.install_path()).or_default().push(locked);
+		}
 		for (request_set, resolution) in entries {
 			let install_path = match &resolution {
 				ToolResolution::Github { tag_name, .. } => _install_path(&request_set.tool, tag_name),
 			};
 			// reject paths owned by another tool from an earlier batch
 			// 'owner/repo.js' and 'owner/repo-js' sanitize to github_owner_repo_js
-			for locked in &lock.tools {
-				let locked_path = match locked {
-					LockedTool::Github { install_path, .. } => install_path,
-				};
-				if locked_path != &install_path || request_set.tool.install_prefix_matches_locked(locked) {
-					continue;
+			if let Some(owners) = locked_by_install_path.get(install_path.as_path()) {
+				for &locked in owners {
+					if request_set.tool.install_prefix_matches_locked(locked) {
+						continue;
+					}
+					let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
+					let (path, incoming, existing) = (install_path.display(), request_set.tool.identity(), locked.identity());
+					return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
 				}
-				let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
-				let (path, incoming, existing) = (install_path.display(), request_set.tool.identity(), locked.identity());
-				return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
 			}
 			if let Some(&index) = index_by_install_path.get(&install_path) {
 				let existing = &groups[index].requests[0].tool;
