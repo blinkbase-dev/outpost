@@ -11,6 +11,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::backend::_backend::ArchiveFormat;
+use crate::tools::lock::{Lock, LockedTool};
 use crate::tools::tool_request::{RequestedTool, ToolRequestSet};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -152,39 +153,67 @@ pub(crate) struct ToolResolutionGroup {
 }
 
 impl ToolResolutionGroup {
-	pub(crate) fn from_entries(entries: Vec<ResolutionEntry>) -> Result<Vec<Self>, Error> {
+	pub(crate) fn from_entries(entries: Vec<ResolutionEntry>, lock: &Lock) -> Result<Vec<Self>, Error> {
 		let mut groups: Vec<Self> = Vec::new();
-		let mut index_by_key: HashMap<PathBuf, usize> = HashMap::new();
-		for (request, resolution) in entries {
+		let mut index_by_install_path: HashMap<PathBuf, usize> = HashMap::new();
+		for (request_set, resolution) in entries {
 			let install_path = match &resolution {
-				ToolResolution::Github { tag_name, .. } => _install_path(&request.tool, tag_name),
+				ToolResolution::Github { tag_name, .. } => _install_path(&request_set.tool, tag_name),
 			};
-			if let Some(&index) = index_by_key.get(&install_path) {
+			// reject paths owned by another tool from an earlier batch
+			// 'owner/repo.js' and 'owner/repo-js' sanitize to github_owner_repo_js
+			for locked in &lock.tools {
+				let locked_path = match locked {
+					LockedTool::Github { install_path, .. } => install_path,
+				};
+				if locked_path != &install_path || request_set.tool.install_prefix_matches_locked(locked) {
+					continue;
+				}
+				let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
+				let (path, incoming, existing) = (install_path.display(), request_set.tool.identity(), locked.identity());
+				return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
+			}
+			if let Some(&index) = index_by_install_path.get(&install_path) {
+				let existing = &groups[index].requests[0].tool;
+				// reject paths shared with another tool in this batch
+				if !existing.install_prefix_matches(&request_set.tool) {
+					let sources = groups[index]._sources(&request_set);
+					let (path, existing, incoming) = (install_path.display(), existing.identity(), request_set.tool.identity());
+					return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
+				}
+				// reject different tags that normalize to the same install path
 				match (&resolution, &groups[index].resolution) {
 					(ToolResolution::Github { tag_name, .. }, ToolResolution::Github { tag_name: installed_tag, .. }) => {
 						if installed_tag.as_str() != tag_name.as_str() {
-							let origins: String = groups[index]
-								.requests
-								.iter()
-								.chain(std::iter::once(&request))
-								.flat_map(|request| &request.origins)
-								.map(|origin| format!("\n  from {}", origin.display()))
-								.collect();
-							return Err(format!("artifact collision: '{tag_name}' and '{installed_tag}' share '{}'{origins}", install_path.display()).into());
+							let sources = groups[index]._sources(&request_set);
+							let path = install_path.display();
+							return Err(format!("install path '{path}' is shared by tags '{tag_name}' and '{installed_tag}'{sources}").into());
 						}
 					}
 				}
-				groups[index].requests.push(request);
+				// another request for this tool that resolved to the same tag
+				groups[index].requests.push(request_set);
 			} else {
-				index_by_key.insert(install_path.clone(), groups.len());
+				index_by_install_path.insert(install_path.clone(), groups.len());
 				groups.push(Self {
 					install_path,
-					requests: vec![request],
+					requests: vec![request_set],
 					resolution,
 				});
 			}
 		}
 		Ok(groups)
+	}
+
+	fn _sources(&self, request_set: &ToolRequestSet) -> String {
+		// include the incoming request, which is not in the group yet
+		self
+			.requests
+			.iter()
+			.chain(std::iter::once(request_set))
+			.flat_map(|request_set| &request_set.origins)
+			.map(|origin| format!("\n  from {}", origin.display()))
+			.collect()
 	}
 }
 
@@ -344,7 +373,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(archives.len(), 16);
 		assert!(failures.is_empty());
@@ -386,7 +415,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(archives.len(), 10);
 		assert!(failures.is_empty());
@@ -440,7 +469,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert!(failures.is_empty());
 		assert_eq!(archives.len(), 1);
@@ -520,7 +549,7 @@ mod download_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(failures.len(), 1);
 		assert_eq!(failures[0].0.requests.len(), 2);
@@ -713,7 +742,7 @@ mod extract_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			},
 		)];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([archive])
@@ -746,7 +775,7 @@ mod extract_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			},
 		)];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([archive])
@@ -830,7 +859,7 @@ mod extract_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([gz_archive, xz_archive, zip_archive])
@@ -894,7 +923,7 @@ mod extract_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries).unwrap();
+		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([good, bad])
@@ -937,20 +966,23 @@ mod resolution_group_tests {
 				rename_shims: None,
 			},
 		};
-		let groups = ToolResolutionGroup::from_entries(vec![
-			(latest, ToolResolution::Github {
-				tag_name: "v1.0.0".to_owned(),
-				url: String::new(),
-				size: 0,
-				format: ArchiveFormat::TarGz,
-			}),
-			(exact, ToolResolution::Github {
-				tag_name: "v1.0.0".to_owned(),
-				url: String::new(),
-				size: 0,
-				format: ArchiveFormat::TarGz,
-			}),
-		])
+		let groups = ToolResolutionGroup::from_entries(
+			vec![
+				(latest, ToolResolution::Github {
+					tag_name: "v1.0.0".to_owned(),
+					url: String::new(),
+					size: 0,
+					format: ArchiveFormat::TarGz,
+				}),
+				(exact, ToolResolution::Github {
+					tag_name: "v1.0.0".to_owned(),
+					url: String::new(),
+					size: 0,
+					format: ArchiveFormat::TarGz,
+				}),
+			],
+			&Lock::default(),
+		)
 		.unwrap();
 		assert_eq!(groups.len(), 1);
 		assert_eq!(groups[0].install_path, PathBuf::from("github_owner_repo/1.0.0"));
@@ -958,7 +990,97 @@ mod resolution_group_tests {
 	}
 
 	#[test]
-	fn rejects_artifact_collisions() {
+	fn rejects_locked_install_path_collisions() {
+		let lock = Lock {
+			version: 1,
+			tools: vec![LockedTool::Github {
+				api_url: String::new(),
+				full_name: "owner/repo.js".to_owned(),
+				lane: String::new(),
+				requested: Version::parse("1.0.0"),
+				tag_name: "v1.0.0".to_owned(),
+				install_path: PathBuf::from("github_owner_repo_js/1.0.0"),
+			}],
+		};
+		let request = ToolRequestSet {
+			origins: vec![PathBuf::from("/b/outpost.toml")],
+			tool: RequestedTool::Github {
+				api_url: String::new(),
+				full_name: "owner/repo-js".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.0.0"),
+				exposed: None,
+				rename_shims: None,
+			},
+		};
+		let error = ToolResolutionGroup::from_entries(
+			vec![(request, ToolResolution::Github {
+				tag_name: "v1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+			})],
+			&lock,
+		)
+		.err()
+		.unwrap();
+		assert!(error.to_string().contains("shared by"), "{error}");
+		assert!(error.to_string().contains("owner/repo-js"), "{error}");
+		assert!(error.to_string().contains("owner/repo.js"), "{error}");
+	}
+
+	#[test]
+	fn rejects_install_path_collisions() {
+		let first = ToolRequestSet {
+			origins: vec![PathBuf::from("/a/outpost.toml")],
+			tool: RequestedTool::Github {
+				api_url: String::new(),
+				full_name: "owner/repo.js".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.0.0"),
+				exposed: None,
+				rename_shims: None,
+			},
+		};
+		let second = ToolRequestSet {
+			origins: vec![PathBuf::from("/b/outpost.toml")],
+			tool: RequestedTool::Github {
+				api_url: String::new(),
+				full_name: "owner/repo-js".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.0.0"),
+				exposed: None,
+				rename_shims: None,
+			},
+		};
+		let error = ToolResolutionGroup::from_entries(
+			vec![
+				(first, ToolResolution::Github {
+					tag_name: "v1.0.0".to_owned(),
+					url: String::new(),
+					size: 0,
+					format: ArchiveFormat::TarGz,
+				}),
+				(second, ToolResolution::Github {
+					tag_name: "v1.0.0".to_owned(),
+					url: String::new(),
+					size: 0,
+					format: ArchiveFormat::TarGz,
+				}),
+			],
+			&Lock::default(),
+		)
+		.err()
+		.unwrap();
+		assert!(error.to_string().contains("shared by"), "{error}");
+		assert!(error.to_string().contains("owner/repo.js"), "{error}");
+		assert!(error.to_string().contains("owner/repo-js"), "{error}");
+		assert!(error.to_string().contains("\n  from /a/outpost.toml"), "{error}");
+		assert!(error.to_string().contains("\n  from /b/outpost.toml"), "{error}");
+	}
+
+	#[test]
+	fn rejects_tag_collisions() {
 		let first = ToolRequestSet {
 			origins: vec![PathBuf::from("/a/outpost.toml")],
 			tool: RequestedTool::Github {
@@ -981,23 +1103,26 @@ mod resolution_group_tests {
 				rename_shims: None,
 			},
 		};
-		let error = ToolResolutionGroup::from_entries(vec![
-			(first, ToolResolution::Github {
-				tag_name: "v1.0.0".to_owned(),
-				url: String::new(),
-				size: 0,
-				format: ArchiveFormat::TarGz,
-			}),
-			(second, ToolResolution::Github {
-				tag_name: "1.0.0".to_owned(),
-				url: String::new(),
-				size: 0,
-				format: ArchiveFormat::TarGz,
-			}),
-		])
+		let error = ToolResolutionGroup::from_entries(
+			vec![
+				(first, ToolResolution::Github {
+					tag_name: "v1.0.0".to_owned(),
+					url: String::new(),
+					size: 0,
+					format: ArchiveFormat::TarGz,
+				}),
+				(second, ToolResolution::Github {
+					tag_name: "1.0.0".to_owned(),
+					url: String::new(),
+					size: 0,
+					format: ArchiveFormat::TarGz,
+				}),
+			],
+			&Lock::default(),
+		)
 		.err()
 		.unwrap();
-		assert!(error.to_string().contains("artifact collision"), "{error}");
+		assert!(error.to_string().contains("shared by tags"), "{error}");
 		assert!(error.to_string().contains("\n  from /a/outpost.toml"), "{error}");
 		assert!(error.to_string().contains("\n  from /b/outpost.toml"), "{error}");
 	}

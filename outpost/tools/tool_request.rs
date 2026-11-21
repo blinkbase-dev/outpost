@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use regex::regex;
 
-use super::lock::Identity;
+use super::lock::{Identity, LockedTool};
 use super::version::{Version, split_lane};
 use crate::config::loader::{ConfigFile, ToolOptions};
 
@@ -54,6 +54,32 @@ impl RequestedTool {
 				lane: lane.clone(),
 				version: version.clone(),
 			},
+		}
+	}
+
+	pub(crate) fn install_prefix_matches(&self, other: &Self) -> bool {
+		match (self, other) {
+			(
+				Self::Github { api_url, full_name, .. },
+				Self::Github {
+					api_url: other_url,
+					full_name: other_name,
+					..
+				},
+			) => api_url == other_url && full_name == other_name,
+		}
+	}
+
+	pub(crate) fn install_prefix_matches_locked(&self, locked: &LockedTool) -> bool {
+		match (self, locked) {
+			(
+				Self::Github { api_url, full_name, .. },
+				LockedTool::Github {
+					api_url: other_url,
+					full_name: other_name,
+					..
+				},
+			) => api_url == other_url && full_name == other_name,
 		}
 	}
 
