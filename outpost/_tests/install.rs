@@ -27,19 +27,17 @@ impl Fixture {
 	}
 
 	fn run(&self) -> Output {
-		Command::new(env!("CARGO_BIN_EXE_op"))
-			.arg("install")
-			.current_dir(&self.config_dir)
+		let mut command = Command::new(env!("CARGO_BIN_EXE_op"));
+		command.arg("install").current_dir(&self.config_dir).env_clear();
+		#[cfg(windows)]
+		if let Some(value) = std::env::var_os("SystemRoot") {
+			command.env("SystemRoot", value);
+		}
+		command
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
 			.env("OUTPOST_DATA_DIR", &self.config_dir)
-			.env("OUTPOST_ENV", "dev")
-			.env_remove("OUTPOST_TOOLS_DIR")
-			.env_remove("OUTPOST_SHIMS_DIR")
-			.env_remove("OUTPOST_DOWNLOADS_DIR")
-			.env_remove("GH_TOKEN")
-			.env_remove("GITHUB_TOKEN")
-			.output()
-			.unwrap()
+			.env("OUTPOST_ENV", "dev");
+		command.output().unwrap()
 	}
 }
 

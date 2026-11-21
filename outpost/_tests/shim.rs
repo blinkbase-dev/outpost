@@ -31,18 +31,14 @@ impl Fixture {
 	}
 
 	fn run(&self, cwd: &Path, args: &[&str]) -> Output {
-		Command::new(env!("CARGO_BIN_EXE_op"))
-			.arg("shim")
-			.args(args)
-			.current_dir(cwd)
-			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
-			.env("OUTPOST_DATA_DIR", &self.config_dir)
-			.env_remove("OUTPOST_ENV")
-			.env_remove("OUTPOST_TOOLS_DIR")
-			.env_remove("OUTPOST_SHIMS_DIR")
-			.env_remove("OUTPOST_DOWNLOADS_DIR")
-			.output()
-			.unwrap()
+		let mut command = Command::new(env!("CARGO_BIN_EXE_op"));
+		command.arg("shim").args(args).current_dir(cwd).env_clear();
+		#[cfg(windows)]
+		if let Some(value) = std::env::var_os("SystemRoot") {
+			command.env("SystemRoot", value);
+		}
+		command.env("OUTPOST_CONFIG_DIR", &self.config_dir).env("OUTPOST_DATA_DIR", &self.config_dir);
+		command.output().unwrap()
 	}
 }
 
