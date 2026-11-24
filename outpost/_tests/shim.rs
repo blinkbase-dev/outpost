@@ -19,15 +19,17 @@ impl Fixture {
 		Self { _dir: dir, config_dir }
 	}
 
-	fn tool(&self, install_path: &str, binary: &str) {
+	fn script(&self, install_path: &str, binary: &str) {
 		let path = self.config_dir.join("tools").join(install_path).join(binary);
 		std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-		std::fs::write(&path, b"binary").unwrap();
 		#[cfg(unix)]
 		{
 			use std::os::unix::fs::PermissionsExt;
+			std::fs::write(&path, "#!/bin/sh\necho \"$@\"\nexit 7\n").unwrap();
 			std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
 		}
+		#[cfg(windows)]
+		std::fs::write(&path, "@echo off\r\necho %*\r\nexit /b 7\r\n").unwrap();
 	}
 
 	fn run(&self, cwd: &Path, args: &[&str]) -> Output {
@@ -38,6 +40,18 @@ impl Fixture {
 			command.env("SystemRoot", value);
 		}
 		command.env("OUTPOST_CONFIG_DIR", &self.config_dir).env("OUTPOST_DATA_DIR", &self.config_dir);
+		command.output().unwrap()
+	}
+
+	fn run_shim(&self, cwd: &Path, shim: &Path, args: &[&str]) -> Output {
+		let mut command = Command::new(shim);
+		command.args(args).current_dir(cwd).env_clear();
+		#[cfg(windows)]
+		if let Some(value) = std::env::var_os("SystemRoot") {
+			command.env("SystemRoot", value);
+		}
+		command.env("OUTPOST_CONFIG_DIR", &self.config_dir).env("OUTPOST_DATA_DIR", &self.config_dir);
+		command.env("PATH", Path::new(env!("CARGO_BIN_EXE_op")).parent().unwrap());
 		command.output().unwrap()
 	}
 }
@@ -68,8 +82,8 @@ install_path = "github_a/cli_1"
 	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	let other = if cfg!(windows) { "other.exe" } else { "other" };
-	fixture.tool("github_a/1", name);
-	fixture.tool("github_a/cli_1", other);
+	fixture.script("github_a/1", name);
+	fixture.script("github_a/cli_1", other);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
@@ -129,7 +143,7 @@ install_path = "github_a/1"
 "#;
 	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-	fixture.tool("github_a/1", name);
+	fixture.script("github_a/1", name);
 	let initial = r#"version = 1
 [binaries]
 "stale/1" = ["old"]
@@ -188,7 +202,7 @@ install_path = "github_b/1"
 "#;
 	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-	fixture.tool("github_a/1", name);
+	fixture.script("github_a/1", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
@@ -255,8 +269,8 @@ install_path = "github_b/1"
 "#;
 	// two binaries for one name in a single tool
 	let fixture = Fixture::new("", single);
-	fixture.tool("github_a/1", name);
-	fixture.tool("github_a/1", &format!("nested/{name}"));
+	fixture.script("github_a/1", name);
+	fixture.script("github_a/1", &format!("nested/{name}"));
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
@@ -269,8 +283,8 @@ install_path = "github_b/1"
 	assert!(!state.contains("shims"), "{state}");
 	// the same name from two tools
 	let fixture = Fixture::new("", pair);
-	fixture.tool("github_a/1", name);
-	fixture.tool("github_b/1", name);
+	fixture.script("github_a/1", name);
+	fixture.script("github_b/1", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
@@ -283,9 +297,9 @@ install_path = "github_b/1"
 	assert!(!state.contains("shims"), "{state}");
 	// a duplicate within one tool plus another tool providing the same name
 	let fixture = Fixture::new("", pair);
-	fixture.tool("github_a/1", name);
-	fixture.tool("github_a/1", &format!("nested/{name}"));
-	fixture.tool("github_b/1", name);
+	fixture.script("github_a/1", name);
+	fixture.script("github_a/1", &format!("nested/{name}"));
+	fixture.script("github_b/1", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
@@ -320,7 +334,7 @@ mod force {
 	fn recreates_all_shims() {
 		let fixture = Fixture::new("", LOCK);
 		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-		fixture.tool("github_a/1", name);
+		fixture.script("github_a/1", name);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -346,7 +360,7 @@ mod force {
 		use std::os::windows::fs::OpenOptionsExt;
 
 		let fixture = Fixture::new("", LOCK);
-		fixture.tool("github_a/1", "tool.exe");
+		fixture.script("github_a/1", "tool.exe");
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -427,8 +441,8 @@ mod exposed {
 		"#}
 		.replace("{name}", name);
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.tool("github_a/1", name);
-		fixture.tool("github_a/1", hidden);
+		fixture.script("github_a/1", name);
+		fixture.script("github_a/1", hidden);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -448,8 +462,8 @@ mod exposed {
 		let fixture = Fixture::new(initial, LOCK);
 		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 		let hidden = if cfg!(windows) { "hidden.exe" } else { "hidden" };
-		fixture.tool("github_a/1", name);
-		fixture.tool("github_a/1", hidden);
+		fixture.script("github_a/1", name);
+		fixture.script("github_a/1", hidden);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -491,30 +505,36 @@ mod rename_shims {
 
 	#[test]
 	fn renames_shims() {
-		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let binary = if cfg!(windows) { "tool.cmd" } else { "tool" };
+		let original = if cfg!(windows) { "tool.exe" } else { "tool" };
 		let renamed = if cfg!(windows) { "renamed.exe" } else { "renamed" };
 		let config = formatdoc! {r#"
 		[tools]
-		"github:a/repo" = {{ version = "1", rename_shims = {{ "{name}" = "renamed" }} }}
+		"github:a/repo" = {{ version = "1", rename_shims = {{ "{binary}" = "renamed" }} }}
 		"#};
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.tool("github_a/1", name);
+		fixture.script("github_a/1", binary);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
 		let shims = fixture.config_dir.join("shims");
 		assert!(shims.join(renamed).exists());
-		assert!(!shims.join(name).exists());
+		assert!(!shims.join(original).exists());
 		// the shim resolves the binary from the invoked name
 		#[cfg(not(windows))]
 		assert_eq!(std::fs::read_to_string(shims.join(renamed)).unwrap(), SHIM_SCRIPT);
+		let output = fixture.run_shim(&fixture.config_dir, &shims.join(renamed), &["one", "two"]);
+		let stdout = String::from_utf8(output.stdout).unwrap();
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert_eq!(output.status.code(), Some(7), "{stderr}");
+		assert!(stdout.contains("one two"), "{stdout}");
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 		let expected = formatdoc! {r#"
 		version = 1
 		registered_paths = []
 
 		[binaries]
-		"github_a/1" = ["{name}"]
+		"github_a/1" = ["{binary}"]
 
 		[[shims.renamed]]
 		backend = "github"
@@ -523,22 +543,22 @@ mod rename_shims {
 		lane = ""
 		requested = "1"
 		install_path = "github_a/1"
-		binary = "{name}"
+		binary = "{binary}"
 		"#};
 		assert_eq!(state, expected);
 	}
 
 	#[test]
 	fn renames_duplicated_binaries_apart() {
-		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-		let nested = format!("nested/{name}");
+		let binary = if cfg!(windows) { "tool.cmd" } else { "tool" };
+		let nested = format!("nested/{binary}");
 		let config = formatdoc! {r#"
 		[tools]
-		"github:a/repo" = {{ version = "1", rename_shims = {{ "{name}" = "top", "{nested}" = "deep" }} }}
+		"github:a/repo" = {{ version = "1", rename_shims = {{ "{binary}" = "top", "{nested}" = "deep" }} }}
 		"#};
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.tool("github_a/1", name);
-		fixture.tool("github_a/1", &nested);
+		fixture.script("github_a/1", binary);
+		fixture.script("github_a/1", &nested);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -548,9 +568,9 @@ mod rename_shims {
 		assert!(shims.join(deep).exists());
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 		let nested_toml = if cfg!(windows) {
-			format!("'nested\\{name}'")
+			format!("'nested\\{binary}'")
 		} else {
-			format!("\"nested/{name}\"")
+			format!("\"nested/{binary}\"")
 		};
 		let expected = formatdoc! {r#"
 		version = 1
@@ -558,7 +578,7 @@ mod rename_shims {
 
 		[binaries]
 		"github_a/1" = [
-		    "{name}",
+		    "{binary}",
 		    {nested_toml},
 		]
 
@@ -578,7 +598,7 @@ mod rename_shims {
 		lane = ""
 		requested = "1"
 		install_path = "github_a/1"
-		binary = "{name}"
+		binary = "{binary}"
 		"#};
 		assert_eq!(state, expected);
 		// both shims resolve their binary from the invoked name
@@ -586,6 +606,13 @@ mod rename_shims {
 		{
 			assert_eq!(std::fs::read_to_string(shims.join(top)).unwrap(), SHIM_SCRIPT);
 			assert_eq!(std::fs::read_to_string(shims.join(deep)).unwrap(), SHIM_SCRIPT);
+		}
+		for shim in [top, deep] {
+			let output = fixture.run_shim(&fixture.config_dir, &shims.join(shim), &["nested", "args"]);
+			let stdout = String::from_utf8(output.stdout).unwrap();
+			let stderr = String::from_utf8(output.stderr).unwrap();
+			assert_eq!(output.status.code(), Some(7), "{shim}: {stderr}");
+			assert!(stdout.contains("nested args"), "{shim}: {stdout}");
 		}
 	}
 
@@ -597,7 +624,7 @@ mod rename_shims {
 		"github:a/repo" = {{ version = "1", rename_shims = {{ "{name}" = "one", "**" = "two" }} }}
 		"#};
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.tool("github_a/1", name);
+		fixture.script("github_a/1", name);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(!output.status.success(), "{stderr}");
