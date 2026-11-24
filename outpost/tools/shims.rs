@@ -8,7 +8,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use super::archive::ToolResolutionGroup;
 use super::catalog::{InstallationItem, Installations};
 use super::lock::LockedTool;
-use super::tool_request::RequestedTool;
+use super::tool_request::{RequestedTool, ToolRequest};
 use crate::config::state::{ShimEntry, State, StateError};
 use crate::tools::candidates;
 
@@ -35,13 +35,7 @@ pub(crate) fn index_installed_binaries(
 		let Some(items) = installations.get(install_path.as_path()) else {
 			continue;
 		};
-		let requests = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool);
-		// no request has an exposed list, so keep all binaries
-		let Some(exposed_patterns) = _exposed_patterns(requests) else {
-			continue;
-		};
-		let set = _exposed_set(exposed_patterns)?;
-		binaries.retain(|binary| set.is_match(binary));
+		_exposed_binaries(items, binaries)?;
 	}
 	state.binaries.extend(indexed);
 	state.binaries.retain(|path, _| installations.contains_key(path.as_path()));
@@ -54,27 +48,21 @@ pub(crate) fn index_binaries(state: &mut State, tools_dir: &Path, installations:
 		let Some(binaries) = indexed.get_mut(*install_path) else {
 			continue;
 		};
-		let requests = items.iter().flat_map(|item| &item.requests).map(|request| &request.tool);
-		// no request has an exposed list, so keep all binaries
-		let Some(exposed_patterns) = _exposed_patterns(requests) else {
-			continue;
-		};
-		let set = _exposed_set(exposed_patterns)?;
-		binaries.retain(|binary| set.is_match(binary));
+		_exposed_binaries(items, binaries)?;
 	}
 	state.binaries = indexed;
 	Ok(())
 }
 
-fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a RequestedTool>) -> Option<Vec<&'a str>> {
+fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a ToolRequest>) -> Option<Vec<(&'a ToolRequest, &'a str)>> {
 	// a request without a list neither contributes nor clears the allowlist
 	let mut specified = false;
 	let mut patterns = Vec::new();
 	for request in requests {
-		match request {
+		match &request.tool {
 			RequestedTool::Github { exposed: Some(exposed), .. } => {
 				specified = true;
-				patterns.extend(exposed.iter().map(String::as_str));
+				patterns.extend(exposed.iter().map(|pattern| (request, pattern.as_str())));
 			}
 			RequestedTool::Github { exposed: None, .. } => {}
 		}
@@ -82,13 +70,47 @@ fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a RequestedTool>) 
 	specified.then_some(patterns)
 }
 
-fn _exposed_set<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<GlobSet, ShimError> {
+fn _exposed_binaries(items: &[InstallationItem<'_>], binaries: &mut Vec<PathBuf>) -> Result<(), ShimError> {
+	let requests = items.iter().flat_map(|item| item.requests.iter().copied());
+	// a request without a list keeps every binary
+	let Some(patterns) = _exposed_patterns(requests) else {
+		return Ok(());
+	};
 	let mut builder = GlobSetBuilder::new();
-	for pattern in patterns {
+	for (_, pattern) in &patterns {
 		// '*' stays within one path segment, '**' crosses them
 		builder.add(GlobBuilder::new(pattern).literal_separator(true).build().map_err(ShimError::Exposed)?);
 	}
-	builder.build().map_err(ShimError::Exposed)
+	let set = builder.build().map_err(ShimError::Exposed)?;
+	let mut matched = vec![false; patterns.len()];
+	let mut unmatched = matched.len();
+	let mut hits = Vec::new();
+	binaries.retain(|binary| {
+		// stop collecting indices once every pattern has matched
+		if unmatched == 0 {
+			return set.is_match(binary);
+		}
+		// use matches_into only while a pattern is unseen because it checks every pattern
+		set.matches_into(binary, &mut hits);
+		for &index in &hits {
+			if !matched[index] {
+				matched[index] = true;
+				unmatched -= 1;
+			}
+		}
+		!hits.is_empty()
+	});
+	let mut warned = HashSet::new();
+	for ((request, pattern), is_matched) in patterns.iter().zip(&matched) {
+		if *is_matched {
+			continue;
+		}
+		let identity = request.tool.identity();
+		if warned.insert((request.origin.clone(), identity.clone(), *pattern)) {
+			eprintln!("warning: no binary matches '{pattern}' in {identity}\n  from {}", request.origin.display());
+		}
+	}
+	Ok(())
 }
 
 pub(crate) fn index_shims(state: &mut State, installations: &Installations<'_>) -> Result<(), ShimError> {
