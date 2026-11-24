@@ -57,6 +57,12 @@ impl RequestedTool {
 		}
 	}
 
+	pub(crate) fn identity_key(&self) -> String {
+		match self {
+			Self::Github { api_url, full_name, lane, .. } => format!("github:{api_url}:{full_name}@{lane}"),
+		}
+	}
+
 	pub(crate) fn install_prefix_matches(&self, other: &Self) -> bool {
 		match (self, other) {
 			(

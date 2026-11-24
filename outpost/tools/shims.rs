@@ -251,7 +251,7 @@ fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<Shim
 		// a name provided by more than one tool cannot be shimmed unambiguously
 		let mut tools: HashSet<String> = HashSet::new();
 		for entry in entries {
-			tools.insert(entry.tool_key());
+			tools.insert(entry.identity_key());
 		}
 		if tools.len() > 1 || conflicts.contains_key(name) {
 			conflicts.entry(name.clone()).or_default().extend(entries.iter().map(|entry| match entry {
