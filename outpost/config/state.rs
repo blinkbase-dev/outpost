@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::tools::lock::Identity;
 use crate::tools::version::Version;
 
 pub(crate) const VERSION: u32 = 1;
@@ -85,9 +86,26 @@ pub(crate) enum ShimEntry {
 }
 
 impl ShimEntry {
+	pub(crate) fn identity(&self) -> Identity {
+		match self {
+			Self::Github {
+				api_url,
+				full_name,
+				lane,
+				requested,
+				..
+			} => Identity::Github {
+				api_url: api_url.clone(),
+				full_name: full_name.clone(),
+				lane: lane.clone(),
+				version: requested.clone(),
+			},
+		}
+	}
+
 	// key identifies a tool, so a shim name is rejected when more than one tool
 	// provides the same binary, and the names would collide
-	pub(crate) fn tool_key(&self) -> String {
+	pub(crate) fn identity_key(&self) -> String {
 		match self {
 			Self::Github { api_url, full_name, lane, .. } => format!("github:{api_url}:{full_name}@{lane}"),
 		}

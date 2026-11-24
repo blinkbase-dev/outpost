@@ -249,7 +249,7 @@ binary = "{name}"
 	let output = fixture.run(&["exec", "--shim", "--", "tool"], None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
-	assert!(stderr.contains("'tool' is not requested by the current config:"), "{stderr}");
+	assert!(stderr.contains("'tool' is provided by tools that the current config does not request:"), "{stderr}");
 	assert!(stderr.contains("github:owner/repo 1.2.3"), "{stderr}");
 	// indexed and requested, but the binary is gone
 	let fixture = Fixture::new(requested, lock);
@@ -266,7 +266,7 @@ mod github {
 
 	use super::*;
 
-	fn _install_path(api_url: &str, repo: &str, version: &str) -> String {
+	pub fn _install_path(api_url: &str, repo: &str, version: &str) -> String {
 		let suffix = if api_url.is_empty() {
 			String::new()
 		} else {
@@ -321,6 +321,51 @@ mod github {
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert_eq!(output.status.code(), Some(8), "{stderr}");
 	}
+
+	#[test]
+	fn fails_when_the_requested_origin_is_not_installed() {
+		let origin_a = "https://a.example.com";
+		let origin_b = "https://b.example.com";
+		let path_a = _install_path(origin_a, "owner_repo", "1.2.3");
+		let base = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
+		"#};
+		let dev = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}" }}
+		"#};
+		// the lock only has the base origin, so the winning dev origin has no row
+		let lock = formatdoc! {r#"
+		version = 1
+
+		[[tool]]
+		backend = "github"
+		api_url = "{origin_a}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.2.3"
+		tag_name = "v1.2.3"
+		install_path = "{path_a}"
+		"#};
+		let fixture = Fixture::new(&base, &lock);
+		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), &dev).unwrap();
+		let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
+		fixture.script(&path_a, name, 7);
+		let output = fixture.run(&["exec", "github:owner/repo", "--", name], Some("dev"));
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(!output.status.success(), "{stderr}");
+		assert_ne!(output.status.code(), Some(7), "{stderr}");
+		assert!(stderr.contains("'github:owner/repo' is not installed"), "{stderr}");
+		assert!(stderr.contains("outpost.dev.toml"), "{stderr}");
+	}
+}
+
+mod github_shims {
+	use indoc::formatdoc;
+
+	use super::github::_install_path;
+	use super::*;
 
 	#[test]
 	fn runs_binary_from_the_version_selected_by_precedence() {
@@ -451,5 +496,75 @@ mod github {
 		let output = fixture.run(&["exec", "--shim", "--", "tool-two"], Some("dev"));
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert_eq!(output.status.code(), Some(8), "{stderr}");
+	}
+
+	#[test]
+	fn fails_when_the_winning_shim_target_is_missing() {
+		let origin_a = "https://a.example.com";
+		let origin_b = "https://b.example.com";
+		let path_a = _install_path(origin_a, "owner_repo", "1.2.3");
+		let path_b = _install_path(origin_b, "owner_repo", "1.2.3");
+		let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
+		let base = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
+		"#};
+		let dev = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}" }}
+		"#};
+		let lock = formatdoc! {r#"
+		version = 1
+
+		[[tool]]
+		backend = "github"
+		api_url = "{origin_a}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.2.3"
+		tag_name = "v1.2.3"
+		install_path = "{path_a}"
+
+		[[tool]]
+		backend = "github"
+		api_url = "{origin_b}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.2.3"
+		tag_name = "v1.2.3"
+		install_path = "{path_b}"
+		"#};
+		let state = formatdoc! {r#"
+		version = 1
+		[[shims.tool]]
+		backend = "github"
+		api_url = "{origin_a}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.2.3"
+		install_path = "{path_a}"
+		binary = "{name}"
+
+		[[shims.tool]]
+		backend = "github"
+		api_url = "{origin_b}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.2.3"
+		install_path = "{path_b}"
+		binary = "{name}"
+		"#};
+		let fixture = Fixture::new(&base, &lock);
+		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), &dev).unwrap();
+		// the winning dev origin has an entry, but its binary is gone
+		fixture.script(&path_a, name, 7);
+		std::fs::write(fixture.config_dir.join("state.toml"), &state).unwrap();
+		let output = fixture.run(&["exec", "--shim", "--", "tool"], Some("dev"));
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		let missing = fixture.config_dir.join("tools").join(&path_b);
+		assert!(!output.status.success(), "{stderr}");
+		assert_ne!(output.status.code(), Some(7), "{stderr}");
+		assert!(stderr.contains("'tool' was not found in"), "{stderr}");
+		assert!(stderr.contains(&missing.display().to_string()), "{stderr}");
 	}
 }

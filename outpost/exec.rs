@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path};
 
@@ -110,67 +111,38 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		return Err(format!("no installed tool provides '{name}'").into());
 	};
 	let requests = candidates::requests(&paths)?;
-	let mut invalid = false;
-	let mut missing = None;
-	let mut mismatch = None;
-	// several versions can share a name, so the first configured request wins
+	let mut shims_map: HashMap<lock::Identity, &ShimEntry> = HashMap::with_capacity(shims.len());
+	let mut tools = HashSet::with_capacity(shims.len());
+	for entry in shims {
+		// keep the first entry if a state file has duplicates
+		shims_map.entry(entry.identity()).or_insert(entry);
+		tools.insert(entry.identity_key());
+	}
+	// several versions can share a name, so the first request in config
+	// precedence order wins
 	for request in &requests {
-		let Some((install_path, binary)) = shims.iter().find_map(|entry| match (&request.tool, entry) {
-			(
-				RequestedTool::Github {
-					api_url: request_url,
-					full_name: request_name,
-					lane: request_lane,
-					version,
-					..
-				},
-				ShimEntry::Github {
-					api_url,
-					full_name,
-					lane,
-					requested,
-					install_path,
-					binary,
-					..
-				},
-			) => {
-				if api_url != request_url || full_name != request_name || lane != request_lane {
-					None
-				} else if requested == version {
-					Some((install_path, binary))
-				} else {
-					mismatch.get_or_insert_with(|| format!("github:{request_name}@{request_lane}{version}"));
-					None
-				}
+		let identity = request.tool.identity();
+		let Some(entry) = shims_map.get(&identity) else {
+			// the entry exists for another version of this tool
+			if tools.contains(&request.tool.identity_key()) {
+				return Err(format!("'{name}' is not installed for '{identity}'\nrun 'op install' to install it").into());
 			}
-		}) else {
 			continue;
 		};
+		let ShimEntry::Github { install_path, binary, .. } = entry;
 		if !install_path.components().all(|component| matches!(component, Component::Normal(_))) {
-			invalid = true;
-			continue;
+			return Err(format!("'{name}' has an invalid shim target\nrun 'op shim' to rebuild it").into());
 		}
 		if !binary.components().all(|component| matches!(component, Component::Normal(_))) {
-			invalid = true;
-			continue;
+			return Err(format!("'{name}' has an invalid shim target\nrun 'op shim' to rebuild it").into());
 		}
 		let path = tools_dir.join(install_path).join(binary);
 		if !path.is_file() {
-			missing.get_or_insert_with(|| tools_dir.join(install_path));
-			continue;
+			return Err(format!("'{name}' was not found in {}", tools_dir.join(install_path).display()).into());
 		}
 		return Ok(candidates::run(&path, args)?);
 	}
-	if invalid {
-		return Err(format!("'{name}' has an invalid shim target\nrun 'op shim' to rebuild it").into());
-	}
-	if let Some(dir) = missing {
-		return Err(format!("'{name}' was not found in {}", dir.display()).into());
-	}
-	if let Some(spec) = mismatch {
-		return Err(format!("'{name}' is not installed for '{spec}'\nrun 'op install' to install it").into());
-	}
-	let mut message = format!("'{name}' is not requested by the current config:");
+	let mut message = format!("'{name}' is provided by tools that the current config does not request:");
 	for entry in shims {
 		message.push_str(&match entry {
 			ShimEntry::Github {
