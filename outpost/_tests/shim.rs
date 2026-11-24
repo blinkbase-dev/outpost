@@ -380,7 +380,7 @@ mod force {
 }
 
 mod exposed {
-	use indoc::indoc;
+	use indoc::{formatdoc, indoc};
 
 	use super::*;
 
@@ -482,6 +482,24 @@ mod exposed {
 		assert!(output.status.success(), "{stderr}");
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 		assert_eq!(state, INDEXED_STATE);
+		assert!(shims.join(name).exists());
+	}
+
+	#[test]
+	fn warns_when_a_pattern_matches_no_binary() {
+		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
+		let config = formatdoc! {r#"
+		[tools]
+		"github:a/repo" = {{ version = "1", exposed = ["{name}", "missing*"] }}
+		"#};
+		let fixture = Fixture::new(&config, LOCK);
+		fixture.script("github_a/1", name);
+		let output = fixture.run(&fixture.config_dir, &[]);
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		assert!(stderr.contains("warning: no binary matches 'missing*' in github:a/repo@1"), "{stderr}");
+		assert!(stderr.contains("from ") && stderr.contains("outpost.toml"), "{stderr}");
+		let shims = fixture.config_dir.join("shims");
 		assert!(shims.join(name).exists());
 	}
 }
