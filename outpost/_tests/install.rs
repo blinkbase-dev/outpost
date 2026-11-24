@@ -518,20 +518,72 @@ mod rename_shims {
 			assert!(lock.contains(&row), "{lock}");
 		}
 		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
-		assert!(state.contains("[[shims.tool]]"), "{state}");
-		assert!(state.contains("[[shims.tool-two]]"), "{state}");
-		assert!(state.contains("[[shims.helper]]"), "{state}");
-		assert!(state.contains("[[shims.helper-two]]"), "{state}");
-		for (api_url, install_path) in [(&one_url, &one_path), (&two_url, &two_path)] {
-			let entry = formatdoc! {r#"
-			api_url = "{api_url}"
-			full_name = "owner/repo"
-			lane = ""
-			requested = "1.0.0"
-			install_path = "{install_path}"
-			binary = "{binary}"
-			"#};
-			assert!(state.contains(&entry), "{state}");
+		let helper = if cfg!(windows) { "helper.exe" } else { "helper" };
+		let nested_binary = if cfg!(windows) {
+			format!("'bin\\{helper}'")
+		} else {
+			format!("\"bin/{helper}\"")
+		};
+		let (first_path, second_path) = if one_path < two_path {
+			(&one_path, &two_path)
+		} else {
+			(&two_path, &one_path)
+		};
+		let expected = formatdoc! {r#"
+		version = 1
+		registered_paths = []
+
+		[binaries]
+		"{first_path}" = [
+		    "{binary}",
+		    {nested_binary},
+		]
+		"{second_path}" = [
+		    "{binary}",
+		    {nested_binary},
+		]
+
+		[[shims.helper]]
+		backend = "github"
+		api_url = "{one_url}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "{one_path}"
+		binary = {nested_binary}
+
+		[[shims.helper-two]]
+		backend = "github"
+		api_url = "{two_url}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "{two_path}"
+		binary = {nested_binary}
+
+		[[shims.tool]]
+		backend = "github"
+		api_url = "{one_url}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "{one_path}"
+		binary = "{binary}"
+
+		[[shims.tool-two]]
+		backend = "github"
+		api_url = "{two_url}"
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		install_path = "{two_path}"
+		binary = "{binary}"
+		"#};
+		assert_eq!(state, expected);
+		let suffix = if cfg!(windows) { ".exe" } else { "" };
+		for name in ["tool", "tool-two", "helper", "helper-two"] {
+			let path = fixture.config_dir.join("shims").join(format!("{name}{suffix}"));
+			assert!(path.is_file(), "{}", path.display());
 		}
 		// each origin resolves and downloads its own artifact
 		let mut paths: Vec<String> = runtime
