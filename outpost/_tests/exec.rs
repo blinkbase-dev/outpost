@@ -46,6 +46,9 @@ impl Fixture {
 
 #[test]
 fn runs_tool_and_forwards_args() {
+	let config = r#"[tools]
+"github:owner/repo" = "1.2.3"
+"#;
 	let lock = r#"
 version = 1
 
@@ -56,9 +59,6 @@ lane = ""
 requested = "1.2.3"
 tag_name = "v1.2.3"
 install_path = "github_owner_repo/1.2.3"
-"#;
-	let config = r#"[tools]
-"github:owner/repo" = "1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
@@ -72,6 +72,9 @@ install_path = "github_owner_repo/1.2.3"
 
 #[test]
 fn runs_from_cached_index() {
+	let config = r#"[tools]
+"github:owner/repo" = "1.2.3"
+"#;
 	let lock = r#"
 version = 1
 
@@ -82,9 +85,6 @@ lane = ""
 requested = "1.2.3"
 tag_name = "v1.2.3"
 install_path = "github_owner_repo/1.2.3"
-"#;
-	let config = r#"[tools]
-"github:owner/repo" = "1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
@@ -103,6 +103,9 @@ install_path = "github_owner_repo/1.2.3"
 
 #[test]
 fn falls_back_when_cached_match_is_missing() {
+	let config = r#"[tools]
+"github:owner/repo" = "1.2.3"
+"#;
 	let lock = r#"
 version = 1
 
@@ -113,9 +116,6 @@ lane = ""
 requested = "1.2.3"
 tag_name = "v1.2.3"
 install_path = "github_owner_repo/1.2.3"
-"#;
-	let config = r#"[tools]
-"github:owner/repo" = "1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
@@ -156,6 +156,9 @@ install_path = "github_owner_repo/1.2.3"
 
 #[test]
 fn runs_shim_from_shims() {
+	let config = r#"[tools]
+"github:owner/repo" = "1.2.3"
+"#;
 	let lock = r#"
 version = 1
 
@@ -166,9 +169,6 @@ lane = ""
 requested = "1.2.3"
 tag_name = "v1.2.3"
 install_path = "github_owner_repo/1.2.3"
-"#;
-	let config = r#"[tools]
-"github:owner/repo" = "1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
@@ -194,6 +194,15 @@ binary = "{name}"
 
 #[test]
 fn reports_shim_failures() {
+	let requested = r#"[tools]
+"github:owner/repo" = "1.2.3"
+"#;
+	let other = r#"[tools]
+"github:owner/repo" = "2.0.0"
+"#;
+	let unrelated = r#"[tools]
+"github:other/repo" = "1.2.3"
+"#;
 	let lock = r#"
 version = 1
 
@@ -217,15 +226,6 @@ install_path = "github_owner_repo/1.2.3"
 binary = "{name}"
 "#
 	);
-	let requested = r#"[tools]
-"github:owner/repo" = "1.2.3"
-"#;
-	let other = r#"[tools]
-"github:owner/repo" = "2.0.0"
-"#;
-	let unrelated = r#"[tools]
-"github:other/repo" = "1.2.3"
-"#;
 	// the shim name is not indexed
 	let fixture = Fixture::new(requested, lock);
 	fixture.script("github_owner_repo/1.2.3", name, 7);
@@ -283,6 +283,14 @@ mod github {
 		let origin_b = "https://b.example.com";
 		let path_a = _install_path(origin_a, "owner_repo", "1.2.3");
 		let path_b = _install_path(origin_b, "owner_repo", "1.2.3");
+		let base = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
+		"#};
+		let dev = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}" }}
+		"#};
 		let lock = formatdoc! {r#"
 		version = 1
 
@@ -303,14 +311,6 @@ mod github {
 		requested = "1.2.3"
 		tag_name = "v1.2.3"
 		install_path = "{path_b}"
-		"#};
-		let base = formatdoc! {r#"
-		[tools]
-		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
-		"#};
-		let dev = formatdoc! {r#"
-		[tools]
-		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}" }}
 		"#};
 		let fixture = Fixture::new(&base, &lock);
 		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), &dev).unwrap();
@@ -371,6 +371,14 @@ mod github_shims {
 	fn runs_binary_from_the_version_selected_by_precedence() {
 		let path_one = _install_path("", "owner_repo", "1.0.0");
 		let path_two = _install_path("", "owner_repo", "2.0.0");
+		let base = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = "1.0.0"
+		"#};
+		let dev = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = "2.0.0"
+		"#};
 		let lock = formatdoc! {r#"
 		version = 1
 
@@ -394,14 +402,6 @@ mod github_shims {
 		"#};
 		let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
 		let nested = format!("bin/{name}");
-		let base = formatdoc! {r#"
-		[tools]
-		"github:owner/repo" = "1.0.0"
-		"#};
-		let dev = formatdoc! {r#"
-		[tools]
-		"github:owner/repo" = "2.0.0"
-		"#};
 		let state = formatdoc! {r#"
 		version = 1
 		[[shims.tool]]
@@ -438,6 +438,15 @@ mod github_shims {
 		let origin_b = "https://b.example.com";
 		let path_a = _install_path(origin_a, "owner_repo", "1.2.3");
 		let path_b = _install_path(origin_b, "owner_repo", "1.2.3");
+		let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
+		let base = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
+		"#};
+		let dev = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}", rename_shims = {{ "{name}" = "tool-two" }} }}
+		"#};
 		let lock = formatdoc! {r#"
 		version = 1
 
@@ -458,15 +467,6 @@ mod github_shims {
 		requested = "1.2.3"
 		tag_name = "v1.2.3"
 		install_path = "{path_b}"
-		"#};
-		let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
-		let base = formatdoc! {r#"
-		[tools]
-		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
-		"#};
-		let dev = formatdoc! {r#"
-		[tools]
-		"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}", rename_shims = {{ "{name}" = "tool-two" }} }}
 		"#};
 		let state = formatdoc! {r#"
 		version = 1
