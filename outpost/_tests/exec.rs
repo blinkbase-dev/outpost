@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+use indoc::indoc;
+
 struct Fixture {
 	_dir: tempfile::TempDir,
 	config_dir: PathBuf,
@@ -46,20 +48,21 @@ impl Fixture {
 
 #[test]
 fn runs_tool_and_forwards_args() {
-	let config = r#"[tools]
-"github:owner/repo" = "1.2.3"
-"#;
-	let lock = r#"
-version = 1
+	let config = indoc! {r#"
+	[tools]
+	"github:owner/repo" = "1.2.3"
+	"#};
+	let lock = indoc! {r#"
+	version = 1
 
-[[tool]]
-backend = "github"
-full_name = "owner/repo"
-lane = ""
-requested = "1.2.3"
-tag_name = "v1.2.3"
-install_path = "github_owner_repo/1.2.3"
-"#;
+	[[tool]]
+	backend = "github"
+	full_name = "owner/repo"
+	lane = ""
+	requested = "1.2.3"
+	tag_name = "v1.2.3"
+	install_path = "github_owner_repo/1.2.3"
+	"#};
 	let fixture = Fixture::new(config, lock);
 	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
 	fixture.script("github_owner_repo/1.2.3", name, 7);
@@ -68,6 +71,34 @@ install_path = "github_owner_repo/1.2.3"
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert_eq!(output.status.code(), Some(7), "{stderr}");
 	assert!(stdout.contains("hello world"), "{stdout}");
+}
+
+#[test]
+fn runs_nested_binary_and_forwards_args() {
+	let config = indoc! {r#"
+	[tools]
+	"github:owner/repo" = "1.2.3"
+	"#};
+	let lock = indoc! {r#"
+	version = 1
+
+	[[tool]]
+	backend = "github"
+	full_name = "owner/repo"
+	lane = ""
+	requested = "1.2.3"
+	tag_name = "v1.2.3"
+	install_path = "github_owner_repo/1.2.3"
+	"#};
+	let fixture = Fixture::new(config, lock);
+	let name = if cfg!(windows) { "tool.cmd" } else { "tool" };
+	let relative = format!("bin/{name}");
+	fixture.script("github_owner_repo/1.2.3", &relative, 9);
+	let output = fixture.run(&["exec", "github:owner/repo", "--", &relative, "nested", "args"], None);
+	let stdout = String::from_utf8(output.stdout).unwrap();
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert_eq!(output.status.code(), Some(9), "{stderr}");
+	assert!(stdout.contains("nested args"), "{stdout}");
 }
 
 #[test]
