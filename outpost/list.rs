@@ -19,8 +19,14 @@ pub(crate) fn list() -> Result<(), Error> {
 	let report = status::report(&catalog, tools_dir);
 	let mut rows = Vec::with_capacity(report.requested.len() + report.unrequested.len());
 	for entry in &report.requested {
-		let (tool, requested) = match &entry.tool {
-			RequestedTool::Github { full_name, lane, version, .. } => (format!("github:{full_name}"), format!("{lane}{version}")),
+		let (tool, requested, api_url) = match &entry.tool {
+			RequestedTool::Github {
+				api_url,
+				full_name,
+				lane,
+				version,
+				..
+			} => (format!("github:{full_name}"), format!("{lane}{version}"), api_url.clone()),
 		};
 		let version = match &entry.installed_version {
 			Some(version) => match entry.install_state {
@@ -34,11 +40,13 @@ pub(crate) fn list() -> Result<(), Error> {
 			requested,
 			version,
 			source: entry.origin.display().to_string(),
+			origin: api_url,
 		});
 	}
 	for entry in &report.unrequested {
-		let (tool, version) = match entry {
+		let (tool, version, api_url) = match entry {
 			LockedTool::Github {
+				api_url,
 				full_name,
 				tag_name,
 				install_path,
@@ -49,7 +57,7 @@ pub(crate) fn list() -> Result<(), Error> {
 				} else {
 					format!("{tag_name} (missing)")
 				};
-				(format!("github:{full_name}"), version)
+				(format!("github:{full_name}"), version, api_url.clone())
 			}
 		};
 		rows.push(Row {
@@ -57,6 +65,7 @@ pub(crate) fn list() -> Result<(), Error> {
 			requested: "-".to_owned(),
 			version,
 			source: "-".to_owned(),
+			origin: api_url,
 		});
 	}
 	_print(&rows);
@@ -68,6 +77,7 @@ struct Row {
 	requested: String,
 	version: String,
 	source: String,
+	origin: String,
 }
 
 fn _print(rows: &[Row]) {
@@ -78,50 +88,59 @@ fn _print(rows: &[Row]) {
 	let mut requested_width = "REQUESTED".len();
 	let mut version_width = "VERSION".len();
 	let mut source_width = "SOURCE".len();
+	let mut origin_width = "ORIGIN".len();
 	for row in rows {
 		tool_width = tool_width.max(row.tool.chars().count());
 		requested_width = requested_width.max(row.requested.chars().count());
 		version_width = version_width.max(row.version.chars().count());
 		source_width = source_width.max(row.source.chars().count());
+		origin_width = origin_width.max(row.origin.chars().count());
 	}
 	let fitted = match terminal_size::terminal_size_of(std::io::stdout()).map(|(width, _)| width.0 as usize) {
-		Some(width) => _fit(tool_width, requested_width, version_width, source_width, width),
-		None => Some((tool_width, requested_width, version_width, source_width)),
+		Some(width) => _fit(tool_width, requested_width, version_width, source_width, origin_width, width),
+		None => Some((tool_width, requested_width, version_width, source_width, origin_width)),
 	};
-	let Some((tool_width, requested_width, version_width, source_width)) = fitted else {
+	let Some((tool_width, requested_width, version_width, source_width, origin_width)) = fitted else {
 		_print_stacked(rows);
 		return;
 	};
-	println!("{:<tool_width$}  {:<requested_width$}  {:<version_width$}  SOURCE", "TOOL", "REQUESTED", "VERSION");
+	println!(
+		"{:<tool_width$}  {:<requested_width$}  {:<version_width$}  {:<source_width$}  ORIGIN",
+		"TOOL", "REQUESTED", "VERSION", "SOURCE"
+	);
 	for row in rows {
 		let tool = _truncate(&row.tool, tool_width);
 		let requested = _truncate(&row.requested, requested_width);
 		let version = _truncate(&row.version, version_width);
 		let source = _truncate(&row.source, source_width);
-		println!("{tool:<tool_width$}  {requested:<requested_width$}  {version:<version_width$}  {source}");
+		let origin = _truncate(&row.origin, origin_width);
+		let line = format!("{tool:<tool_width$}  {requested:<requested_width$}  {version:<version_width$}  {source:<source_width$}  {origin}");
+		println!("{}", line.trim_end());
 	}
 }
 
-fn _fit(tool: usize, requested: usize, version: usize, source: usize, width: usize) -> Option<(usize, usize, usize, usize)> {
+fn _fit(tool: usize, requested: usize, version: usize, source: usize, origin: usize, width: usize) -> Option<(usize, usize, usize, usize, usize)> {
 	const GAP: usize = 2;
 	const MIN_TOOL: usize = 20;
 	const MAX_REQUESTED: usize = 16;
 	const MAX_VERSION: usize = 24;
 	const MAX_SOURCE: usize = 48;
-	let fixed = requested + version + source + GAP * 3;
+	const MAX_ORIGIN: usize = 32;
+	let fixed = requested + version + source + origin + GAP * 4;
 	let available = width.saturating_sub(fixed);
 	// the tool column fits naturally, or can shrink to its minimum
 	if available >= tool.min(MIN_TOOL) {
-		return Some((tool.min(available), requested, version, source));
+		return Some((tool.min(available), requested, version, source, origin));
 	}
 	// retry with the fixed columns capped
 	let requested = requested.min(MAX_REQUESTED);
 	let version = version.min(MAX_VERSION);
 	let source = source.min(MAX_SOURCE);
-	let fixed = requested + version + source + GAP * 3;
+	let origin = origin.min(MAX_ORIGIN);
+	let fixed = requested + version + source + origin + GAP * 4;
 	let available = width.saturating_sub(fixed);
 	if available >= tool.min(MIN_TOOL) {
-		return Some((tool.min(available), requested, version, source));
+		return Some((tool.min(available), requested, version, source, origin));
 	}
 	None
 }
@@ -132,6 +151,7 @@ fn _print_stacked(rows: &[Row]) {
 		println!("  requested  {}", row.requested);
 		println!("  version    {}", row.version);
 		println!("  source     {}", row.source);
+		println!("{}", format!("  origin     {}", row.origin).trim_end());
 	}
 }
 
@@ -158,22 +178,22 @@ mod tests {
 
 	#[test]
 	fn fits_the_natural_table() {
-		assert_eq!(_fit(10, 5, 6, 10, 80), Some((10, 5, 6, 10)));
+		assert_eq!(_fit(10, 5, 6, 10, 6, 80), Some((10, 5, 6, 10, 6)));
 	}
 
 	#[test]
 	fn shrinks_the_tool_column_before_capping() {
-		assert_eq!(_fit(60, 5, 6, 10, 50), Some((23, 5, 6, 10)));
+		assert_eq!(_fit(60, 5, 6, 10, 6, 60), Some((25, 5, 6, 10, 6)));
 	}
 
 	#[test]
 	fn caps_fixed_columns_when_the_tool_column_is_too_narrow() {
-		assert_eq!(_fit(10, 30, 30, 60, 120), Some((10, 16, 24, 48)));
+		assert_eq!(_fit(10, 30, 30, 60, 6, 124), Some((10, 16, 24, 48, 6)));
 	}
 
 	#[test]
 	fn stacks_when_the_capped_table_still_does_not_fit() {
-		assert_eq!(_fit(30, 30, 30, 60, 40), None);
+		assert_eq!(_fit(30, 30, 30, 60, 6, 40), None);
 	}
 
 	#[test]

@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use indoc::formatdoc;
+
 struct Fixture {
 	_dir: tempfile::TempDir, // keeps the temp tree alive until the fixture drops
 	config_dir: PathBuf,
@@ -37,62 +39,90 @@ impl Fixture {
 
 #[test]
 fn lists_requested_and_unrequested_tools() {
-	let config = r#"
-[tools]
-"github:owner/repo" = "1.2.3"
-"github:owner/other" = "2.0.0"
-"github:owner/new" = "3.0.0"
-"#;
-	let lock = r#"
-version = 1
+	let origin_a = "https://a.example.com";
+	let origin_b = "https://b.example.com";
+	let base = formatdoc! {r#"
+	[tools]
+	"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
+	"github:owner/other" = {{ version = "2.0.0", api_url = "{origin_a}" }}
+	"github:owner/new" = {{ version = "3.0.0", api_url = "{origin_a}" }}
+	"#};
+	let dev = formatdoc! {r#"
+	[tools]
+	"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_b}" }}
+	"#};
+	let lock = formatdoc! {r#"
+	version = 1
 
-[[tool]]
-backend = "github"
-full_name = "owner/repo"
-lane = ""
-requested = "1.2.3"
-tag_name = "v1.2.3"
-install_path = "github_owner_repo/1.2.3"
+	[[tool]]
+	backend = "github"
+	api_url = "{origin_b}"
+	full_name = "owner/repo"
+	lane = ""
+	requested = "1.2.3"
+	tag_name = "v1.2.3"
+	install_path = "github_owner_repo_b/1.2.3"
 
-[[tool]]
-backend = "github"
-full_name = "owner/other"
-lane = ""
-requested = "2.0.0"
-tag_name = "v2.0.0"
-install_path = "github_owner_other/2.0.0"
+	[[tool]]
+	backend = "github"
+	api_url = "{origin_a}"
+	full_name = "owner/repo"
+	lane = ""
+	requested = "1.2.3"
+	tag_name = "v1.2.3"
+	install_path = "github_owner_repo_a/1.2.3"
 
-[[tool]]
-backend = "github"
-full_name = "owner/old"
-lane = ""
-requested = "9.0.0"
-tag_name = "v9.0.0"
-install_path = "github_owner_old/9.0.0"
+	[[tool]]
+	backend = "github"
+	api_url = "{origin_a}"
+	full_name = "owner/other"
+	lane = ""
+	requested = "2.0.0"
+	tag_name = "v2.0.0"
+	install_path = "github_owner_other/2.0.0"
 
-[[tool]]
-backend = "github"
-full_name = "owner/gone"
-lane = ""
-requested = "8.0.0"
-tag_name = "v8.0.0"
-install_path = "github_owner_gone/8.0.0"
-"#;
-	let fixture = Fixture::new(config, lock);
-	fixture.install("github_owner_repo/1.2.3");
+	[[tool]]
+	backend = "github"
+	api_url = "{origin_a}"
+	full_name = "owner/old"
+	lane = ""
+	requested = "9.0.0"
+	tag_name = "v9.0.0"
+	install_path = "github_owner_old/9.0.0"
+
+	[[tool]]
+	backend = "github"
+	api_url = ""
+	full_name = "owner/gone"
+	lane = ""
+	requested = "8.0.0"
+	tag_name = "v8.0.0"
+	install_path = "github_owner_gone/8.0.0"
+	"#};
+	let fixture = Fixture::new(&base, &lock);
+	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), &dev).unwrap();
+	fixture.install("github_owner_repo_a/1.2.3");
+	fixture.install("github_owner_repo_b/1.2.3");
 	fixture.install("github_owner_old/9.0.0");
-	let output = fixture.run(&fixture.config_dir, None);
+	let output = fixture.run(&fixture.config_dir, Some("dev"));
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
-	let source = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
-	let template = r#"TOOL                REQUESTED  VERSION           SOURCE
-github:owner/new    3.0.0      missing           {source}
-github:owner/other  2.0.0      v2.0.0 (missing)  {source}
-github:owner/repo   1.2.3      v1.2.3            {source}
-github:owner/old    -          v9.0.0            -
-github:owner/gone   -          v8.0.0 (missing)  -
-"#;
-	let expected = template.replace("{source}", &source);
+	let source_base = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
+	let source_dev = std::fs::canonicalize(fixture.config_dir.join("outpost.dev.toml"))
+		.unwrap()
+		.display()
+		.to_string();
+	let source_padding = " ".repeat(source_dev.len() - "SOURCE".len());
+	let dash_padding = " ".repeat(source_dev.len() - 1);
+	let expected = formatdoc! {r#"
+	TOOL                REQUESTED  VERSION           SOURCE{source_padding}  ORIGIN
+	github:owner/repo   1.2.3      v1.2.3            {source_dev}  {origin_b}
+	github:owner/new    3.0.0      missing           {source_base}      {origin_a}
+	github:owner/other  2.0.0      v2.0.0 (missing)  {source_base}      {origin_a}
+	github:owner/repo   1.2.3      v1.2.3            {source_base}      {origin_a}
+	github:owner/old    -          v9.0.0            -{dash_padding}  {origin_a}
+	github:owner/gone   -          v8.0.0 (missing)  -
+	"#};
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
 
@@ -107,16 +137,17 @@ fn lists_duplicate_requests_per_config_file() {
 	let output = fixture.run(&fixture.config_dir, Some("dev"));
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
-	let template = r#"TOOL               REQUESTED  VERSION  SOURCE
-github:owner/repo  1.2.3      missing  {source1}
-github:owner/repo  1.2.3      missing  {source2}
-"#;
 	let source1 = std::fs::canonicalize(fixture.config_dir.join("outpost.dev.toml"))
 		.unwrap()
 		.display()
 		.to_string();
 	let source2 = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
-	let expected = template.replace("{source1}", &source1).replace("{source2}", &source2);
+	let source_padding = " ".repeat(source1.len() - "SOURCE".len());
+	let expected = formatdoc! {r#"
+	TOOL               REQUESTED  VERSION  SOURCE{source_padding}  ORIGIN
+	github:owner/repo  1.2.3      missing  {source1}
+	github:owner/repo  1.2.3      missing  {source2}
+	"#};
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
 
@@ -144,15 +175,16 @@ fn lists_registered_versions_and_origins() {
 	let output = fixture.run(&elsewhere, None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
-	let template = r#"TOOL               REQUESTED  VERSION  SOURCE
-github:owner/repo  1.0.0      missing  {source1}
-github:owner/repo  2.0.0      missing  {source2}
-github:owner/repo  1.0.0      missing  {source3}
-"#;
-	let expected = template
-		.replace("{source1}", &sources[0])
-		.replace("{source2}", &sources[1])
-		.replace("{source3}", &sources[2]);
+	let source1 = &sources[0];
+	let source2 = &sources[1];
+	let source3 = &sources[2];
+	let source_padding = " ".repeat(source2.len() - "SOURCE".len());
+	let expected = formatdoc! {r#"
+	TOOL               REQUESTED  VERSION  SOURCE{source_padding}  ORIGIN
+	github:owner/repo  1.0.0      missing  {source1}
+	github:owner/repo  2.0.0      missing  {source2}
+	github:owner/repo  1.0.0      missing  {source3}
+	"#};
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
 
@@ -174,12 +206,13 @@ fn keeps_full_values_when_output_is_piped() {
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let tool = format!("github:{long_name}");
-	let padding = " ".repeat(tool.len() - "TOOL".len());
-	let template = r#"TOOL{padding}  REQUESTED  VERSION  SOURCE
-{tool}  latest     missing  {source}
-"#;
+	let tool_padding = " ".repeat(tool.len() - "TOOL".len());
 	let source = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
-	let expected = template.replace("{padding}", &padding).replace("{tool}", &tool).replace("{source}", &source);
+	let source_padding = " ".repeat(source.len() - "SOURCE".len());
+	let expected = formatdoc! {r#"
+	TOOL{tool_padding}  REQUESTED  VERSION  SOURCE{source_padding}  ORIGIN
+	{tool}  latest     missing  {source}
+	"#};
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
 
@@ -205,11 +238,12 @@ install_path = "github_owner_repo/cli/v1.2.3"
 	let output = fixture.run(&fixture.config_dir, None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
-	let template = r#"TOOL               REQUESTED  VERSION     SOURCE
-github:owner/repo  cli/1.2.3  cli/v1.2.3  {source}
-"#;
 	let source = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
-	let expected = template.replace("{source}", &source);
+	let source_padding = " ".repeat(source.len() - "SOURCE".len());
+	let expected = formatdoc! {r#"
+	TOOL               REQUESTED  VERSION     SOURCE{source_padding}  ORIGIN
+	github:owner/repo  cli/1.2.3  cli/v1.2.3  {source}
+	"#};
 	assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
 }
 
