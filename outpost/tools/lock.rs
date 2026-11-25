@@ -21,8 +21,7 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 				match tool {
 					LockedTool::Github { full_name, install_path, .. } => {
 						full_name.make_ascii_lowercase();
-						let relative = !install_path.as_os_str().is_empty() && install_path.components().all(|component| matches!(component, Component::Normal(_)));
-						if !relative {
+						if !valid_install_path(install_path) {
 							return Err(LockError::InvalidPath(install_path.clone()));
 						}
 					}
@@ -37,6 +36,11 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Lock::default()),
 		Err(error) => Err(error.into()),
 	}
+}
+
+pub(crate) fn valid_install_path(path: &Path) -> bool {
+	let mut components = path.components();
+	matches!(components.next(), Some(Component::Normal(_))) && matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 pub(crate) fn write(data_dir: &Path, lock: &Lock) -> Result<(), LockError> {
@@ -276,7 +280,7 @@ requested = "1.0.0"
 tag_name = "v1.0.0"
 install_path = "{}"
 "#;
-		for path in ["/tmp/tool", "../tool", "./tool", ""] {
+		for path in ["/tmp/tool", "../tool", "./tool", "", "github_a", "github_a/.", "github_a/..", "github_a/1/2"] {
 			let dir = tempfile::tempdir().unwrap();
 			let text = text.replace("{}", path);
 			std::fs::write(dir.path().join("outpost.lock"), text).unwrap();

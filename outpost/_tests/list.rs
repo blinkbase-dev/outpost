@@ -231,10 +231,10 @@ full_name = "owner/repo"
 lane = "cli/"
 requested = "1.2.3"
 tag_name = "cli/v1.2.3"
-install_path = "github_owner_repo/cli/v1.2.3"
+install_path = "github_owner_repo/cli_v1.2.3"
 "#;
 	let fixture = Fixture::new(config, lock);
-	fixture.install("github_owner_repo/cli/v1.2.3");
+	fixture.install("github_owner_repo/cli_v1.2.3");
 	let output = fixture.run(&fixture.config_dir, None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
