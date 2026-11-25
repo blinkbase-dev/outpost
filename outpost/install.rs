@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -9,6 +10,7 @@ use crate::config::{loader, locate, state};
 use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionGroup};
 use crate::tools::catalog::Catalog;
 use crate::tools::lock::{self, Identity, Lock, LockedTool};
+use crate::tools::resolution_cache::ResolutionCache;
 use crate::tools::tool_request::{self, RequestedTool, ToolRequestSet};
 use crate::tools::{shims, status};
 
@@ -43,7 +45,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	}
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
-	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone()))?;
+	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone(), data_dir))?;
 	// group resolutions by artifact so each tool downloads once
 	let resolutions = ToolResolutionGroup::from_entries(resolutions, &lock)?;
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
@@ -106,11 +108,17 @@ pub(crate) fn install() -> Result<(), Error> {
 	message.map_or(Ok(()), |message| Err(message.into()))
 }
 
-async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>), Error> {
+async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir: &Path) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>), Error> {
+	let mut resolutions = Vec::with_capacity(requests.len());
+	let mut cache = ResolutionCache::load(data_dir, &requests);
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(requests.len());
 	let github_options = Arc::new(GithubOptions::from_process());
 	for request in requests {
+		if let Some(resolution) = cache.get(&request.tool) {
+			resolutions.push((request, resolution));
+			continue;
+		}
 		let semaphore = Arc::clone(&semaphore);
 		let http = http.clone();
 		let github_options = Arc::clone(&github_options);
@@ -127,14 +135,19 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client) -> Result
 			(request, result)
 		}));
 	}
-	let mut resolutions = Vec::with_capacity(handles.len());
 	let mut failures = Vec::new();
 	for handle in handles {
 		let (request, result) = handle.await?;
 		match result {
-			Ok(item) => resolutions.push((request, item)),
+			Ok(item) => {
+				cache.put(&request.tool, &item);
+				resolutions.push((request, item));
+			}
 			Err(error) => failures.push((request, error)),
 		}
+	}
+	if let Err(error) = cache.flush() {
+		eprintln!("warning: {error}");
 	}
 	Ok((resolutions, failures))
 }

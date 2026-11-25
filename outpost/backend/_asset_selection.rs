@@ -46,14 +46,14 @@ fn score(name: &str, format: &ArchiveFormat, target: &Target) -> Option<i32> {
 }
 
 #[derive(Debug)]
-struct Target {
-	os: &'static str,
-	arch: &'static str,
-	libc: &'static str,
+pub(crate) struct Target {
+	pub(crate) os: &'static str,
+	pub(crate) arch: &'static str,
+	pub(crate) libc: &'static str,
 }
 
 impl Target {
-	fn current() -> Self {
+	pub(crate) fn current() -> Self {
 		let libc = if cfg!(target_env = "gnu") {
 			"gnu"
 		} else if cfg!(target_env = "musl") {

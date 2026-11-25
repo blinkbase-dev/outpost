@@ -54,7 +54,7 @@ fn _tarball(files: &[(&str, &[u8])]) -> Vec<u8> {
 	builder.into_inner().unwrap().finish().unwrap()
 }
 
-async fn _mock_release(server: &MockServer, version: &str) -> (String, &'static str) {
+fn _release_data(server: &MockServer, version: &str) -> (serde_json::Value, Vec<u8>, String, &'static str) {
 	// pick an asset name that the selector accepts on this host
 	let libc = if cfg!(windows) { "msvc" } else { "gnu" };
 	let asset = format!("tool-{}-{}-{libc}.tar.gz", std::env::consts::OS, std::env::consts::ARCH);
@@ -63,18 +63,34 @@ async fn _mock_release(server: &MockServer, version: &str) -> (String, &'static 
 	let nested = format!("bin/{helper}");
 	let content = format!("binary {version}");
 	let bytes = _tarball(&[(binary, content.as_bytes()), (&nested, content.as_bytes())]);
+	let release = json!({
+		"tag_name": format!("v{version}"),
+		"draft": false,
+		"prerelease": false,
+		"assets": [{
+			"name": asset,
+			"browser_download_url": format!("{}/download/{version}/{asset}", server.uri()),
+			"size": bytes.len(),
+		}],
+	});
+	(release, bytes, asset, binary)
+}
+
+async fn _mock_release(server: &MockServer, version: &str) -> (String, &'static str) {
+	let (release, bytes, asset, binary) = _release_data(server, version);
 	Mock::given(method("GET"))
 		.and(path(format!("/repos/owner/repo/releases/tags/{version}")))
-		.respond_with(ResponseTemplate::new(200).set_body_json(json!({
-			"tag_name": format!("v{version}"),
-			"draft": false,
-			"prerelease": false,
-			"assets": [{
-				"name": asset,
-				"browser_download_url": format!("{}/download/{version}/{asset}", server.uri()),
-				"size": bytes.len(),
-			}],
-		})))
+		.respond_with(ResponseTemplate::new(200).set_body_json(release.clone()))
+		.mount(server)
+		.await;
+	Mock::given(method("GET"))
+		.and(path("/repos/owner/repo/releases/latest"))
+		.respond_with(ResponseTemplate::new(200).set_body_json(release.clone()))
+		.mount(server)
+		.await;
+	Mock::given(method("GET"))
+		.and(path("/repos/owner/repo/releases"))
+		.respond_with(ResponseTemplate::new(200).set_body_json(json!([release])))
 		.mount(server)
 		.await;
 	Mock::given(method("GET"))
@@ -94,6 +110,11 @@ fn _install_path(api_url: &str, repo: &str, version: &str) -> String {
 		format!("_{hash}")
 	};
 	format!("github_{repo}{suffix}/{version}")
+}
+
+fn _resolution_cache_path(api_url: &str, repo: &str) -> String {
+	let install_path = _install_path(api_url, repo, "_");
+	format!("{}.toml", install_path.split('/').next().unwrap())
 }
 
 #[test]
@@ -301,6 +322,249 @@ fn reports_failed_install_per_origin() {
 	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
 	assert!(!lock.contains("[[tool]]"), "{lock}");
 	assert_eq!(std::fs::read_dir(fixture.config_dir.join("tools")).unwrap().count(), 0);
+}
+
+mod resolution_cache {
+	use std::path::Path;
+
+	use regex::regex;
+
+	use super::*;
+
+	fn _expire_resolution_cache(path: &Path) {
+		let cache = std::fs::read_to_string(path).unwrap();
+		let cache = regex!(r"(?m)^resolved_at = \d+$").replace_all(&cache, "resolved_at = 0");
+		std::fs::write(path, cache.as_bytes()).unwrap();
+	}
+
+	#[test]
+	fn reinstalls_from_cached_resolution() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		for (requested, resolution_path) in [
+			("1.0.0", "/repos/owner/repo/releases/tags/1.0.0"),
+			("latest", "/repos/owner/repo/releases/latest"),
+			("1", "/repos/owner/repo/releases"),
+		] {
+			let server = runtime.block_on(MockServer::start());
+			let api_url = server.uri();
+			let (asset, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+			let config = formatdoc! {r#"
+			[tools]
+			"github:owner/repo" = {{ version = "{requested}", api_url = "{api_url}" }}
+			"#};
+			let fixture = Fixture::new(&config, None);
+			// the first install resolves and downloads
+			let first = fixture.run();
+			assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+			let install_path = _install_path(&api_url, "owner_repo", "1.0.0");
+			let installed = fixture.config_dir.join("tools").join(&install_path);
+			std::fs::remove_dir_all(&installed).unwrap();
+			// the second install reuses the cached resolution and downloads again
+			let second = fixture.run();
+			assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
+			assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+			let requests = runtime.block_on(server.received_requests()).unwrap();
+			let paths: Vec<String> = requests.iter().map(|request| request.url.path().to_owned()).collect();
+			// resolve once and download twice for every version form
+			assert_eq!(
+				paths,
+				vec![
+					resolution_path.to_owned(),
+					format!("/download/1.0.0/{asset}"),
+					format!("/download/1.0.0/{asset}"),
+				],
+				"{requested}"
+			);
+		}
+	}
+
+	#[test]
+	fn refreshes_stale_resolutions() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		for (requested, resolution_path) in [
+			("1.0.0", "/repos/owner/repo/releases/tags/1.0.0"),
+			("latest", "/repos/owner/repo/releases/latest"),
+			("1", "/repos/owner/repo/releases"),
+		] {
+			let server = runtime.block_on(MockServer::start());
+			let api_url = server.uri();
+			let (asset, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+			let config = formatdoc! {r#"
+			[tools]
+			"github:owner/repo" = {{ version = "{requested}", api_url = "{api_url}" }}
+			"#};
+			let fixture = Fixture::new(&config, None);
+			// the first install writes the cache
+			let first = fixture.run();
+			assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+			let cache_path = fixture.config_dir.join("resolutions").join(_resolution_cache_path(&api_url, "owner_repo"));
+			_expire_resolution_cache(&cache_path);
+			assert!(std::fs::read_to_string(&cache_path).unwrap().contains("resolved_at = 0"));
+			let installed = fixture.config_dir.join("tools").join(_install_path(&api_url, "owner_repo", "1.0.0"));
+			std::fs::remove_dir_all(&installed).unwrap();
+			// the expired entry forces a new resolution
+			let second = fixture.run();
+			assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
+			assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+			assert!(!std::fs::read_to_string(&cache_path).unwrap().contains("resolved_at = 0"));
+			std::fs::remove_dir_all(&installed).unwrap();
+			// the refreshed entry serves the third install
+			let third = fixture.run();
+			assert!(third.status.success(), "{}", String::from_utf8_lossy(&third.stderr));
+			assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+			let requests = runtime.block_on(server.received_requests()).unwrap();
+			let mut paths: Vec<String> = requests.iter().map(|request| request.url.path().to_owned()).collect();
+			paths.sort();
+			// the stale entry refreshes once and every install downloads
+			assert_eq!(paths, vec![
+				format!("/download/1.0.0/{asset}"),
+				format!("/download/1.0.0/{asset}"),
+				format!("/download/1.0.0/{asset}"),
+				resolution_path.to_owned(),
+				resolution_path.to_owned(),
+			]);
+		}
+	}
+
+	#[test]
+	fn combines_cached_and_fresh_resolutions() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let server = runtime.block_on(MockServer::start());
+		let api_url = server.uri();
+		let (asset, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+		runtime.block_on(_mock_release(&server, "2.0.0"));
+		let one = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}" }}
+		"#};
+		let two = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "2.0.0", api_url = "{api_url}" }}
+		"#};
+		let fixture = Fixture::new(&one, None);
+		// the first install caches 1.0.0
+		let first = fixture.run();
+		assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
+		let one_installed = fixture.config_dir.join("tools").join(_install_path(&api_url, "owner_repo", "1.0.0"));
+		std::fs::remove_dir_all(&one_installed).unwrap();
+		// the second install reuses 1.0.0 and resolves 2.0.0
+		let second = fixture.run();
+		assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
+		let tools = fixture.config_dir.join("tools");
+		let one_installed = tools.join(_install_path(&api_url, "owner_repo", "1.0.0"));
+		let two_installed = tools.join(_install_path(&api_url, "owner_repo", "2.0.0"));
+		assert_eq!(std::fs::read(one_installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		assert_eq!(std::fs::read(two_installed.join(binary)).unwrap(), b"binary 2.0.0".as_slice());
+		std::fs::remove_dir_all(&one_installed).unwrap();
+		std::fs::remove_dir_all(&two_installed).unwrap();
+		// the third install reuses both entries from one cache file
+		let third = fixture.run();
+		assert!(third.status.success(), "{}", String::from_utf8_lossy(&third.stderr));
+		assert_eq!(std::fs::read(one_installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		assert_eq!(std::fs::read(two_installed.join(binary)).unwrap(), b"binary 2.0.0".as_slice());
+		let requests = runtime.block_on(server.received_requests()).unwrap();
+		let mut paths: Vec<String> = requests.iter().map(|request| request.url.path().to_owned()).collect();
+		paths.sort();
+		// each version resolves once and downloads on every install
+		assert_eq!(paths, vec![
+			format!("/download/1.0.0/{asset}"),
+			format!("/download/1.0.0/{asset}"),
+			format!("/download/1.0.0/{asset}"),
+			format!("/download/2.0.0/{asset}"),
+			format!("/download/2.0.0/{asset}"),
+			"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+			"/repos/owner/repo/releases/tags/2.0.0".to_owned(),
+		]);
+	}
+
+	#[test]
+	fn rejects_cached_resolution_for_another_target() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let server = runtime.block_on(MockServer::start());
+		let api_url = server.uri();
+		let (asset, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+		let config = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}" }}
+		"#};
+		let fixture = Fixture::new(&config, None);
+		// the first install writes the cache for the current target
+		let first = fixture.run();
+		assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+		let cache_path = fixture.config_dir.join("resolutions").join(_resolution_cache_path(&api_url, "owner_repo"));
+		let cache = std::fs::read_to_string(&cache_path).unwrap();
+		let cache = cache.replacen(&format!("os = \"{}\"", std::env::consts::OS), "os = \"other\"", 1);
+		assert!(cache.contains("os = \"other\""));
+		std::fs::write(&cache_path, cache).unwrap();
+		let installed = fixture.config_dir.join("tools").join(_install_path(&api_url, "owner_repo", "1.0.0"));
+		std::fs::remove_dir_all(&installed).unwrap();
+		// the modified target forces a new resolution and adds the current target entry
+		let second = fixture.run();
+		assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
+		assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		let cache = std::fs::read_to_string(&cache_path).unwrap();
+		assert!(cache.contains("os = \"other\""));
+		assert!(cache.contains(&format!("os = \"{}\"", std::env::consts::OS)));
+		assert_eq!(cache.matches("[[resolution]]").count(), 2);
+		std::fs::remove_dir_all(&installed).unwrap();
+		// the current target entry serves the third install
+		let third = fixture.run();
+		assert!(third.status.success(), "{}", String::from_utf8_lossy(&third.stderr));
+		assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		let requests = runtime.block_on(server.received_requests()).unwrap();
+		let mut paths: Vec<String> = requests.iter().map(|request| request.url.path().to_owned()).collect();
+		paths.sort();
+		// three installs download three times and resolve twice
+		assert_eq!(paths, vec![
+			format!("/download/1.0.0/{asset}"),
+			format!("/download/1.0.0/{asset}"),
+			format!("/download/1.0.0/{asset}"),
+			"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+			"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+		]);
+	}
+
+	#[test]
+	fn recovers_from_corrupted_cache() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let server = runtime.block_on(MockServer::start());
+		let api_url = server.uri();
+		let (asset, binary) = runtime.block_on(_mock_release(&server, "1.0.0"));
+		let config = formatdoc! {r#"
+		[tools]
+		"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}" }}
+		"#};
+		let fixture = Fixture::new(&config, None);
+		// the first install writes the cache
+		let first = fixture.run();
+		assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+		let cache_path = fixture.config_dir.join("resolutions").join(_resolution_cache_path(&api_url, "owner_repo"));
+		assert!(cache_path.is_file());
+		std::fs::write(&cache_path, "not toml").unwrap();
+		let installed = fixture.config_dir.join("tools").join(_install_path(&api_url, "owner_repo", "1.0.0"));
+		std::fs::remove_dir_all(&installed).unwrap();
+		// corruption forces a new resolution and rewrites the cache
+		let second = fixture.run();
+		assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
+		assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		std::fs::remove_dir_all(&installed).unwrap();
+		// the repaired cache serves the third install
+		let third = fixture.run();
+		assert!(third.status.success(), "{}", String::from_utf8_lossy(&third.stderr));
+		assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
+		let requests = runtime.block_on(server.received_requests()).unwrap();
+		let mut paths: Vec<String> = requests.iter().map(|request| request.url.path().to_owned()).collect();
+		paths.sort();
+		// three installs download three times and resolve twice
+		assert_eq!(paths, vec![
+			format!("/download/1.0.0/{asset}"),
+			format!("/download/1.0.0/{asset}"),
+			format!("/download/1.0.0/{asset}"),
+			"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+			"/repos/owner/repo/releases/tags/1.0.0".to_owned(),
+		]);
+	}
 }
 
 mod exposed {
