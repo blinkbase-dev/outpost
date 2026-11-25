@@ -7,7 +7,7 @@ use tokio::sync::Semaphore;
 
 use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate, state};
-use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionGroup};
+use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionSet};
 use crate::tools::catalog::Catalog;
 use crate::tools::lock::{self, GithubLock, Identity, Lock, LockedTool};
 use crate::tools::resolution_cache::ResolutionCache;
@@ -17,7 +17,7 @@ use crate::tools::{shims, status};
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestSet, ToolResolution);
 type ResolutionFailure = (ToolRequestSet, Error);
-type DownloadEntry = (ToolResolutionGroup, ToolArchive);
+type DownloadEntry = (ToolResolutionSet, ToolArchive);
 
 pub(crate) fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
@@ -47,7 +47,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
 	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone(), data_dir))?;
 	// group resolutions by artifact so each tool downloads once
-	let resolutions = ToolResolutionGroup::from_entries(resolutions, &lock)?;
+	let resolutions = ToolResolutionSet::from_entries(resolutions, &lock)?;
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
@@ -147,9 +147,9 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir:
 	Ok((resolutions, failures))
 }
 
-fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionGroup> {
-	let groups: Vec<&ToolResolutionGroup> = installed.iter().map(|(group, _)| group).collect();
-	let row = |group: &ToolResolutionGroup, request: &ToolRequestSet| match (&request.tool, &group.resolution) {
+fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionSet> {
+	let groups: Vec<&ToolResolutionSet> = installed.iter().map(|(group, _)| group).collect();
+	let row = |group: &ToolResolutionSet, request: &ToolRequestSet| match (&request.tool, &group.resolution) {
 		(RequestedTool::Github(req), ToolResolution::Github { tag_name, .. }) => LockedTool::Github(GithubLock {
 			api_url: req.api_url.clone(),
 			full_name: req.full_name.clone(),
@@ -207,7 +207,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -257,7 +257,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -306,7 +306,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -368,7 +368,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -428,7 +428,7 @@ mod tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {

@@ -14,11 +14,11 @@ use crate::tools::tool_request::ToolRequestSet;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestSet, ToolResolution);
-type DownloadEntry = (ToolResolutionGroup, ToolArchive);
-type GroupFailure = (ToolResolutionGroup, Error);
+type DownloadEntry = (ToolResolutionSet, ToolArchive);
+type GroupFailure = (ToolResolutionSet, Error);
 
 pub(crate) async fn download_parallel(
-	resolutions: Vec<ToolResolutionGroup>, http: Client, downloads_dir: &Path,
+	resolutions: Vec<ToolResolutionSet>, http: Client, downloads_dir: &Path,
 ) -> Result<(Vec<DownloadEntry>, Vec<GroupFailure>), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(resolutions.len());
@@ -144,13 +144,13 @@ pub(crate) enum ToolResolution {
 	},
 }
 
-pub(crate) struct ToolResolutionGroup {
+pub(crate) struct ToolResolutionSet {
 	pub(crate) install_path: PathBuf,
 	pub(crate) requests: Vec<ToolRequestSet>,
 	pub(crate) resolution: ToolResolution,
 }
 
-impl ToolResolutionGroup {
+impl ToolResolutionSet {
 	pub(crate) fn from_entries(entries: Vec<ResolutionEntry>, lock: &Lock) -> Result<Vec<Self>, Error> {
 		let mut groups: Vec<Self> = Vec::with_capacity(entries.len());
 		let mut index_by_install_path: HashMap<PathBuf, usize> = HashMap::with_capacity(entries.len());
@@ -362,7 +362,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(archives.len(), 16);
 		assert!(failures.is_empty());
@@ -404,7 +404,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(archives.len(), 10);
 		assert!(failures.is_empty());
@@ -458,7 +458,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert!(failures.is_empty());
 		assert_eq!(archives.len(), 1);
@@ -538,7 +538,7 @@ mod download_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(failures.len(), 1);
 		assert_eq!(failures[0].0.requests.len(), 2);
@@ -732,7 +732,7 @@ mod extract_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			},
 		)];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([archive])
@@ -765,7 +765,7 @@ mod extract_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			},
 		)];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([archive])
@@ -849,7 +849,7 @@ mod extract_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([gz_archive, xz_archive, zip_archive])
@@ -913,7 +913,7 @@ mod extract_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([good, bad])
@@ -958,7 +958,7 @@ mod resolution_group_tests {
 				rename_shims: None,
 			}),
 		};
-		let groups = ToolResolutionGroup::from_entries(
+		let groups = ToolResolutionSet::from_entries(
 			vec![
 				(latest, ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -1005,7 +1005,7 @@ mod resolution_group_tests {
 				rename_shims: None,
 			}),
 		};
-		let error = ToolResolutionGroup::from_entries(
+		let error = ToolResolutionSet::from_entries(
 			vec![(request, ToolResolution::Github {
 				tag_name: "v1.0.0".to_owned(),
 				url: String::new(),
@@ -1045,7 +1045,7 @@ mod resolution_group_tests {
 				rename_shims: None,
 			}),
 		};
-		let error = ToolResolutionGroup::from_entries(
+		let error = ToolResolutionSet::from_entries(
 			vec![(request, ToolResolution::Github {
 				tag_name: "1.0.0".to_owned(),
 				url: String::new(),
@@ -1084,7 +1084,7 @@ mod resolution_group_tests {
 				rename_shims: None,
 			}),
 		};
-		let error = ToolResolutionGroup::from_entries(
+		let error = ToolResolutionSet::from_entries(
 			vec![
 				(first, ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -1134,7 +1134,7 @@ mod resolution_group_tests {
 				rename_shims: None,
 			}),
 		};
-		let error = ToolResolutionGroup::from_entries(
+		let error = ToolResolutionSet::from_entries(
 			vec![
 				(first, ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
