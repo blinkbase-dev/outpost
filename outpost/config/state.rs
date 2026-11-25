@@ -54,8 +54,7 @@ pub(crate) struct State {
 	// executable paths relative to the install directory, keyed by install path
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub(crate) binaries: BTreeMap<PathBuf, Vec<PathBuf>>,
-	// shim name -> one entry per installed version with its identity, install
-	// path, and binary
+	// shim name -> one entry per installed version with its identity, install path, and binary
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub(crate) shims: BTreeMap<String, Vec<ShimEntry>>,
 }
