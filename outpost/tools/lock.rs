@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::backend::github;
 use crate::tools::version::Version;
 
 pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
@@ -17,30 +18,31 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 		if !identities.insert(identity.clone()) {
 			return Err(LockError::DuplicateIdentity(identity));
 		}
-		let install_path = match tool {
-			LockedTool::Github { install_path, .. } => install_path,
-		};
+		let install_path = tool.install_path();
 		if !valid_install_path(install_path) {
-			return Err(LockError::InvalidInstallPath(install_path.clone()));
+			return Err(LockError::InvalidInstallPath(install_path.to_path_buf()));
 		}
-		match tool_by_install_path.get(install_path.as_path()) {
+		if install_path != tool.expected_install_path().as_path() {
+			return Err(LockError::InvalidInstallPath(install_path.to_path_buf()));
+		}
+		match tool_by_install_path.get(install_path) {
 			Some(existing) if !existing.install_prefix_matches(tool) => {
 				return Err(LockError::ConflictingInstallPath {
-					path: install_path.clone(),
+					path: install_path.to_path_buf(),
 					existing: existing.identity().to_string(),
 					incoming: identity.to_string(),
 				});
 			}
 			Some(existing) if existing.installed_version() != tool.installed_version() => {
 				return Err(LockError::ConflictingVersion {
-					path: install_path.clone(),
+					path: install_path.to_path_buf(),
 					existing: existing.installed_version().to_owned(),
 					incoming: tool.installed_version().to_owned(),
 				});
 			}
 			Some(_) => {}
 			None => {
-				tool_by_install_path.insert(install_path.as_path(), tool);
+				tool_by_install_path.insert(install_path, tool);
 			}
 		}
 	}
@@ -193,6 +195,14 @@ impl LockedTool {
 		}
 	}
 
+	pub(crate) fn expected_install_path(&self) -> PathBuf {
+		match self {
+			Self::Github {
+				api_url, full_name, tag_name, ..
+			} => github::install_path(api_url, full_name, tag_name),
+		}
+	}
+
 	fn install_prefix_matches(&self, other: &Self) -> bool {
 		match (self, other) {
 			(
@@ -276,7 +286,7 @@ impl std::error::Error for LockError {
 
 #[cfg(test)]
 mod tests {
-	use indoc::indoc;
+	use indoc::{formatdoc, indoc};
 
 	use super::*;
 
@@ -368,6 +378,33 @@ install_path = "C:"
 	}
 
 	#[test]
+	fn rejects_non_canonical_install_paths() {
+		for (full_name, tag_name, install_path) in [
+			("owner/repo", "v1.0.0", "GitHub_Owner_Repo/1.0.0"),
+			("owner/repo", "v1.0.0", "github_owner_repo/2.0.0"),
+			("owner/repo", "v1.0.0", "github_owner_other/1.0.0"),
+		] {
+			let dir = tempfile::tempdir().unwrap();
+			let text = formatdoc! {r#"
+			version = 1
+
+			[[tool]]
+			backend = "github"
+			api_url = ""
+			full_name = "{full_name}"
+			lane = ""
+			requested = "1.0.0"
+			tag_name = "{tag_name}"
+			install_path = "{install_path}"
+			"#};
+			std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
+			let error = read(dir.path()).err().unwrap();
+			assert!(matches!(error, LockError::InvalidInstallPath(_)), "{error}");
+			assert!(error.to_string().contains(install_path), "{error}");
+		}
+	}
+
+	#[test]
 	fn allows_same_tool_at_one_install_path() {
 		let dir = tempfile::tempdir().unwrap();
 		let text = indoc! {r#"
@@ -404,26 +441,26 @@ install_path = "C:"
 		[[tool]]
 		backend = "github"
 		api_url = ""
-		full_name = "owner/repo"
+		full_name = "owner/repo.js"
 		lane = ""
 		requested = "1.0.0"
 		tag_name = "v1.0.0"
-		install_path = "github_owner_repo/1.0.0"
+		install_path = "github_owner_repo_js/1.0.0"
 
 		[[tool]]
 		backend = "github"
 		api_url = ""
-		full_name = "owner/other"
+		full_name = "owner/repo-js"
 		lane = ""
 		requested = "1.0.0"
 		tag_name = "v1.0.0"
-		install_path = "github_owner_repo/1.0.0"
+		install_path = "github_owner_repo_js/1.0.0"
 		"#};
 		std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
 		let error = read(dir.path()).err().unwrap();
 		assert!(matches!(error, LockError::ConflictingInstallPath { .. }));
-		assert!(error.to_string().contains("github:owner/repo@1.0.0"), "{error}");
-		assert!(error.to_string().contains("github:owner/other@1.0.0"), "{error}");
+		assert!(error.to_string().contains("github:owner/repo.js@1.0.0"), "{error}");
+		assert!(error.to_string().contains("github:owner/repo-js@1.0.0"), "{error}");
 	}
 
 	#[test]

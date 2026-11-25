@@ -68,7 +68,7 @@ full_name = "a/repo"
 lane = ""
 requested = "1"
 tag_name = "v1.0.0"
-install_path = "github_a/1"
+install_path = "github_a_repo/1.0.0"
 
 [[tool]]
 backend = "github"
@@ -77,13 +77,13 @@ full_name = "a/repo"
 lane = "cli/"
 requested = "1"
 tag_name = "cli/v1.0.0"
-install_path = "github_a/cli_1"
+install_path = "github_a_repo/cli_v1.0.0"
 "#;
 	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 	let other = if cfg!(windows) { "other.exe" } else { "other" };
-	fixture.script("github_a/1", name);
-	fixture.script("github_a/cli_1", other);
+	fixture.script("github_a_repo/1.0.0", name);
+	fixture.script("github_a_repo/cli_v1.0.0", other);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
@@ -92,8 +92,8 @@ install_path = "github_a/cli_1"
 registered_paths = []
 
 [binaries]
-"github_a/1" = ["{name}"]
-"github_a/cli_1" = ["{other}"]
+"github_a_repo/1.0.0" = ["{name}"]
+"github_a_repo/cli_v1.0.0" = ["{other}"]
 
 [[shims.other]]
 backend = "github"
@@ -101,7 +101,7 @@ api_url = ""
 full_name = "a/repo"
 lane = "cli/"
 requested = "1"
-install_path = "github_a/cli_1"
+install_path = "github_a_repo/cli_v1.0.0"
 binary = "{other}"
 
 [[shims.tool]]
@@ -110,7 +110,7 @@ api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
-install_path = "github_a/1"
+install_path = "github_a_repo/1.0.0"
 binary = "{name}"
 "#;
 	assert_eq!(state, template.replace("{name}", name).replace("{other}", other));
@@ -139,11 +139,11 @@ full_name = "a/repo"
 lane = ""
 requested = "1"
 tag_name = "v1.0.0"
-install_path = "github_a/1"
+install_path = "github_a_repo/1.0.0"
 "#;
 	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-	fixture.script("github_a/1", name);
+	fixture.script("github_a_repo/1.0.0", name);
 	let initial = r#"version = 1
 [binaries]
 "stale/1" = ["old"]
@@ -157,7 +157,7 @@ install_path = "github_a/1"
 registered_paths = []
 
 [binaries]
-"github_a/1" = ["{name}"]
+"github_a_repo/1.0.0" = ["{name}"]
 
 [[shims.tool]]
 backend = "github"
@@ -165,7 +165,7 @@ api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
-install_path = "github_a/1"
+install_path = "github_a_repo/1.0.0"
 binary = "{name}"
 "#;
 	assert_eq!(state, template.replace("{name}", name));
@@ -190,7 +190,7 @@ full_name = "a/repo"
 lane = ""
 requested = "1"
 tag_name = "v1.0.0"
-install_path = "github_a/1"
+install_path = "github_a_repo/1.0.0"
 
 [[tool]]
 backend = "github"
@@ -198,11 +198,11 @@ full_name = "b/repo"
 lane = ""
 requested = "1"
 tag_name = "v1.0.0"
-install_path = "github_b/1"
+install_path = "github_b_repo/1.0.0"
 "#;
 	let fixture = Fixture::new("", lock);
 	let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-	fixture.script("github_a/1", name);
+	fixture.script("github_a_repo/1.0.0", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
@@ -211,7 +211,7 @@ install_path = "github_b/1"
 registered_paths = []
 
 [binaries]
-"github_a/1" = ["{name}"]
+"github_a_repo/1.0.0" = ["{name}"]
 
 [[shims.tool]]
 backend = "github"
@@ -219,7 +219,7 @@ api_url = ""
 full_name = "a/repo"
 lane = ""
 requested = "1"
-install_path = "github_a/1"
+install_path = "github_a_repo/1.0.0"
 binary = "{name}"
 "#;
 	assert_eq!(state, template.replace("{name}", name));
@@ -245,7 +245,7 @@ full_name = "a/repo"
 lane = ""
 requested = "1"
 tag_name = "v1.0.0"
-install_path = "github_a/1"
+install_path = "github_a_repo/1.0.0"
 "#;
 	let pair = r#"
 version = 1
@@ -257,7 +257,7 @@ full_name = "a/repo"
 lane = ""
 requested = "1"
 tag_name = "v1.0.0"
-install_path = "github_a/1"
+install_path = "github_a_repo/1.0.0"
 
 [[tool]]
 backend = "github"
@@ -265,49 +265,49 @@ full_name = "b/repo"
 lane = ""
 requested = "1"
 tag_name = "v1.0.0"
-install_path = "github_b/1"
+install_path = "github_b_repo/1.0.0"
 "#;
 	// two binaries for one name in a single tool
 	let fixture = Fixture::new("", single);
-	fixture.script("github_a/1", name);
-	fixture.script("github_a/1", &format!("nested/{name}"));
+	fixture.script("github_a_repo/1.0.0", name);
+	fixture.script("github_a_repo/1.0.0", &format!("nested/{name}"));
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
 	assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
 	let normalized = stderr.replace('\\', "/");
-	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
-	assert!(normalized.contains(&format!("github_a/1/nested/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_a_repo/1.0.0/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_a_repo/1.0.0/nested/{name}")), "{stderr}");
 	assert!(!fixture.config_dir.join("shims").join(name).exists());
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	assert!(!state.contains("shims"), "{state}");
 	// the same name from two tools
 	let fixture = Fixture::new("", pair);
-	fixture.script("github_a/1", name);
-	fixture.script("github_b/1", name);
+	fixture.script("github_a_repo/1.0.0", name);
+	fixture.script("github_b_repo/1.0.0", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
 	assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
 	let normalized = stderr.replace('\\', "/");
-	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
-	assert!(normalized.contains(&format!("github_b/1/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_a_repo/1.0.0/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_b_repo/1.0.0/{name}")), "{stderr}");
 	assert!(!fixture.config_dir.join("shims").join(name).exists());
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	assert!(!state.contains("shims"), "{state}");
 	// a duplicate within one tool plus another tool providing the same name
 	let fixture = Fixture::new("", pair);
-	fixture.script("github_a/1", name);
-	fixture.script("github_a/1", &format!("nested/{name}"));
-	fixture.script("github_b/1", name);
+	fixture.script("github_a_repo/1.0.0", name);
+	fixture.script("github_a_repo/1.0.0", &format!("nested/{name}"));
+	fixture.script("github_b_repo/1.0.0", name);
 	let output = fixture.run(&fixture.config_dir, &[]);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
 	assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");
 	let normalized = stderr.replace('\\', "/");
-	assert!(normalized.contains(&format!("github_a/1/{name}")), "{stderr}");
-	assert!(normalized.contains(&format!("github_a/1/nested/{name}")), "{stderr}");
-	assert!(normalized.contains(&format!("github_b/1/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_a_repo/1.0.0/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_a_repo/1.0.0/nested/{name}")), "{stderr}");
+	assert!(normalized.contains(&format!("github_b_repo/1.0.0/{name}")), "{stderr}");
 	assert!(!fixture.config_dir.join("shims").join(name).exists());
 	let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
 	assert!(!state.contains("shims"), "{state}");
@@ -327,14 +327,14 @@ mod force {
 	lane = ""
 	requested = "1"
 	tag_name = "v1.0.0"
-	install_path = "github_a/1"
+	install_path = "github_a_repo/1.0.0"
 	"#};
 
 	#[test]
 	fn recreates_all_shims() {
 		let fixture = Fixture::new("", LOCK);
 		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
-		fixture.script("github_a/1", name);
+		fixture.script("github_a_repo/1.0.0", name);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -360,7 +360,7 @@ mod force {
 		use std::os::windows::fs::OpenOptionsExt;
 
 		let fixture = Fixture::new("", LOCK);
-		fixture.script("github_a/1", "tool.exe");
+		fixture.script("github_a_repo/1.0.0", "tool.exe");
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -393,7 +393,7 @@ mod exposed {
 	lane = ""
 	requested = "1"
 	tag_name = "v1.0.0"
-	install_path = "github_a/1"
+	install_path = "github_a_repo/1.0.0"
 	"#};
 
 	#[cfg(windows)]
@@ -402,7 +402,7 @@ mod exposed {
 	registered_paths = []
 
 	[binaries]
-	"github_a/1" = ["tool.exe"]
+	"github_a_repo/1.0.0" = ["tool.exe"]
 
 	[[shims.tool]]
 	backend = "github"
@@ -410,7 +410,7 @@ mod exposed {
 	full_name = "a/repo"
 	lane = ""
 	requested = "1"
-	install_path = "github_a/1"
+	install_path = "github_a_repo/1.0.0"
 	binary = "tool.exe"
 	"#};
 	#[cfg(not(windows))]
@@ -419,7 +419,7 @@ mod exposed {
 	registered_paths = []
 
 	[binaries]
-	"github_a/1" = ["tool"]
+	"github_a_repo/1.0.0" = ["tool"]
 
 	[[shims.tool]]
 	backend = "github"
@@ -427,7 +427,7 @@ mod exposed {
 	full_name = "a/repo"
 	lane = ""
 	requested = "1"
-	install_path = "github_a/1"
+	install_path = "github_a_repo/1.0.0"
 	binary = "tool"
 	"#};
 
@@ -441,8 +441,8 @@ mod exposed {
 		"#}
 		.replace("{name}", name);
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.script("github_a/1", name);
-		fixture.script("github_a/1", hidden);
+		fixture.script("github_a_repo/1.0.0", name);
+		fixture.script("github_a_repo/1.0.0", hidden);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -462,8 +462,8 @@ mod exposed {
 		let fixture = Fixture::new(initial, LOCK);
 		let name = if cfg!(windows) { "tool.exe" } else { "tool" };
 		let hidden = if cfg!(windows) { "hidden.exe" } else { "hidden" };
-		fixture.script("github_a/1", name);
-		fixture.script("github_a/1", hidden);
+		fixture.script("github_a_repo/1.0.0", name);
+		fixture.script("github_a_repo/1.0.0", hidden);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -493,7 +493,7 @@ mod exposed {
 		"github:a/repo" = {{ version = "1", exposed = ["{name}", "missing*"] }}
 		"#};
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.script("github_a/1", name);
+		fixture.script("github_a_repo/1.0.0", name);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -518,7 +518,7 @@ mod rename_shims {
 	lane = ""
 	requested = "1"
 	tag_name = "v1.0.0"
-	install_path = "github_a/1"
+	install_path = "github_a_repo/1.0.0"
 	"#};
 
 	#[test]
@@ -531,7 +531,7 @@ mod rename_shims {
 		"github:a/repo" = {{ version = "1", rename_shims = {{ "{binary}" = "renamed" }} }}
 		"#};
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.script("github_a/1", binary);
+		fixture.script("github_a_repo/1.0.0", binary);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -552,7 +552,7 @@ mod rename_shims {
 		registered_paths = []
 
 		[binaries]
-		"github_a/1" = ["{binary}"]
+		"github_a_repo/1.0.0" = ["{binary}"]
 
 		[[shims.renamed]]
 		backend = "github"
@@ -560,7 +560,7 @@ mod rename_shims {
 		full_name = "a/repo"
 		lane = ""
 		requested = "1"
-		install_path = "github_a/1"
+		install_path = "github_a_repo/1.0.0"
 		binary = "{binary}"
 		"#};
 		assert_eq!(state, expected);
@@ -575,8 +575,8 @@ mod rename_shims {
 		"github:a/repo" = {{ version = "1", rename_shims = {{ "{binary}" = "top", "{nested}" = "deep" }} }}
 		"#};
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.script("github_a/1", binary);
-		fixture.script("github_a/1", &nested);
+		fixture.script("github_a_repo/1.0.0", binary);
+		fixture.script("github_a_repo/1.0.0", &nested);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
@@ -595,7 +595,7 @@ mod rename_shims {
 		registered_paths = []
 
 		[binaries]
-		"github_a/1" = [
+		"github_a_repo/1.0.0" = [
 		    "{binary}",
 		    {nested_toml},
 		]
@@ -606,7 +606,7 @@ mod rename_shims {
 		full_name = "a/repo"
 		lane = ""
 		requested = "1"
-		install_path = "github_a/1"
+		install_path = "github_a_repo/1.0.0"
 		binary = {nested_toml}
 
 		[[shims.top]]
@@ -615,7 +615,7 @@ mod rename_shims {
 		full_name = "a/repo"
 		lane = ""
 		requested = "1"
-		install_path = "github_a/1"
+		install_path = "github_a_repo/1.0.0"
 		binary = "{binary}"
 		"#};
 		assert_eq!(state, expected);
@@ -642,7 +642,7 @@ mod rename_shims {
 		"github:a/repo" = {{ version = "1", rename_shims = {{ "{name}" = "one", "**" = "two" }} }}
 		"#};
 		let fixture = Fixture::new(&config, LOCK);
-		fixture.script("github_a/1", name);
+		fixture.script("github_a_repo/1.0.0", name);
 		let output = fixture.run(&fixture.config_dir, &[]);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(!output.status.success(), "{stderr}");

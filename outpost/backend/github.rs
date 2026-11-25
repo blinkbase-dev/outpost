@@ -1,9 +1,12 @@
+use std::path::PathBuf;
 use std::{env, fmt};
 
 use percent_encoding::utf8_percent_encode;
+use regex::regex;
 use reqwest::{Client, Response, StatusCode};
 use semver::Version as Semver;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use super::_asset_selection::select;
 use super::_backend::{ArchiveFormat, PATH_SEGMENT};
@@ -154,6 +157,31 @@ fn _pick_release_from_prefix(releases: Vec<Release>, lane: &str, prefix: &Prefix
 		}
 	}
 	best.map(|(_, release)| release)
+}
+
+pub(crate) fn install_path(api_url: &str, full_name: &str, tag_name: &str) -> PathBuf {
+	let suffix = if api_url.is_empty() {
+		String::new()
+	} else {
+		let digest = Sha256::digest(api_url.as_bytes());
+		let hash: String = digest.iter().take(4).map(|byte| format!("{byte:02x}")).collect();
+		format!("_{hash}")
+	};
+	let full_name = full_name.to_ascii_lowercase();
+	PathBuf::from(format!("github_{}{}/{}", full_name.replace(['.', '/', '-'], "_"), suffix, _tag_component(tag_name)))
+}
+
+fn _tag_component(tag_name: &str) -> String {
+	let tag = tag_name.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(tag_name).to_lowercase();
+	let tag = regex!(r"[^a-z0-9_.]").replace_all(&tag, "_").into_owned();
+	// '.' and '..' would resolve outside the version directory
+	if tag == "." || tag.is_empty() {
+		"_".to_owned()
+	} else if tag == ".." {
+		"__".to_owned()
+	} else {
+		tag
+	}
 }
 
 #[derive(Deserialize)]
@@ -837,5 +865,22 @@ mod unit_tests {
 			panic!("not a prefix");
 		};
 		assert!(_pick_release_from_prefix(releases, "", &prefix).is_none());
+	}
+}
+
+#[cfg(test)]
+mod install_path_tests {
+	use super::*;
+
+	#[test]
+	fn maps_dot_tags_to_safe_install_paths() {
+		for (tag, path) in [(".", "github_owner_repo/_"), ("..", "github_owner_repo/__"), ("", "github_owner_repo/_")] {
+			assert_eq!(install_path("", "owner/repo", tag), PathBuf::from(path), "{tag}");
+		}
+	}
+
+	#[test]
+	fn lowercases_install_paths() {
+		assert_eq!(install_path("", "Owner/Repo", "1.0.0"), PathBuf::from("github_owner_repo/1.0.0"));
 	}
 }
