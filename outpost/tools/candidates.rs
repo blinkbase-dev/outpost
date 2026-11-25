@@ -316,7 +316,7 @@ mod tests {
 		let names: Vec<_> = requests
 			.iter()
 			.map(|entry| match &entry.tool {
-				RequestedTool::Github { full_name, .. } => full_name.as_str(),
+				RequestedTool::Github(req) => req.full_name.as_str(),
 			})
 			.collect();
 		assert_eq!(names, vec!["o/inner", "o/outer", "o/dev", "o/prod", "o/base"]);

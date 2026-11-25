@@ -7,9 +7,9 @@ use tokio::sync::Semaphore;
 
 use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate, state};
-use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionGroup};
+use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionSet};
 use crate::tools::catalog::Catalog;
-use crate::tools::lock::{self, Identity, Lock, LockedTool};
+use crate::tools::lock::{self, GithubLock, Identity, Lock, LockedTool};
 use crate::tools::resolution_cache::ResolutionCache;
 use crate::tools::tool_request::{self, RequestedTool, ToolRequestSet};
 use crate::tools::{shims, status};
@@ -17,7 +17,7 @@ use crate::tools::{shims, status};
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestSet, ToolResolution);
 type ResolutionFailure = (ToolRequestSet, Error);
-type DownloadEntry = (ToolResolutionGroup, ToolArchive);
+type DownloadEntry = (ToolResolutionSet, ToolArchive);
 
 pub(crate) fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
@@ -47,7 +47,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
 	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone(), data_dir))?;
 	// group resolutions by artifact so each tool downloads once
-	let resolutions = ToolResolutionGroup::from_entries(resolutions, &lock)?;
+	let resolutions = ToolResolutionSet::from_entries(resolutions, &lock)?;
 	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
 	drop(runtime);
 	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
@@ -69,12 +69,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	// representative rows are appended after duplicate rows
 	for tool in &lock.tools[lock.tools.len() - groups.len()..] {
 		match tool {
-			LockedTool::Github {
-				full_name,
-				tag_name,
-				install_path,
-				..
-			} => println!("{full_name} {tag_name} {}", tools_dir.join(install_path).display()),
+			LockedTool::Github(lock) => println!("{} {} {}", lock.full_name, lock.tag_name, tools_dir.join(&lock.install_path).display()),
 		}
 	}
 	let failures = resolve_err
@@ -86,8 +81,8 @@ pub(crate) fn install() -> Result<(), Error> {
 	for (requests, error) in &failures {
 		for request in requests {
 			match &request.tool {
-				RequestedTool::Github { full_name, lane, version, .. } => {
-					eprintln!("{full_name} {lane}{version}: {error}");
+				RequestedTool::Github(req) => {
+					eprintln!("{} {}{}: {error}", req.full_name, req.lane, req.version);
 				}
 			}
 			for origin in &request.origins {
@@ -125,8 +120,8 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir:
 		handles.push(tokio::spawn(async move {
 			let result = match semaphore.acquire_owned().await {
 				Ok(_permit) => match &request.tool {
-					RequestedTool::Github { api_url, .. } => {
-						let backend = GithubBackend::new(http, github_options.as_ref().clone().with_api_url(api_url));
+					RequestedTool::Github(req) => {
+						let backend = GithubBackend::new(http, github_options.as_ref().clone().with_api_url(&req.api_url));
 						backend.resolve(&request.tool).await.map_err(Error::from)
 					}
 				},
@@ -152,26 +147,17 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir:
 	Ok((resolutions, failures))
 }
 
-fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionGroup> {
-	let groups: Vec<&ToolResolutionGroup> = installed.iter().map(|(group, _)| group).collect();
-	let row = |group: &ToolResolutionGroup, request: &ToolRequestSet| match (&request.tool, &group.resolution) {
-		(
-			RequestedTool::Github {
-				api_url,
-				full_name,
-				lane,
-				version,
-				..
-			},
-			ToolResolution::Github { tag_name, .. },
-		) => LockedTool::Github {
-			api_url: api_url.clone(),
-			full_name: full_name.clone(),
-			lane: lane.clone(),
-			requested: version.clone(),
+fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionSet> {
+	let groups: Vec<&ToolResolutionSet> = installed.iter().map(|(group, _)| group).collect();
+	let row = |group: &ToolResolutionSet, request: &ToolRequestSet| match (&request.tool, &group.resolution) {
+		(RequestedTool::Github(req), ToolResolution::Github { tag_name, .. }) => LockedTool::Github(GithubLock {
+			api_url: req.api_url.clone(),
+			full_name: req.full_name.clone(),
+			lane: req.lane.clone(),
+			requested: req.version.clone(),
 			tag_name: tag_name.clone(),
 			install_path: group.install_path.clone(),
-		},
+		}),
 	};
 	let mut rows = Vec::new();
 	// duplicate rows are appended before representative rows
@@ -199,20 +185,21 @@ mod tests {
 
 	use super::*;
 	use crate::backend::_backend::ArchiveFormat;
+	use crate::tools::tool_request::GithubRequest;
 	use crate::tools::version::Version;
 
 	#[test]
 	fn locks_installed_tools() {
 		let request = ToolRequestSet {
 			origins: Vec::new(),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let entries = vec![(request, ToolResolution::Github {
 			tag_name: "v1.2.3".to_owned(),
@@ -220,7 +207,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -232,37 +219,37 @@ mod tests {
 		let mut lock = Lock::default();
 		let groups = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(groups.len(), 1);
-		assert_eq!(lock.tools, vec![LockedTool::Github {
+		assert_eq!(lock.tools, vec![LockedTool::Github(GithubLock {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("1.0.0"),
 			tag_name: "v1.2.3".to_owned(),
 			install_path: PathBuf::from("github_owner_repo/1.2.3"),
-		}]);
+		})]);
 	}
 
 	#[test]
 	fn locks_newer_tag_replacing_older() {
 		let mut lock = Lock::default();
-		lock.tools.push(LockedTool::Github {
+		lock.tools.push(LockedTool::Github(GithubLock {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("latest"),
 			tag_name: "v1.0.0".to_owned(),
 			install_path: PathBuf::from("github_owner_repo/1.0.0"),
-		});
+		}));
 		let request = ToolRequestSet {
 			origins: Vec::new(),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let entries = vec![(request, ToolResolution::Github {
 			tag_name: "v2.0.0".to_owned(),
@@ -270,7 +257,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -281,37 +268,37 @@ mod tests {
 			.collect();
 		let groups = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(groups.len(), 1);
-		assert_eq!(lock.tools, vec![LockedTool::Github {
+		assert_eq!(lock.tools, vec![LockedTool::Github(GithubLock {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("latest"),
 			tag_name: "v2.0.0".to_owned(),
 			install_path: PathBuf::from("github_owner_repo/2.0.0"),
-		}]);
+		})]);
 	}
 
 	#[test]
 	fn locks_requests_separately() {
 		let mut lock = Lock::default();
-		lock.tools.push(LockedTool::Github {
+		lock.tools.push(LockedTool::Github(GithubLock {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			requested: Version::parse("1"),
 			tag_name: "cli/v1.0.0".to_owned(),
 			install_path: PathBuf::from("github_owner_repo/cli_v1.0.0"),
-		});
+		}));
 		let request = ToolRequestSet {
 			origins: Vec::new(),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let entries = vec![(request, ToolResolution::Github {
 			tag_name: "v1.0.0".to_owned(),
@@ -319,7 +306,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -331,49 +318,49 @@ mod tests {
 		let groups = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![
-			LockedTool::Github {
+			LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: "cli/".to_owned(),
 				requested: Version::parse("1"),
 				tag_name: "cli/v1.0.0".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/cli_v1.0.0"),
-			},
-			LockedTool::Github {
+			}),
+			LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.0.0"),
-			}
+			})
 		]);
 	}
 
 	#[test]
 	fn locks_unrelated_tools() {
-		let other = LockedTool::Github {
+		let other = LockedTool::Github(GithubLock {
 			api_url: String::new(),
 			full_name: "other/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse("1.0.0"),
 			tag_name: "v1.0.0".to_owned(),
 			install_path: PathBuf::from("github_other_repo/1.0.0"),
-		};
+		});
 		let mut lock = Lock {
 			version: 1,
 			tools: vec![other.clone()],
 		};
 		let request = ToolRequestSet {
 			origins: Vec::new(),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let entries = vec![(request, ToolResolution::Github {
 			tag_name: "v1.0.0".to_owned(),
@@ -381,7 +368,7 @@ mod tests {
 			size: 0,
 			format: ArchiveFormat::TarGz,
 		})];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -392,39 +379,42 @@ mod tests {
 			.collect();
 		let groups = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(groups.len(), 1);
-		assert_eq!(lock.tools, vec![other, LockedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			requested: Version::parse("1.0.0"),
-			tag_name: "v1.0.0".to_owned(),
-			install_path: PathBuf::from("github_owner_repo/1.0.0"),
-		}]);
+		assert_eq!(lock.tools, vec![
+			other,
+			LockedTool::Github(GithubLock {
+				api_url: String::new(),
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: Version::parse("1.0.0"),
+				tag_name: "v1.0.0".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.0.0"),
+			})
+		]);
 	}
 
 	#[test]
 	fn locks_duplicate_requests() {
 		let latest = ToolRequestSet {
 			origins: Vec::new(),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let exact = ToolRequestSet {
 			origins: Vec::new(),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let requests = vec![latest, exact];
 		let entries = requests
@@ -438,7 +428,7 @@ mod tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let installed: Vec<DownloadEntry> = resolutions
 			.into_iter()
 			.map(|group| {
@@ -451,22 +441,22 @@ mod tests {
 		let groups = _update_lock_entries(&mut lock, &installed);
 		assert_eq!(groups.len(), 1);
 		assert_eq!(lock.tools, vec![
-			LockedTool::Github {
+			LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.0.0"),
-			},
-			LockedTool::Github {
+			}),
+			LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("latest"),
 				tag_name: "v1.0.0".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.0.0"),
-			}
+			})
 		]);
 	}
 }

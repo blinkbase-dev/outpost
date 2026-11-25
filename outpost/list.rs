@@ -19,14 +19,8 @@ pub(crate) fn list() -> Result<(), Error> {
 	let report = status::report(&catalog, tools_dir);
 	let mut rows = Vec::with_capacity(report.requested.len() + report.unrequested.len());
 	for entry in &report.requested {
-		let (tool, requested, api_url) = match &entry.tool {
-			RequestedTool::Github {
-				api_url,
-				full_name,
-				lane,
-				version,
-				..
-			} => (format!("github:{full_name}"), format!("{lane}{version}"), api_url.clone()),
+		let (tool, requested, origin) = match &entry.tool {
+			RequestedTool::Github(req) => (format!("github:{}", req.full_name), format!("{}{}", req.lane, req.version), req.api_url.clone()),
 		};
 		let version = match &entry.installed_version {
 			Some(version) => match entry.install_state {
@@ -40,24 +34,18 @@ pub(crate) fn list() -> Result<(), Error> {
 			requested,
 			version,
 			source: entry.origin.display().to_string(),
-			origin: api_url,
+			origin,
 		});
 	}
 	for entry in &report.unrequested {
-		let (tool, version, api_url) = match entry {
-			LockedTool::Github {
-				api_url,
-				full_name,
-				tag_name,
-				install_path,
-				..
-			} => {
-				let version = if tools_dir.join(install_path).exists() {
-					tag_name.clone()
+		let (tool, version, origin) = match entry {
+			LockedTool::Github(lock) => {
+				let version = if tools_dir.join(&lock.install_path).exists() {
+					lock.tag_name.clone()
 				} else {
-					format!("{tag_name} (missing)")
+					format!("{} (missing)", lock.tag_name)
 				};
-				(format!("github:{full_name}"), version, api_url.clone())
+				(format!("github:{}", lock.full_name), version, lock.api_url.clone())
 			}
 		};
 		rows.push(Row {
@@ -65,7 +53,7 @@ pub(crate) fn list() -> Result<(), Error> {
 			requested: "-".to_owned(),
 			version,
 			source: "-".to_owned(),
-			origin: api_url,
+			origin,
 		});
 	}
 	_print(&rows);

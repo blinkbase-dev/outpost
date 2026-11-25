@@ -14,11 +14,11 @@ use crate::tools::tool_request::ToolRequestSet;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestSet, ToolResolution);
-type DownloadEntry = (ToolResolutionGroup, ToolArchive);
-type GroupFailure = (ToolResolutionGroup, Error);
+type DownloadEntry = (ToolResolutionSet, ToolArchive);
+type GroupFailure = (ToolResolutionSet, Error);
 
 pub(crate) async fn download_parallel(
-	resolutions: Vec<ToolResolutionGroup>, http: Client, downloads_dir: &Path,
+	resolutions: Vec<ToolResolutionSet>, http: Client, downloads_dir: &Path,
 ) -> Result<(Vec<DownloadEntry>, Vec<GroupFailure>), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(resolutions.len());
@@ -144,13 +144,13 @@ pub(crate) enum ToolResolution {
 	},
 }
 
-pub(crate) struct ToolResolutionGroup {
+pub(crate) struct ToolResolutionSet {
 	pub(crate) install_path: PathBuf,
 	pub(crate) requests: Vec<ToolRequestSet>,
 	pub(crate) resolution: ToolResolution,
 }
 
-impl ToolResolutionGroup {
+impl ToolResolutionSet {
 	pub(crate) fn from_entries(entries: Vec<ResolutionEntry>, lock: &Lock) -> Result<Vec<Self>, Error> {
 		let mut groups: Vec<Self> = Vec::with_capacity(entries.len());
 		let mut index_by_install_path: HashMap<PathBuf, usize> = HashMap::with_capacity(entries.len());
@@ -172,11 +172,11 @@ impl ToolResolutionGroup {
 						return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
 					}
 					match (&resolution, locked) {
-						(ToolResolution::Github { tag_name, .. }, LockedTool::Github { tag_name: locked_tag, .. }) => {
-							if locked_tag.as_str() != tag_name.as_str() {
+						(ToolResolution::Github { tag_name, .. }, LockedTool::Github(lock)) => {
+							if lock.tag_name.as_str() != tag_name.as_str() {
 								let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
 								let path = install_path.display();
-								return Err(format!("install path '{path}' is shared by tags '{tag_name}' and '{locked_tag}'{sources}").into());
+								return Err(format!("install path '{path}' is shared by tags '{tag_name}' and '{}'{sources}", lock.tag_name).into());
 							}
 						}
 					}
@@ -308,7 +308,7 @@ mod download_parallel_tests {
 	use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 	use super::*;
-	use crate::tools::tool_request::RequestedTool;
+	use crate::tools::tool_request::{GithubRequest, RequestedTool};
 	use crate::tools::version::Version;
 
 	fn http() -> Client {
@@ -345,14 +345,14 @@ mod download_parallel_tests {
 			.map(|index| {
 				let request = ToolRequestSet {
 					origins: Vec::new(),
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse(&format!("1.0.{index}")),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				};
 				(request, ToolResolution::Github {
 					tag_name: format!("v1.0.{index}"),
@@ -362,7 +362,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(archives.len(), 16);
 		assert!(failures.is_empty());
@@ -387,14 +387,14 @@ mod download_parallel_tests {
 			.map(|index| {
 				let request = ToolRequestSet {
 					origins: Vec::new(),
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse(&format!("1.0.{index}")),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				};
 				(request, ToolResolution::Github {
 					tag_name: format!("1.0.{index}"),
@@ -404,7 +404,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(archives.len(), 10);
 		assert!(failures.is_empty());
@@ -426,25 +426,25 @@ mod download_parallel_tests {
 		let requests = vec![
 			ToolRequestSet {
 				origins: vec![PathBuf::from("/a/outpost.toml")],
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("latest"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolRequestSet {
 				origins: vec![PathBuf::from("/b/outpost.toml")],
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 		];
 		let entries = requests
@@ -458,7 +458,7 @@ mod download_parallel_tests {
 				})
 			})
 			.collect();
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert!(failures.is_empty());
 		assert_eq!(archives.len(), 1);
@@ -483,14 +483,14 @@ mod download_parallel_tests {
 			(
 				ToolRequestSet {
 					origins: vec![PathBuf::from("/a/outpost.toml")],
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				},
 				ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -502,14 +502,14 @@ mod download_parallel_tests {
 			(
 				ToolRequestSet {
 					origins: vec![PathBuf::from("/b/outpost.toml")],
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.1.0"),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				},
 				ToolResolution::Github {
 					tag_name: "v1.1.0".to_owned(),
@@ -521,14 +521,14 @@ mod download_parallel_tests {
 			(
 				ToolRequestSet {
 					origins: vec![PathBuf::from("/c/outpost.toml")],
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/repo".to_owned(),
 						lane: String::new(),
 						version: Version::parse("latest"),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				},
 				ToolResolution::Github {
 					tag_name: "v1.1.0".to_owned(),
@@ -538,7 +538,7 @@ mod download_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let (archives, failures) = download_parallel(resolutions, http(), dir.path()).await.unwrap();
 		assert_eq!(failures.len(), 1);
 		assert_eq!(failures[0].0.requests.len(), 2);
@@ -702,7 +702,7 @@ mod extract_tests {
 mod extract_parallel_tests {
 	use super::extract_tests::{tar_gz, tar_xz, zip_bytes};
 	use super::*;
-	use crate::tools::tool_request::RequestedTool;
+	use crate::tools::tool_request::{GithubRequest, RequestedTool};
 	use crate::tools::version::Version;
 
 	#[test]
@@ -716,14 +716,14 @@ mod extract_parallel_tests {
 		let entries = vec![(
 			ToolRequestSet {
 				origins: Vec::new(),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolResolution::Github {
 				tag_name: "v1.2.3".to_owned(),
@@ -732,7 +732,7 @@ mod extract_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			},
 		)];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([archive])
@@ -749,14 +749,14 @@ mod extract_parallel_tests {
 		let entries = vec![(
 			ToolRequestSet {
 				origins: Vec::new(),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "google/magika".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolResolution::Github {
 				tag_name: "cli/v1.0.0".to_owned(),
@@ -765,7 +765,7 @@ mod extract_parallel_tests {
 				format: ArchiveFormat::TarGz,
 			},
 		)];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([archive])
@@ -794,14 +794,14 @@ mod extract_parallel_tests {
 			(
 				ToolRequestSet {
 					origins: Vec::new(),
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/tar-gz".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				},
 				ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -813,14 +813,14 @@ mod extract_parallel_tests {
 			(
 				ToolRequestSet {
 					origins: Vec::new(),
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/tar-xz".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				},
 				ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -832,14 +832,14 @@ mod extract_parallel_tests {
 			(
 				ToolRequestSet {
 					origins: Vec::new(),
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/zip".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				},
 				ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -849,7 +849,7 @@ mod extract_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([gz_archive, xz_archive, zip_archive])
@@ -877,14 +877,14 @@ mod extract_parallel_tests {
 			(
 				ToolRequestSet {
 					origins: Vec::new(),
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/good".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				},
 				ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -896,14 +896,14 @@ mod extract_parallel_tests {
 			(
 				ToolRequestSet {
 					origins: Vec::new(),
-					tool: RequestedTool::Github {
+					tool: RequestedTool::Github(GithubRequest {
 						api_url: String::new(),
 						full_name: "owner/bad".to_owned(),
 						lane: String::new(),
 						version: Version::parse("1.0.0"),
 						exposed: None,
 						rename_shims: None,
-					},
+					}),
 				},
 				ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -913,7 +913,7 @@ mod extract_parallel_tests {
 				},
 			),
 		];
-		let resolutions = ToolResolutionGroup::from_entries(entries, &Lock::default()).unwrap();
+		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let archives = resolutions
 			.into_iter()
 			.zip([good, bad])
@@ -930,34 +930,35 @@ mod extract_parallel_tests {
 #[cfg(test)]
 mod resolution_group_tests {
 	use super::*;
-	use crate::tools::tool_request::RequestedTool;
+	use crate::tools::lock::GithubLock;
+	use crate::tools::tool_request::{GithubRequest, RequestedTool};
 	use crate::tools::version::Version;
 
 	#[test]
 	fn groups_requests_by_install_path() {
 		let latest = ToolRequestSet {
 			origins: vec![PathBuf::from("/a/outpost.toml")],
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("latest"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let exact = ToolRequestSet {
 			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
-		let groups = ToolResolutionGroup::from_entries(
+		let groups = ToolResolutionSet::from_entries(
 			vec![
 				(latest, ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -984,27 +985,27 @@ mod resolution_group_tests {
 	fn rejects_locked_install_path_collisions() {
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo.js".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.0.0"),
 				tag_name: "v1.0.0".to_owned(),
 				install_path: PathBuf::from("github_owner_repo_js/1.0.0"),
-			}],
+			})],
 		};
 		let request = ToolRequestSet {
 			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo-js".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
-		let error = ToolResolutionGroup::from_entries(
+		let error = ToolResolutionSet::from_entries(
 			vec![(request, ToolResolution::Github {
 				tag_name: "v1.0.0".to_owned(),
 				url: String::new(),
@@ -1024,27 +1025,27 @@ mod resolution_group_tests {
 	fn rejects_locked_tag_collisions() {
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("latest"),
 				tag_name: "v1.0.0".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.0.0"),
-			}],
+			})],
 		};
 		let request = ToolRequestSet {
 			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
-		let error = ToolResolutionGroup::from_entries(
+		let error = ToolResolutionSet::from_entries(
 			vec![(request, ToolResolution::Github {
 				tag_name: "1.0.0".to_owned(),
 				url: String::new(),
@@ -1063,27 +1064,27 @@ mod resolution_group_tests {
 	fn rejects_install_path_collisions() {
 		let first = ToolRequestSet {
 			origins: vec![PathBuf::from("/a/outpost.toml")],
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo.js".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let second = ToolRequestSet {
 			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo-js".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
-		let error = ToolResolutionGroup::from_entries(
+		let error = ToolResolutionSet::from_entries(
 			vec![
 				(first, ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),
@@ -1113,27 +1114,27 @@ mod resolution_group_tests {
 	fn rejects_tag_collisions() {
 		let first = ToolRequestSet {
 			origins: vec![PathBuf::from("/a/outpost.toml")],
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
 		let second = ToolRequestSet {
 			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.0.0"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		};
-		let error = ToolResolutionGroup::from_entries(
+		let error = ToolResolutionSet::from_entries(
 			vec![
 				(first, ToolResolution::Github {
 					tag_name: "v1.0.0".to_owned(),

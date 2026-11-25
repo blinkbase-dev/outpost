@@ -30,69 +30,42 @@ pub(crate) struct ToolRequest {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum RequestedTool {
-	Github {
-		api_url: String,
-		full_name: String,
-		lane: String,
-		version: Version,
-		exposed: Option<Vec<String>>,
-		rename_shims: Option<BTreeMap<String, String>>,
-	},
+	Github(GithubRequest),
 }
 
 impl RequestedTool {
 	pub(crate) fn identity(&self) -> Identity {
 		match self {
-			Self::Github {
-				api_url,
-				full_name,
-				lane,
-				version,
-				..
-			} => Identity::Github {
-				api_url: api_url.clone(),
-				full_name: full_name.clone(),
-				lane: lane.clone(),
-				version: version.clone(),
+			Self::Github(req) => Identity::Github {
+				api_url: req.api_url.clone(),
+				full_name: req.full_name.clone(),
+				lane: req.lane.clone(),
+				version: req.version.clone(),
 			},
 		}
 	}
 
 	pub(crate) fn identity_key(&self) -> String {
 		match self {
-			Self::Github { api_url, full_name, lane, .. } => format!("github:{api_url}:{full_name}@{lane}"),
+			Self::Github(req) => format!("github:{}:{}@{}", req.api_url, req.full_name, req.lane),
 		}
 	}
 
 	pub(crate) fn install_path(&self, version: &str) -> PathBuf {
 		match self {
-			Self::Github { api_url, full_name, .. } => github::install_path(api_url, full_name, version),
+			Self::Github(req) => github::install_path(&req.api_url, &req.full_name, version),
 		}
 	}
 
 	pub(crate) fn install_prefix_matches(&self, other: &Self) -> bool {
 		match (self, other) {
-			(
-				Self::Github { api_url, full_name, .. },
-				Self::Github {
-					api_url: other_url,
-					full_name: other_name,
-					..
-				},
-			) => api_url == other_url && full_name == other_name,
+			(Self::Github(req), Self::Github(other)) => req.api_url == other.api_url && req.full_name == other.full_name,
 		}
 	}
 
 	pub(crate) fn install_prefix_matches_locked(&self, locked: &LockedTool) -> bool {
 		match (self, locked) {
-			(
-				Self::Github { api_url, full_name, .. },
-				LockedTool::Github {
-					api_url: other_url,
-					full_name: other_name,
-					..
-				},
-			) => api_url == other_url && full_name == other_name,
+			(Self::Github(req), LockedTool::Github(lock)) => req.api_url == lock.api_url && req.full_name == lock.full_name,
 		}
 	}
 
@@ -118,17 +91,27 @@ impl RequestedTool {
 						key: key.to_owned(),
 					});
 				}
-				Ok(Self::Github {
+				Ok(Self::Github(GithubRequest {
 					api_url: table.api_url.clone(),
 					full_name: full_name.to_ascii_lowercase(),
 					lane: lane.to_owned(),
 					version: Version::parse(value),
 					exposed: table.exposed.clone(),
 					rename_shims: table.rename_shims.clone(),
-				})
+				}))
 			}
 		}
 	}
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GithubRequest {
+	pub(crate) api_url: String,
+	pub(crate) full_name: String,
+	pub(crate) lane: String,
+	pub(crate) version: Version,
+	pub(crate) exposed: Option<Vec<String>>,
+	pub(crate) rename_shims: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Clone)]
@@ -177,235 +160,130 @@ impl std::error::Error for ToolRequestError {}
 
 #[cfg(test)]
 mod tests {
+	use indoc::{formatdoc, indoc};
+
 	use super::*;
+
+	pub(super) fn _request(full_name: &str, lane: &str, version: Version) -> ToolRequest {
+		ToolRequest {
+			origin: PathBuf::from("outpost.toml"),
+			tool: RequestedTool::Github(GithubRequest {
+				api_url: String::new(),
+				full_name: full_name.to_owned(),
+				lane: lane.to_owned(),
+				version,
+				exposed: None,
+				rename_shims: None,
+			}),
+		}
+	}
+
+	fn _config(path: &str, body: &str) -> ConfigFile {
+		ConfigFile {
+			path: PathBuf::from(path),
+			config: toml::from_str(body).unwrap(),
+		}
+	}
 
 	#[test]
 	fn parses_latest() {
-		let config = ConfigFile {
-			path: PathBuf::from("outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = "latest"
-				"#,
-			)
-			.unwrap(),
-		};
-		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequest {
-			origin: PathBuf::from("outpost.toml"),
-			tool: RequestedTool::Github {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::Latest,
-				exposed: None,
-				rename_shims: None,
-			},
-		}]);
+		let body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = "latest"
+		"#};
+		let config = _config("outpost.toml", body);
+		assert_eq!(requests(&[config]).unwrap(), vec![_request("owner/repo", "", Version::Latest)]);
 	}
 
 	#[test]
 	fn parses_exact() {
-		let config = ConfigFile {
-			path: PathBuf::from("outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = "0.26.0"
-				"#,
-			)
-			.unwrap(),
-		};
-		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequest {
-			origin: PathBuf::from("outpost.toml"),
-			tool: RequestedTool::Github {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::Exact("0.26.0".to_owned()),
-				exposed: None,
-				rename_shims: None,
-			},
-		}]);
+		let body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = "0.26.0"
+		"#};
+		let config = _config("outpost.toml", body);
+		assert_eq!(requests(&[config]).unwrap(), vec![_request("owner/repo", "", Version::Exact("0.26.0".to_owned()))]);
 	}
 
 	#[test]
 	fn parses_lanes() {
-		let config = ConfigFile {
-			path: PathBuf::from("outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = "cli/1.2.3"
-				"#,
-			)
-			.unwrap(),
-		};
-		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequest {
-			origin: PathBuf::from("outpost.toml"),
-			tool: RequestedTool::Github {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: "cli/".to_owned(),
-				version: Version::Exact("1.2.3".to_owned()),
-				exposed: None,
-				rename_shims: None,
-			},
-		}]);
-
-		let config = ConfigFile {
-			path: PathBuf::from("outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = "tool-10"
-				"#,
-			)
-			.unwrap(),
-		};
-		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequest {
-			origin: PathBuf::from("outpost.toml"),
-			tool: RequestedTool::Github {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: "tool-".to_owned(),
-				version: Version::parse("10"),
-				exposed: None,
-				rename_shims: None,
-			},
-		}]);
+		let body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = "cli/1.2.3"
+		"#};
+		let config = _config("outpost.toml", body);
+		assert_eq!(requests(&[config]).unwrap(), vec![_request(
+			"owner/repo",
+			"cli/",
+			Version::Exact("1.2.3".to_owned())
+		)]);
+		let body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = "tool-10"
+		"#};
+		let config = _config("outpost.toml", body);
+		assert_eq!(requests(&[config]).unwrap(), vec![_request("owner/repo", "tool-", Version::parse("10"))]);
 	}
 
 	#[test]
 	fn parses_dotted_full_name() {
-		let config = ConfigFile {
-			path: PathBuf::from("outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo.js" = "latest"
-				"#,
-			)
-			.unwrap(),
-		};
-		assert_eq!(requests(&[config]).unwrap(), vec![ToolRequest {
-			origin: PathBuf::from("outpost.toml"),
-			tool: RequestedTool::Github {
-				api_url: String::new(),
-				full_name: "owner/repo.js".to_owned(),
-				lane: String::new(),
-				version: Version::Latest,
-				exposed: None,
-				rename_shims: None,
-			},
-		}]);
+		let body = indoc! {r#"
+		[tools]
+		"github:owner/repo.js" = "latest"
+		"#};
+		let config = _config("outpost.toml", body);
+		assert_eq!(requests(&[config]).unwrap(), vec![_request("owner/repo.js", "", Version::Latest)]);
 	}
 
 	#[test]
 	fn parses_table_form() {
-		let config = ConfigFile {
-			path: PathBuf::from("outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = { version = "0.26.0" }
-				"github:owner/other" = { version = "0.26.0", api_url = "http://127.0.0.1:8080", exposed = ["tool", "bin/*"], rename_shims = { "tool_*" = "tool" } }
-				"#,
-			)
-			.unwrap(),
-		};
+		let body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = { version = "0.26.0" }
+		"github:owner/other" = { version = "0.26.0", api_url = "http://127.0.0.1:8080", exposed = ["tool", "bin/*"], rename_shims = { "tool_*" = "tool" } }
+		"#};
+		let config = _config("outpost.toml", body);
+		let mut other = _request("owner/other", "", Version::Exact("0.26.0".to_owned()));
+		let RequestedTool::Github(req) = &mut other.tool;
+		req.api_url = "http://127.0.0.1:8080".to_owned();
+		req.exposed = Some(vec!["tool".to_owned(), "bin/*".to_owned()]);
+		req.rename_shims = Some(BTreeMap::from([("tool_*".to_owned(), "tool".to_owned())]));
 		assert_eq!(requests(&[config]).unwrap(), vec![
-			ToolRequest {
-				origin: PathBuf::from("outpost.toml"),
-				tool: RequestedTool::Github {
-					api_url: "http://127.0.0.1:8080".to_owned(),
-					full_name: "owner/other".to_owned(),
-					lane: String::new(),
-					version: Version::Exact("0.26.0".to_owned()),
-					exposed: Some(vec!["tool".to_owned(), "bin/*".to_owned()]),
-					rename_shims: Some(BTreeMap::from([("tool_*".to_owned(), "tool".to_owned())])),
-				},
-			},
-			ToolRequest {
-				origin: PathBuf::from("outpost.toml"),
-				tool: RequestedTool::Github {
-					api_url: String::new(),
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::Exact("0.26.0".to_owned()),
-					exposed: None,
-					rename_shims: None,
-				},
-			},
+			other,
+			_request("owner/repo", "", Version::Exact("0.26.0".to_owned()))
 		]);
 	}
 
 	#[test]
 	fn keeps_requests_from_every_file() {
-		let system = ConfigFile {
-			path: PathBuf::from("system/outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = "1"
-				"#,
-			)
-			.unwrap(),
-		};
-		let project = ConfigFile {
-			path: PathBuf::from("project/outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = "2"
-				"#,
-			)
-			.unwrap(),
-		};
-		let nested = ConfigFile {
-			path: PathBuf::from("project/nested/outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = "1"
-				"#,
-			)
-			.unwrap(),
-		};
+		let system_body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = "1"
+		"#};
+		let system = _config("system/outpost.toml", system_body);
+		let project_body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = "2"
+		"#};
+		let project = _config("project/outpost.toml", project_body);
+		let nested_body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = "1"
+		"#};
+		let nested = _config("project/nested/outpost.toml", nested_body);
 		assert_eq!(requests(&[system, project, nested]).unwrap(), vec![
 			ToolRequest {
 				origin: PathBuf::from("system/outpost.toml"),
-				tool: RequestedTool::Github {
-					api_url: String::new(),
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("1"),
-					exposed: None,
-					rename_shims: None,
-				},
+				.._request("owner/repo", "", Version::parse("1"))
 			},
 			ToolRequest {
 				origin: PathBuf::from("project/outpost.toml"),
-				tool: RequestedTool::Github {
-					api_url: String::new(),
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("2"),
-					exposed: None,
-					rename_shims: None,
-				},
+				.._request("owner/repo", "", Version::parse("2"))
 			},
 			// the same request from another file is still a separate request
 			ToolRequest {
 				origin: PathBuf::from("project/nested/outpost.toml"),
-				tool: RequestedTool::Github {
-					api_url: String::new(),
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("1"),
-					exposed: None,
-					rename_shims: None,
-				},
+				.._request("owner/repo", "", Version::parse("1"))
 			},
 		]);
 	}
@@ -413,16 +291,11 @@ mod tests {
 	#[test]
 	fn rejects_invalid_full_name() {
 		for key in ["github:", "github:.", "github:..", r"github:a\b"] {
-			let config = ConfigFile {
-				path: PathBuf::from("outpost.toml"),
-				config: toml::from_str(&format!(
-					r#"
-					[tools]
-					'{key}' = "latest"
-					"#,
-				))
-				.unwrap(),
-			};
+			let body = formatdoc! {r#"
+			[tools]
+			'{key}' = "latest"
+			"#};
+			let config = _config("outpost.toml", &body);
 			assert!(
 				matches!(requests(&[config]), Err(ToolRequestError::InvalidFullName { .. })),
 				"{key} should be rejected"
@@ -432,80 +305,41 @@ mod tests {
 
 	#[test]
 	fn rejects_empty_version() {
-		let config = ConfigFile {
-			path: PathBuf::from("outpost.toml"),
-			config: toml::from_str(
-				r#"
-				[tools]
-				"github:owner/repo" = ""
-				"#,
-			)
-			.unwrap(),
-		};
+		let body = indoc! {r#"
+		[tools]
+		"github:owner/repo" = ""
+		"#};
+		let config = _config("outpost.toml", body);
 		assert!(matches!(requests(&[config]), Err(ToolRequestError::EmptyVersion { .. })));
 	}
 }
 
 #[cfg(test)]
 mod set_tests {
+	use super::tests::_request;
 	use super::*;
 
 	#[test]
 	fn sets_requests_by_identity() {
 		let requests = vec![
 			ToolRequest {
-				origin: std::path::PathBuf::from("a.toml"),
-				tool: RequestedTool::Github {
-					api_url: String::new(),
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("1.2.3"),
-					exposed: None,
-					rename_shims: None,
-				},
+				origin: PathBuf::from("a.toml"),
+				.._request("owner/repo", "", Version::parse("1.2.3"))
 			},
 			ToolRequest {
-				origin: std::path::PathBuf::from("b.toml"),
-				tool: RequestedTool::Github {
-					api_url: String::new(),
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("1.2.3"),
-					exposed: None,
-					rename_shims: None,
-				},
+				origin: PathBuf::from("b.toml"),
+				.._request("owner/repo", "", Version::parse("1.2.3"))
 			},
 			ToolRequest {
-				origin: std::path::PathBuf::from("c.toml"),
-				tool: RequestedTool::Github {
-					api_url: String::new(),
-					full_name: "owner/repo".to_owned(),
-					lane: String::new(),
-					version: Version::parse("2.0.0"),
-					exposed: None,
-					rename_shims: None,
-				},
+				origin: PathBuf::from("c.toml"),
+				.._request("owner/repo", "", Version::parse("2.0.0"))
 			},
 		];
 		let sets = ToolRequestSet::from_requests(&requests);
 		assert_eq!(sets.len(), 2);
-		assert_eq!(sets[0].tool, RequestedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1.2.3"),
-			exposed: None,
-			rename_shims: None,
-		});
+		assert_eq!(sets[0].tool, _request("owner/repo", "", Version::parse("1.2.3")).tool);
 		assert_eq!(sets[0].origins, vec![PathBuf::from("a.toml"), PathBuf::from("b.toml")]);
-		assert_eq!(sets[1].tool, RequestedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("2.0.0"),
-			exposed: None,
-			rename_shims: None,
-		});
+		assert_eq!(sets[1].tool, _request("owner/repo", "", Version::parse("2.0.0")).tool);
 		assert_eq!(sets[1].origins, vec![PathBuf::from("c.toml")]);
 	}
 }

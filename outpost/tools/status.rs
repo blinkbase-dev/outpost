@@ -14,13 +14,13 @@ pub(crate) fn report(catalog: &Catalog<'_>, tools_dir: &Path) -> Report {
 		let identity = request.tool.identity();
 		requested_identities.insert(identity.clone());
 		let (install_state, installed_version) = match catalog.lock_for(&identity) {
-			Some(LockedTool::Github { tag_name, install_path, .. }) => {
-				let install_state = if _installed_cached(&mut checked, tools_dir, install_path.as_path()) {
+			Some(LockedTool::Github(lock)) => {
+				let install_state = if _installed_cached(&mut checked, tools_dir, lock.install_path.as_path()) {
 					InstallState::Installed
 				} else {
 					InstallState::Missing
 				};
-				(install_state, Some(tag_name.clone()))
+				(install_state, Some(lock.tag_name.clone()))
 			}
 			None => (InstallState::Missing, None),
 		};
@@ -77,7 +77,8 @@ fn _installed_cached<'a>(cache: &mut HashMap<&'a Path, bool>, tools_dir: &Path, 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::tools::tool_request::ToolRequest;
+	use crate::tools::lock::GithubLock;
+	use crate::tools::tool_request::{GithubRequest, ToolRequest};
 	use crate::tools::version::Version;
 
 	#[test]
@@ -87,37 +88,37 @@ mod tests {
 		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
-			}],
+			})],
 		};
 		let requests = vec![
 			ToolRequest {
 				origin: PathBuf::from("outpost.toml"),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolRequest {
 				origin: PathBuf::from("outpost.toml"),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/other".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 		];
 		let report = report(&Catalog::new(&lock, &requests), &tools);
@@ -126,27 +127,27 @@ mod tests {
 				origin: PathBuf::from("outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolStatus {
 				origin: PathBuf::from("outpost.toml"),
 				install_state: InstallState::Missing,
 				installed_version: None,
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/other".to_owned(),
 					lane: String::new(),
 					version: Version::parse("2.0.0"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 		]);
 		assert!(report.unrequested.is_empty());
@@ -159,39 +160,39 @@ mod tests {
 		std::fs::create_dir_all(&tools).unwrap();
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
-			}],
+			})],
 		};
 		let requests = vec![ToolRequest {
 			origin: PathBuf::from("outpost.toml"),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		}];
 		let report = report(&Catalog::new(&lock, &requests), &tools);
 		assert_eq!(report.requested, vec![ToolStatus {
 			origin: PathBuf::from("outpost.toml"),
 			install_state: InstallState::Missing,
 			installed_version: Some("v1.2.3".to_owned()),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		}]);
 		assert!(report.unrequested.is_empty());
 	}
@@ -202,14 +203,14 @@ mod tests {
 		let tools = dir.path().join("tools");
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/old".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("9.0.0"),
 				tag_name: "v9.0.0".to_owned(),
 				install_path: PathBuf::from("github_old_repo/9.0.0"),
-			}],
+			})],
 		};
 		let report = report(&Catalog::new(&lock, &[]), &tools);
 		assert!(report.requested.is_empty());
@@ -223,37 +224,37 @@ mod tests {
 		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
-			}],
+			})],
 		};
 		let requests = vec![
 			ToolRequest {
 				origin: PathBuf::from("system/outpost.toml"),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolRequest {
 				origin: PathBuf::from("project/outpost.toml"),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 		];
 		let report = report(&Catalog::new(&lock, &requests), &tools);
@@ -262,27 +263,27 @@ mod tests {
 				origin: PathBuf::from("system/outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolStatus {
 				origin: PathBuf::from("project/outpost.toml"),
 				install_state: InstallState::Installed,
 				installed_version: Some("v1.2.3".to_owned()),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.2.3"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 		]);
 	}
@@ -295,46 +296,46 @@ mod tests {
 		let lock = Lock {
 			version: 1,
 			tools: vec![
-				LockedTool::Github {
+				LockedTool::Github(GithubLock {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("latest"),
 					tag_name: "v1.0.0".to_owned(),
 					install_path: PathBuf::from("github_owner_repo/1.0.0"),
-				},
-				LockedTool::Github {
+				}),
+				LockedTool::Github(GithubLock {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("1.0.0"),
 					tag_name: "v1.0.0".to_owned(),
 					install_path: PathBuf::from("github_owner_repo/1.0.0"),
-				},
+				}),
 			],
 		};
 		let requests = vec![
 			ToolRequest {
 				origin: PathBuf::from("outpost.toml"),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("latest"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolRequest {
 				origin: PathBuf::from("outpost.toml"),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 		];
 		let report = report(&Catalog::new(&lock, &requests), &tools);
@@ -354,46 +355,46 @@ mod tests {
 		let lock = Lock {
 			version: 1,
 			tools: vec![
-				LockedTool::Github {
+				LockedTool::Github(GithubLock {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("latest"),
 					tag_name: "v1.0.0".to_owned(),
 					install_path: PathBuf::from("github_owner_repo/1.0.0"),
-				},
-				LockedTool::Github {
+				}),
+				LockedTool::Github(GithubLock {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("1.0.0"),
 					tag_name: "v1.0.0".to_owned(),
 					install_path: PathBuf::from("github_owner_repo/1.0.0"),
-				},
+				}),
 			],
 		};
 		let request_sets = ToolRequestSet::from_requests(&[
 			ToolRequest {
 				origin: PathBuf::new(),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("latest"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 			ToolRequest {
 				origin: PathBuf::new(),
-				tool: RequestedTool::Github {
+				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
 					lane: String::new(),
 					version: Version::parse("1.0.0"),
 					exposed: None,
 					rename_shims: None,
-				},
+				}),
 			},
 		]);
 		assert!(missing_from_lock(&request_sets, &lock, &tools).is_empty());
@@ -406,25 +407,25 @@ mod tests {
 		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
-			}],
+			})],
 		};
 		let request_sets = ToolRequestSet::from_requests(&[ToolRequest {
 			origin: PathBuf::new(),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		}]);
 		assert!(missing_from_lock(&request_sets, &lock, &tools).is_empty());
 	}
@@ -435,25 +436,25 @@ mod tests {
 		let tools = dir.path().join("tools");
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
-			}],
+			})],
 		};
 		let request_sets = ToolRequestSet::from_requests(&[ToolRequest {
 			origin: PathBuf::new(),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse("1.2.3"),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		}]);
 		assert_eq!(missing_from_lock(&request_sets, &lock, &tools).len(), 1);
 	}
@@ -465,31 +466,31 @@ mod tests {
 		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
-			}],
+			})],
 		};
-		let other_lane = RequestedTool::Github {
+		let other_lane = RequestedTool::Github(GithubRequest {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: "cli/".to_owned(),
 			version: Version::parse("1.2.3"),
 			exposed: None,
 			rename_shims: None,
-		};
-		let other_version = RequestedTool::Github {
+		});
+		let other_version = RequestedTool::Github(GithubRequest {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
 			exposed: None,
 			rename_shims: None,
-		};
+		});
 		let request_sets = ToolRequestSet::from_requests(&[
 			ToolRequest {
 				origin: PathBuf::new(),
@@ -510,31 +511,31 @@ mod tests {
 		std::fs::create_dir_all(tools.join("github_owner_repo/1.2.3")).unwrap();
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				tag_name: "v1.2.3".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
-			}],
+			})],
 		};
-		let installed = RequestedTool::Github {
+		let installed = RequestedTool::Github(GithubRequest {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			version: Version::parse("1.2.3"),
 			exposed: None,
 			rename_shims: None,
-		};
-		let missing = RequestedTool::Github {
+		});
+		let missing = RequestedTool::Github(GithubRequest {
 			api_url: String::new(),
 			full_name: "owner/other".to_owned(),
 			lane: String::new(),
 			version: Version::parse("2.0.0"),
 			exposed: None,
 			rename_shims: None,
-		};
+		});
 		let entries = [
 			ToolRequest {
 				origin: PathBuf::new(),
@@ -547,6 +548,6 @@ mod tests {
 		];
 		let missing = missing_from_lock(&ToolRequestSet::from_requests(&entries), &lock, &tools);
 		assert_eq!(missing.len(), 1);
-		assert!(matches!(&missing[0].tool, RequestedTool::Github { full_name, .. } if full_name == "owner/other"));
+		assert!(matches!(&missing[0].tool, RequestedTool::Github(req) if req.full_name == "owner/other"));
 	}
 }

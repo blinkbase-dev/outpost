@@ -32,8 +32,8 @@ impl ResolutionCache {
 		let mut paths = HashSet::new();
 		for request in requests {
 			match &request.tool {
-				RequestedTool::Github { api_url, full_name, .. } => {
-					let path = github::resolution_cache_path(data_dir, api_url, full_name);
+				RequestedTool::Github(req) => {
+					let path = github::resolution_cache_path(data_dir, &req.api_url, &req.full_name);
 					if !paths.insert(path.clone()) {
 						continue;
 					}
@@ -43,7 +43,7 @@ impl ResolutionCache {
 					let Ok(file) = toml::from_str::<GithubCacheFile>(&text) else {
 						continue;
 					};
-					if !_valid_github_file(&file, api_url, full_name) {
+					if !_valid_github_file(&file, &req.api_url, &req.full_name) {
 						continue;
 					}
 					cache.github.insert(path, file);
@@ -55,23 +55,17 @@ impl ResolutionCache {
 
 	pub(crate) fn get(&self, tool: &RequestedTool) -> Option<ToolResolution> {
 		match tool {
-			RequestedTool::Github {
-				api_url,
-				full_name,
-				lane,
-				version,
-				..
-			} => {
-				let path = github::resolution_cache_path(&self.data_dir, api_url, full_name);
-				let file = self.github.get(&path).filter(|file| _valid_github_file(file, api_url, full_name))?;
+			RequestedTool::Github(req) => {
+				let path = github::resolution_cache_path(&self.data_dir, &req.api_url, &req.full_name);
+				let file = self.github.get(&path).filter(|file| _valid_github_file(file, &req.api_url, &req.full_name))?;
 				let target = Target::current();
 				let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 				file
 					.resolution
 					.iter()
 					.find(|entry| {
-						entry.lane == *lane
-							&& entry.requested == *version
+						entry.lane == req.lane
+							&& entry.requested == req.version
 							&& entry.os == target.os
 							&& entry.arch == target.arch
 							&& entry.libc == target.libc
@@ -89,31 +83,26 @@ impl ResolutionCache {
 
 	pub(crate) fn put(&mut self, tool: &RequestedTool, resolution: &ToolResolution) {
 		match (tool, resolution) {
-			(
-				RequestedTool::Github {
-					api_url,
-					full_name,
-					lane,
-					version,
-					..
-				},
-				ToolResolution::Github { tag_name, url, size, format },
-			) => {
-				let path = github::resolution_cache_path(&self.data_dir, api_url, full_name);
-				if self.github.get(&path).is_some_and(|file| !_valid_github_file(file, api_url, full_name)) {
+			(RequestedTool::Github(req), ToolResolution::Github { tag_name, url, size, format }) => {
+				let path = github::resolution_cache_path(&self.data_dir, &req.api_url, &req.full_name);
+				let invalid = self
+					.github
+					.get(&path)
+					.is_some_and(|file| !_valid_github_file(file, &req.api_url, &req.full_name));
+				if invalid {
 					self.github.remove(&path);
 				}
 				let file = self.github.entry(path.clone()).or_insert_with(|| GithubCacheFile {
 					version: CACHE_VERSION,
 					backend: "github".to_owned(),
-					api_url: api_url.clone(),
-					full_name: full_name.clone(),
+					api_url: req.api_url.clone(),
+					full_name: req.full_name.clone(),
 					resolution: Vec::new(),
 				});
 				let target = Target::current();
 				let incoming = GithubResolution {
-					lane: lane.clone(),
-					requested: version.clone(),
+					lane: req.lane.clone(),
+					requested: req.version.clone(),
 					os: target.os.to_owned(),
 					arch: target.arch.to_owned(),
 					libc: target.libc.to_owned(),

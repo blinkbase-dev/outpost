@@ -62,7 +62,7 @@ pub(crate) fn read_unverified(data_dir: &Path) -> Result<Lock, LockError> {
 			}
 			for tool in &mut lock.tools {
 				match tool {
-					LockedTool::Github { full_name, .. } => full_name.make_ascii_lowercase(),
+					LockedTool::Github(lock) => lock.full_name.make_ascii_lowercase(),
 				}
 			}
 			Ok(lock)
@@ -157,67 +157,55 @@ impl fmt::Display for Identity {
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub(crate) enum LockedTool {
-	Github {
-		#[serde(default)]
-		api_url: String,
-		full_name: String,
-		lane: String,
-		requested: Version,
-		tag_name: String,
-		install_path: PathBuf,
-	},
+	Github(GithubLock),
 }
 
 impl LockedTool {
 	pub(crate) fn identity(&self) -> Identity {
 		match self {
-			Self::Github {
-				api_url,
-				full_name,
-				lane,
-				requested,
-				..
-			} => Identity::Github {
-				api_url: api_url.clone(),
-				full_name: full_name.clone(),
-				lane: lane.clone(),
-				version: requested.clone(),
+			Self::Github(lock) => Identity::Github {
+				api_url: lock.api_url.clone(),
+				full_name: lock.full_name.clone(),
+				lane: lock.lane.clone(),
+				version: lock.requested.clone(),
 			},
 		}
 	}
 
 	pub(crate) fn install_path(&self) -> &Path {
 		match self {
-			Self::Github { install_path, .. } => install_path,
+			Self::Github(lock) => &lock.install_path,
 		}
 	}
 
 	pub(crate) fn installed_version(&self) -> &str {
 		match self {
-			Self::Github { tag_name, .. } => tag_name,
+			Self::Github(lock) => &lock.tag_name,
 		}
 	}
 
 	pub(crate) fn expected_install_path(&self) -> PathBuf {
 		match self {
-			Self::Github {
-				api_url, full_name, tag_name, ..
-			} => github::install_path(api_url, full_name, tag_name),
+			Self::Github(lock) => github::install_path(&lock.api_url, &lock.full_name, &lock.tag_name),
 		}
 	}
 
 	fn install_prefix_matches(&self, other: &Self) -> bool {
 		match (self, other) {
-			(
-				Self::Github { api_url, full_name, .. },
-				Self::Github {
-					api_url: other_url,
-					full_name: other_name,
-					..
-				},
-			) => api_url == other_url && full_name == other_name,
+			(Self::Github(lock), Self::Github(other)) => lock.api_url == other.api_url && lock.full_name == other.full_name,
 		}
 	}
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub(crate) struct GithubLock {
+	#[serde(default)]
+	pub(crate) api_url: String,
+	pub(crate) full_name: String,
+	pub(crate) lane: String,
+	pub(crate) requested: Version,
+	pub(crate) tag_name: String,
+	pub(crate) install_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -508,14 +496,14 @@ install_path = "C:"
 		let dir = tempfile::tempdir().unwrap();
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("2.20"),
 				tag_name: "2.20".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/2.20"),
-			}],
+			})],
 		};
 		write(dir.path(), &lock).unwrap();
 		assert_eq!(read(dir.path()).unwrap().tools, lock.tools);
@@ -527,30 +515,30 @@ install_path = "C:"
 		let lock = Lock {
 			version: 1,
 			tools: vec![
-				LockedTool::Github {
+				LockedTool::Github(GithubLock {
 					api_url: String::new(),
 					full_name: "z/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("1"),
 					tag_name: "1".to_owned(),
 					install_path: PathBuf::from("github_z_repo/1"),
-				},
-				LockedTool::Github {
+				}),
+				LockedTool::Github(GithubLock {
 					api_url: String::new(),
 					full_name: "a/repo".to_owned(),
 					lane: "cli/".to_owned(),
 					requested: Version::parse("1"),
 					tag_name: "1".to_owned(),
 					install_path: PathBuf::from("github_a_repo/1"),
-				},
-				LockedTool::Github {
+				}),
+				LockedTool::Github(GithubLock {
 					api_url: String::new(),
 					full_name: "a/repo".to_owned(),
 					lane: String::new(),
 					requested: Version::parse("2"),
 					tag_name: "2".to_owned(),
 					install_path: PathBuf::from("github_a_repo/2"),
-				},
+				}),
 			],
 		};
 		write(dir.path(), &lock).unwrap();
@@ -583,14 +571,14 @@ install_path = "C:"
 		let dir = tempfile::tempdir().unwrap();
 		let lock = Lock {
 			version: 1,
-			tools: vec![LockedTool::Github {
+			tools: vec![LockedTool::Github(GithubLock {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("2.20"),
 				tag_name: "2.20".to_owned(),
 				install_path: PathBuf::from("github_owner_repo/2.20"),
-			}],
+			})],
 		};
 		write(dir.path(), &lock).unwrap();
 		let text = std::fs::read_to_string(dir.path().join("outpost.lock")).unwrap();

@@ -26,9 +26,9 @@ impl GithubBackend {
 	}
 
 	pub(crate) async fn resolve(&self, request: &RequestedTool) -> Result<ToolResolution, GithubError> {
-		let RequestedTool::Github { full_name, lane, version, .. } = request;
-		let release = self._select_release(full_name, lane, version).await?;
-		let (url, size, format) = self._select_asset(full_name, &release)?;
+		let RequestedTool::Github(req) = request;
+		let release = self._select_release(&req.full_name, &req.lane, &req.version).await?;
+		let (url, size, format) = self._select_asset(&req.full_name, &release)?;
 		Ok(ToolResolution::Github {
 			tag_name: release.tag_name,
 			url,

@@ -7,11 +7,7 @@ use super::version::{Version, split_lane};
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ToolSpec {
-	Github {
-		full_name: String,
-		lane: String,
-		version: Option<Version>,
-	},
+	Github(GithubSpec),
 }
 
 impl ToolSpec {
@@ -36,11 +32,11 @@ impl ToolSpec {
 					}
 					None => (String::new(), None),
 				};
-				Ok(Self::Github {
+				Ok(Self::Github(GithubSpec {
 					full_name: full_name.to_ascii_lowercase(),
 					lane,
 					version,
-				})
+				}))
 			}
 			_ => Err(ToolSpecError::UnsupportedBackend(backend.to_owned())),
 		}
@@ -48,21 +44,20 @@ impl ToolSpec {
 
 	pub(crate) fn matches(&self, request: &RequestedTool) -> bool {
 		match (self, request) {
-			(
-				Self::Github { full_name, lane, version },
-				RequestedTool::Github {
-					full_name: request_name,
-					lane: request_lane,
-					version: request_version,
-					..
-				},
-			) => {
-				full_name == request_name
-					&& (lane == request_lane || (lane.is_empty() && version.is_none()))
-					&& version.as_ref().is_none_or(|version| version == request_version)
+			(Self::Github(spec), RequestedTool::Github(req)) => {
+				spec.full_name == req.full_name
+					&& (spec.lane == req.lane || (spec.lane.is_empty() && spec.version.is_none()))
+					&& spec.version.as_ref().is_none_or(|version| version == &req.version)
 			}
 		}
 	}
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct GithubSpec {
+	full_name: String,
+	lane: String,
+	version: Option<Version>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -89,99 +84,63 @@ impl std::error::Error for ToolSpecError {}
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::tools::tool_request::GithubRequest;
+
+	fn _spec(lane: &str, version: Option<Version>) -> ToolSpec {
+		ToolSpec::Github(GithubSpec {
+			full_name: "owner/repo".to_owned(),
+			lane: lane.to_owned(),
+			version,
+		})
+	}
+
+	fn _request(lane: &str, version: Version) -> RequestedTool {
+		RequestedTool::Github(GithubRequest {
+			api_url: String::new(),
+			full_name: "owner/repo".to_owned(),
+			lane: lane.to_owned(),
+			version,
+			exposed: None,
+			rename_shims: None,
+		})
+	}
 
 	#[test]
 	fn parses_specs() {
-		assert_eq!(ToolSpec::parse("github:owner/repo").unwrap(), ToolSpec::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: None,
-		});
-		assert_eq!(ToolSpec::parse("github:owner/repo@cli/").unwrap(), ToolSpec::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: "cli/".to_owned(),
-			version: None,
-		});
-		assert_eq!(ToolSpec::parse("github:owner/repo@latest").unwrap(), ToolSpec::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Some(Version::Latest),
-		});
-		assert_eq!(ToolSpec::parse("github:owner/repo@cli/latest").unwrap(), ToolSpec::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: "cli/".to_owned(),
-			version: Some(Version::Latest),
-		});
-		assert_eq!(ToolSpec::parse("github:owner/repo@cli/1.2.3").unwrap(), ToolSpec::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: "cli/".to_owned(),
-			version: Some(Version::Exact("1.2.3".to_owned())),
-		});
-		assert_eq!(ToolSpec::parse("github:owner/repo@cli@1.2.3").unwrap(), ToolSpec::Github {
-			full_name: "owner/repo".to_owned(),
-			lane: "cli@".to_owned(),
-			version: Some(Version::Exact("1.2.3".to_owned())),
-		});
+		let latest = Some(Version::Latest);
+		let exact = Some(Version::Exact("1.2.3".to_owned()));
+		assert_eq!(ToolSpec::parse("github:owner/repo").unwrap(), _spec("", None));
+		assert_eq!(ToolSpec::parse("github:owner/repo@cli/").unwrap(), _spec("cli/", None));
+		assert_eq!(ToolSpec::parse("github:owner/repo@latest").unwrap(), _spec("", latest.clone()));
+		assert_eq!(ToolSpec::parse("github:owner/repo@cli/latest").unwrap(), _spec("cli/", latest));
+		assert_eq!(ToolSpec::parse("github:owner/repo@cli/1.2.3").unwrap(), _spec("cli/", exact.clone()));
+		assert_eq!(ToolSpec::parse("github:owner/repo@cli@1.2.3").unwrap(), _spec("cli@", exact));
 	}
 
 	#[test]
 	fn matches_requests() {
+		let exact = Version::Exact("1.0.0".to_owned());
+		let latest_req = _request("", Version::Latest);
+		let exact_req = _request("", exact.clone());
+		let lane_req = _request("cli/", exact);
+		// latest matches only the latest request
 		let latest = ToolSpec::parse("github:owner/repo@latest").unwrap();
-		let request = RequestedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::Latest,
-			exposed: None,
-			rename_shims: None,
-		};
-		assert!(latest.matches(&request));
-
-		let exact = RequestedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::Exact("1.0.0".to_owned()),
-			exposed: None,
-			rename_shims: None,
-		};
-		assert!(!latest.matches(&exact));
-
+		assert!(latest.matches(&latest_req));
+		assert!(!latest.matches(&exact_req));
+		// any version matches both requests
 		let any = ToolSpec::parse("github:owner/repo").unwrap();
-		assert!(any.matches(&request));
-		assert!(any.matches(&exact));
-
+		assert!(any.matches(&latest_req));
+		assert!(any.matches(&exact_req));
+		// lane and exact version matches only the lane request
 		let lane = ToolSpec::parse("github:owner/repo@cli/1.0.0").unwrap();
-		let lane_request = RequestedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: "cli/".to_owned(),
-			version: Version::Exact("1.0.0".to_owned()),
-			exposed: None,
-			rename_shims: None,
-		};
-		assert!(lane.matches(&lane_request));
-		assert!(!lane.matches(&exact));
-
+		assert!(lane.matches(&lane_req));
+		assert!(!lane.matches(&exact_req));
+		// lane without a version matches any version in that lane
 		let any_lane_version = ToolSpec::parse("github:owner/repo@cli/").unwrap();
-		assert!(any_lane_version.matches(&lane_request));
-		assert!(any_lane_version.matches(&RequestedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: "cli/".to_owned(),
-			version: Version::Latest,
-			exposed: None,
-			rename_shims: None,
-		}));
-		assert!(!any_lane_version.matches(&exact));
-		assert!(!any_lane_version.matches(&RequestedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: "other/".to_owned(),
-			version: Version::Latest,
-			exposed: None,
-			rename_shims: None,
-		}));
+		assert!(any_lane_version.matches(&lane_req));
+		assert!(any_lane_version.matches(&_request("cli/", Version::Latest)));
+		assert!(!any_lane_version.matches(&exact_req));
+		assert!(!any_lane_version.matches(&_request("other/", Version::Latest)));
 	}
 
 	#[test]

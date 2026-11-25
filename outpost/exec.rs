@@ -36,24 +36,10 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 		return Err(format!("'{tool_spec}' is not requested by the current config").into());
 	};
 	let Some((install_path, installed_version)) = lock.tools.iter().find_map(|tool| match (&request.tool, tool) {
-		(
-			RequestedTool::Github {
-				api_url: request_url,
-				full_name: request_name,
-				lane: request_lane,
-				version,
-				..
-			},
-			lock::LockedTool::Github {
-				api_url,
-				full_name,
-				lane,
-				requested,
-				install_path,
-				tag_name,
-				..
-			},
-		) => (api_url == request_url && full_name == request_name && lane == request_lane && requested == version).then_some((install_path, tag_name)),
+		(RequestedTool::Github(req), lock::LockedTool::Github(lock)) => {
+			let matches = lock.api_url == req.api_url && lock.full_name == req.full_name && lock.lane == req.lane && lock.requested == req.version;
+			matches.then_some((&lock.install_path, &lock.tag_name))
+		}
 	}) else {
 		return Err(
 			format!(
