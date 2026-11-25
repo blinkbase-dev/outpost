@@ -23,7 +23,10 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 			return Err(LockError::InvalidInstallPath(install_path.to_path_buf()));
 		}
 		if install_path != tool.expected_install_path().as_path() {
-			return Err(LockError::InvalidInstallPath(install_path.to_path_buf()));
+			return Err(LockError::MismatchedInstallPath {
+				path: install_path.to_path_buf(),
+				expected: tool.expected_install_path(),
+			});
 		}
 		match tool_by_install_path.get(install_path) {
 			Some(existing) if !existing.install_prefix_matches(tool) => {
@@ -226,6 +229,7 @@ pub(crate) enum LockError {
 	UnsupportedVersion(u32),
 	DuplicateIdentity(Identity),
 	InvalidInstallPath(PathBuf),
+	MismatchedInstallPath { path: PathBuf, expected: PathBuf },
 	ConflictingInstallPath { path: PathBuf, existing: String, incoming: String },
 	ConflictingVersion { path: PathBuf, existing: String, incoming: String },
 }
@@ -258,6 +262,9 @@ impl fmt::Display for LockError {
 			Self::UnsupportedVersion(version) => write!(f, "unsupported lock version {version}, expected 1"),
 			Self::DuplicateIdentity(identity) => write!(f, "duplicate tool '{identity}' in lock"),
 			Self::InvalidInstallPath(path) => write!(f, "invalid install path '{}' in lock", path.display()),
+			Self::MismatchedInstallPath { path, expected } => {
+				write!(f, "install path '{}' in lock does not match expected '{}'", path.display(), expected.display())
+			}
 			Self::ConflictingInstallPath { path, existing, incoming } => {
 				write!(f, "install path '{}' is shared by '{existing}' and '{incoming}' in lock", path.display())
 			}
@@ -278,6 +285,7 @@ impl std::error::Error for LockError {
 			Self::UnsupportedVersion(_) => None,
 			Self::DuplicateIdentity(_) => None,
 			Self::InvalidInstallPath(_) => None,
+			Self::MismatchedInstallPath { .. } => None,
 			Self::ConflictingInstallPath { .. } => None,
 			Self::ConflictingVersion { .. } => None,
 		}
@@ -379,10 +387,10 @@ install_path = "C:"
 
 	#[test]
 	fn rejects_non_canonical_install_paths() {
-		for (full_name, tag_name, install_path) in [
-			("owner/repo", "v1.0.0", "GitHub_Owner_Repo/1.0.0"),
-			("owner/repo", "v1.0.0", "github_owner_repo/2.0.0"),
-			("owner/repo", "v1.0.0", "github_owner_other/1.0.0"),
+		for (full_name, tag_name, install_path, expected) in [
+			("owner/repo", "v1.0.0", "GitHub_Owner_Repo/1.0.0", "github_owner_repo/1.0.0"),
+			("owner/repo", "v1.0.0", "github_owner_repo/2.0.0", "github_owner_repo/1.0.0"),
+			("owner/repo", "v1.0.0", "github_owner_other/1.0.0", "github_owner_repo/1.0.0"),
 		] {
 			let dir = tempfile::tempdir().unwrap();
 			let text = formatdoc! {r#"
@@ -399,8 +407,10 @@ install_path = "C:"
 			"#};
 			std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
 			let error = read(dir.path()).err().unwrap();
-			assert!(matches!(error, LockError::InvalidInstallPath(_)), "{error}");
-			assert!(error.to_string().contains(install_path), "{error}");
+			assert!(matches!(error, LockError::MismatchedInstallPath { .. }), "{error}");
+			let message = error.to_string();
+			assert!(message.contains(install_path), "{message}");
+			assert!(message.contains(expected), "{message}");
 		}
 	}
 
