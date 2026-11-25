@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fmt};
 
 use percent_encoding::utf8_percent_encode;
@@ -183,6 +183,12 @@ pub(crate) fn install_path(api_url: &str, full_name: &str, tag_name: &str) -> Pa
 	};
 	let full_name = full_name.to_ascii_lowercase();
 	PathBuf::from(format!("github_{}{}/{}", full_name.replace(['.', '/', '-'], "_"), suffix, _tag_component(tag_name)))
+}
+
+pub(crate) fn resolution_cache_path(data_dir: &Path, api_url: &str, full_name: &str) -> PathBuf {
+	let install_path = install_path(api_url, full_name, "_");
+	let prefix = install_path.parent().and_then(Path::file_name).expect("github install path has a prefix");
+	data_dir.join("resolutions").join(prefix).with_extension("toml")
 }
 
 fn _tag_component(tag_name: &str) -> String {

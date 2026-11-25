@@ -1,4 +1,5 @@
 use percent_encoding::{AsciiSet, CONTROLS};
+use serde::{Deserialize, Serialize};
 
 // only characters that cannot appear literally in a path segment are encoded
 pub(crate) const PATH_SEGMENT: &AsciiSet = &CONTROLS
@@ -19,7 +20,8 @@ pub(crate) const PATH_SEGMENT: &AsciiSet = &CONTROLS
 	.add(b'|')
 	.add(b'}');
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum ArchiveFormat {
 	TarGz,
 	TarXz,
