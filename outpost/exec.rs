@@ -27,7 +27,7 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 	let paths = locate::locate(&cwd)?;
 	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
 	let tools_dir = paths.tools_dir.as_deref().ok_or("no tools directory")?;
-	let lock = lock::read(data_dir)?;
+	let lock = lock::read_unverified(data_dir)?;
 	let requests = candidates::requests(&paths)?;
 	let tool = args.tool.ok_or("missing tool")?;
 	let tool_spec = tool.to_str().ok_or("tool must be valid utf-8")?;
