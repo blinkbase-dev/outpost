@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 
 use super::_asset_selection::select;
 use super::_backend::{ArchiveFormat, PATH_SEGMENT};
+use crate::tools::archive::ToolResolution;
+use crate::tools::tool_request::RequestedTool;
 use crate::tools::version::{Prefix, Version, split_lane, tag_version};
 
 pub(crate) struct GithubBackend {
@@ -23,7 +25,19 @@ impl GithubBackend {
 		}
 	}
 
-	pub(crate) async fn select_release(&self, full_name: &str, lane: &str, version: &Version) -> Result<Release, GithubError> {
+	pub(crate) async fn resolve(&self, request: &RequestedTool) -> Result<ToolResolution, GithubError> {
+		let RequestedTool::Github { full_name, lane, version, .. } = request;
+		let release = self._select_release(full_name, lane, version).await?;
+		let (url, size, format) = self._select_asset(full_name, &release)?;
+		Ok(ToolResolution::Github {
+			tag_name: release.tag_name,
+			url,
+			size,
+			format,
+		})
+	}
+
+	async fn _select_release(&self, full_name: &str, lane: &str, version: &Version) -> Result<Release, GithubError> {
 		match version {
 			Version::Latest => {
 				// repo-wide latest
@@ -106,7 +120,7 @@ impl GithubBackend {
 		}
 	}
 
-	pub(crate) fn select_asset(&self, full_name: &str, release: &Release) -> Result<(String, u64, ArchiveFormat), GithubError> {
+	fn _select_asset(&self, full_name: &str, release: &Release) -> Result<(String, u64, ArchiveFormat), GithubError> {
 		let (asset, format) = select(release.assets.iter().map(|asset| asset.name.as_str()))
 			.and_then(|(index, _, format)| release.assets.get(index).map(|asset| (asset, format)))
 			.ok_or_else(|| GithubError::NoAsset {
@@ -199,6 +213,7 @@ struct Asset {
 	size: u64,
 }
 
+#[derive(Clone)]
 pub(crate) struct GithubOptions {
 	api_url: String,
 	api_version: String,
@@ -406,7 +421,7 @@ mod tests {
 			api_url: server.uri(),
 			..GithubOptions::default()
 		});
-		let release = backend.select_release("cli/cli", "", &Version::Latest).await.unwrap();
+		let release = backend._select_release("cli/cli", "", &Version::Latest).await.unwrap();
 		let asset = &release.assets[0];
 		let url = "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_checksums.txt";
 		assert_eq!(release.tag_name, "v2.103.3");
@@ -433,7 +448,7 @@ mod tests {
 			api_url: server.uri(),
 			..GithubOptions::default()
 		});
-		let release = backend.select_release("google/magika", "cli-", &Version::Latest).await.unwrap();
+		let release = backend._select_release("google/magika", "cli-", &Version::Latest).await.unwrap();
 		assert_eq!(release.tag_name, "cli-latest");
 	}
 
@@ -458,7 +473,7 @@ mod tests {
 			api_url: server.uri(),
 			..GithubOptions::default()
 		});
-		let release = backend.select_release("google/magika", "cli/", &Version::Latest).await.unwrap();
+		let release = backend._select_release("google/magika", "cli/", &Version::Latest).await.unwrap();
 		assert_eq!(release.tag_name, "cli/v1.1.0");
 		server.verify().await;
 	}
@@ -511,12 +526,12 @@ mod tests {
 			("0.6", "v0.6.4"),
 			("0", "v0.12.0"),
 		] {
-			let release = backend.select_release("cli/cli", "", &Version::parse(prefix)).await.unwrap();
+			let release = backend._select_release("cli/cli", "", &Version::parse(prefix)).await.unwrap();
 			assert_eq!(release.tag_name, expected, "{prefix}");
 		}
 
 		for prefix in ["3", "2.999"] {
-			let result = backend.select_release("cli/cli", "", &Version::parse(prefix)).await;
+			let result = backend._select_release("cli/cli", "", &Version::parse(prefix)).await;
 			assert!(matches!(result, Err(GithubError::NoMatchingVersion { .. })), "{prefix}");
 		}
 	}
@@ -543,12 +558,12 @@ mod tests {
 			("python-", "1", "python-v1.0.2"),
 			("python-", "0.6", "python-v0.6.3"),
 		] {
-			let release = backend.select_release("google/magika", lane, &Version::parse(prefix)).await.unwrap();
+			let release = backend._select_release("google/magika", lane, &Version::parse(prefix)).await.unwrap();
 			assert_eq!(release.tag_name, expected, "{lane}{prefix}");
 		}
 
 		for (lane, prefix) in [("cli/", "9"), ("lib/", "1"), ("", "1")] {
-			let result = backend.select_release("google/magika", lane, &Version::parse(prefix)).await;
+			let result = backend._select_release("google/magika", lane, &Version::parse(prefix)).await;
 			assert!(matches!(result, Err(GithubError::NoMatchingVersion { .. })), "{lane}{prefix}");
 		}
 	}
@@ -578,7 +593,7 @@ mod tests {
 			api_url: server.uri(),
 			..GithubOptions::default()
 		});
-		let release = backend.select_release("cli/cli", "", &Version::Exact("2.102.1".to_owned())).await.unwrap();
+		let release = backend._select_release("cli/cli", "", &Version::Exact("2.102.1".to_owned())).await.unwrap();
 		let asset = &release.assets[0];
 		let url = "https://github.com/cli/cli/releases/download/v2.102.1/gh_2.102.1_checksums.txt";
 		assert_eq!(release.tag_name, "v2.102.1");
@@ -611,7 +626,7 @@ mod tests {
 			..GithubOptions::default()
 		});
 		let release = backend
-			.select_release("google/magika", "cli/", &Version::Exact("1.0.2".to_owned()))
+			._select_release("google/magika", "cli/", &Version::Exact("1.0.2".to_owned()))
 			.await
 			.unwrap();
 		assert_eq!(release.tag_name, "cli/v1.0.2");

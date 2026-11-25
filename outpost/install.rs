@@ -109,12 +109,19 @@ pub(crate) fn install() -> Result<(), Error> {
 async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>), Error> {
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(requests.len());
+	let github_options = Arc::new(GithubOptions::from_process());
 	for request in requests {
 		let semaphore = Arc::clone(&semaphore);
 		let http = http.clone();
+		let github_options = Arc::clone(&github_options);
 		handles.push(tokio::spawn(async move {
 			let result = match semaphore.acquire_owned().await {
-				Ok(_permit) => resolve(http, &request.tool).await,
+				Ok(_permit) => match &request.tool {
+					RequestedTool::Github { api_url, .. } => {
+						let backend = GithubBackend::new(http, github_options.as_ref().clone().with_api_url(api_url));
+						backend.resolve(&request.tool).await.map_err(Error::from)
+					}
+				},
 				Err(error) => Err(error.into()),
 			};
 			(request, result)
@@ -130,28 +137,6 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client) -> Result
 		}
 	}
 	Ok((resolutions, failures))
-}
-
-async fn resolve(http: Client, request: &RequestedTool) -> Result<ToolResolution, Error> {
-	match request {
-		RequestedTool::Github {
-			api_url,
-			full_name,
-			lane,
-			version,
-			..
-		} => {
-			let backend = GithubBackend::new(http, GithubOptions::from_process().with_api_url(api_url));
-			let release = backend.select_release(full_name, lane, version).await?;
-			let (url, size, format) = backend.select_asset(full_name, &release)?;
-			Ok(ToolResolution::Github {
-				tag_name: release.tag_name,
-				url,
-				size,
-				format,
-			})
-		}
-	}
 }
 
 fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionGroup> {
