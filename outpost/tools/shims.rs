@@ -60,11 +60,13 @@ fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a ToolRequest>) ->
 	let mut patterns = Vec::new();
 	for request in requests {
 		match &request.tool {
-			RequestedTool::Github { exposed: Some(exposed), .. } => {
+			RequestedTool::Github(req) => {
+				let Some(exposed) = &req.exposed else {
+					continue;
+				};
 				specified = true;
 				patterns.extend(exposed.iter().map(|pattern| (request, pattern.as_str())));
 			}
-			RequestedTool::Github { exposed: None, .. } => {}
 		}
 	}
 	specified.then_some(patterns)
@@ -247,18 +249,12 @@ fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<Shim
 			};
 			for item in items {
 				match item.locked {
-					LockedTool::Github {
-						api_url,
-						full_name,
-						lane,
-						requested,
-						..
-					} => {
+					LockedTool::Github(lock) => {
 						shims.entry(name.clone()).or_default().push(ShimEntry::Github {
-							api_url: api_url.clone(),
-							full_name: full_name.clone(),
-							lane: lane.clone(),
-							requested: requested.clone(),
+							api_url: lock.api_url.clone(),
+							full_name: lock.full_name.clone(),
+							lane: lock.lane.clone(),
+							requested: lock.requested.clone(),
 							install_path: install_path.to_path_buf(),
 							binary: binary.to_path_buf(),
 						});
@@ -295,7 +291,7 @@ fn _compile_rename_shims(items: &[InstallationItem<'_>]) -> Result<Option<(GlobS
 	for item in items {
 		for request in &item.requests {
 			let rename_shims = match &request.tool {
-				RequestedTool::Github { rename_shims, .. } => rename_shims.as_ref(),
+				RequestedTool::Github(req) => req.rename_shims.as_ref(),
 			};
 			let Some(rename_shims) = rename_shims else {
 				continue;

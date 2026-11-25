@@ -80,20 +80,21 @@ mod tests {
 	use std::path::{Path, PathBuf};
 
 	use super::*;
-	use crate::tools::tool_request::RequestedTool;
+	use crate::tools::lock::GithubLock;
+	use crate::tools::tool_request::{GithubRequest, RequestedTool};
 	use crate::tools::version::Version;
 
 	fn _request(version: &str) -> ToolRequest {
 		ToolRequest {
 			origin: PathBuf::from("outpost.toml"),
-			tool: RequestedTool::Github {
+			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				version: Version::parse(version),
 				exposed: None,
 				rename_shims: None,
-			},
+			}),
 		}
 	}
 
@@ -103,14 +104,14 @@ mod tests {
 
 	fn _locked(requested: &str, installed_version: &str) -> LockedTool {
 		let version = installed_version.strip_prefix('v').unwrap_or(installed_version);
-		LockedTool::Github {
+		LockedTool::Github(GithubLock {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
 			lane: String::new(),
 			requested: Version::parse(requested),
 			tag_name: installed_version.to_owned(),
 			install_path: PathBuf::from(format!("github_owner_repo/{version}")),
-		}
+		})
 	}
 
 	#[test]
