@@ -4,15 +4,13 @@ use std::sync::Arc;
 
 use rayon::iter::Either;
 use rayon::prelude::*;
-use regex::regex;
 use reqwest::Client;
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::backend::_backend::ArchiveFormat;
 use crate::tools::lock::{Lock, LockedTool};
-use crate::tools::tool_request::{RequestedTool, ToolRequestSet};
+use crate::tools::tool_request::ToolRequestSet;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestSet, ToolResolution);
@@ -162,7 +160,7 @@ impl ToolResolutionGroup {
 		}
 		for (request_set, resolution) in entries {
 			let install_path = match &resolution {
-				ToolResolution::Github { tag_name, .. } => _install_path(&request_set.tool, tag_name),
+				ToolResolution::Github { tag_name, .. } => request_set.tool.install_path(tag_name),
 			};
 			// reject paths owned by another tool from an earlier batch
 			// 'owner/repo.js' and 'owner/repo-js' sanitize to github_owner_repo_js
@@ -230,34 +228,6 @@ impl ToolResolutionGroup {
 
 pub(crate) enum ToolArchive {
 	Github { path: PathBuf },
-}
-
-fn _install_path(request: &RequestedTool, version: &str) -> PathBuf {
-	match request {
-		RequestedTool::Github { api_url, full_name, .. } => {
-			let suffix = if api_url.is_empty() {
-				String::new()
-			} else {
-				let digest = Sha256::digest(api_url.as_bytes());
-				let hash: String = digest.iter().take(4).map(|byte| format!("{byte:02x}")).collect();
-				format!("_{hash}")
-			};
-			PathBuf::from(format!("github_{}{}/{}", full_name.replace(['.', '/', '-'], "_"), suffix, _tag_component(version)))
-		}
-	}
-}
-
-fn _tag_component(version: &str) -> String {
-	let tag = version.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(version).to_lowercase();
-	let tag = regex!(r"[^a-z0-9_.]").replace_all(&tag, "_").into_owned();
-	// '.' and '..' would resolve outside the version directory
-	if tag == "." || tag.is_empty() {
-		"_".to_owned()
-	} else if tag == ".." {
-		"__".to_owned()
-	} else {
-		tag
-	}
 }
 
 #[cfg(test)]
@@ -338,6 +308,7 @@ mod download_parallel_tests {
 	use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 	use super::*;
+	use crate::tools::tool_request::RequestedTool;
 	use crate::tools::version::Version;
 
 	fn http() -> Client {
@@ -731,6 +702,7 @@ mod extract_tests {
 mod extract_parallel_tests {
 	use super::extract_tests::{tar_gz, tar_xz, zip_bytes};
 	use super::*;
+	use crate::tools::tool_request::RequestedTool;
 	use crate::tools::version::Version;
 
 	#[test]
@@ -958,6 +930,7 @@ mod extract_parallel_tests {
 #[cfg(test)]
 mod resolution_group_tests {
 	use super::*;
+	use crate::tools::tool_request::RequestedTool;
 	use crate::tools::version::Version;
 
 	#[test]
@@ -1182,26 +1155,5 @@ mod resolution_group_tests {
 		assert!(error.to_string().contains("shared by tags"), "{error}");
 		assert!(error.to_string().contains("\n  from /a/outpost.toml"), "{error}");
 		assert!(error.to_string().contains("\n  from /b/outpost.toml"), "{error}");
-	}
-}
-
-#[cfg(test)]
-mod install_path_tests {
-	use super::*;
-	use crate::tools::version::Version;
-
-	#[test]
-	fn maps_dot_tags_to_safe_install_paths() {
-		let request = RequestedTool::Github {
-			api_url: String::new(),
-			full_name: "owner/repo".to_owned(),
-			lane: String::new(),
-			version: Version::parse("1.0.0"),
-			exposed: None,
-			rename_shims: None,
-		};
-		for (tag, install_path) in [(".", "github_owner_repo/_"), ("..", "github_owner_repo/__"), ("", "github_owner_repo/_")] {
-			assert_eq!(_install_path(&request, tag), PathBuf::from(install_path), "{tag}");
-		}
 	}
 }

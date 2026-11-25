@@ -6,6 +6,7 @@ use regex::regex;
 
 use super::lock::{Identity, LockedTool};
 use super::version::{Version, split_lane};
+use crate::backend::github;
 use crate::config::loader::{ConfigFile, ToolOptions};
 
 pub(crate) fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequest>, ToolRequestError> {
@@ -60,6 +61,12 @@ impl RequestedTool {
 	pub(crate) fn identity_key(&self) -> String {
 		match self {
 			Self::Github { api_url, full_name, lane, .. } => format!("github:{api_url}:{full_name}@{lane}"),
+		}
+	}
+
+	pub(crate) fn install_path(&self, version: &str) -> PathBuf {
+		match self {
+			Self::Github { api_url, full_name, .. } => github::install_path(api_url, full_name, version),
 		}
 	}
 

@@ -2,6 +2,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use indoc::formatdoc;
+use sha2::{Digest, Sha256};
+
+fn _install_path(api_url: &str, repo: &str, version: &str) -> String {
+	let suffix = if api_url.is_empty() {
+		String::new()
+	} else {
+		let digest = Sha256::digest(api_url.as_bytes());
+		let hash: String = digest.iter().take(4).map(|byte| format!("{byte:02x}")).collect();
+		format!("_{hash}")
+	};
+	format!("github_{repo}{suffix}/{version}")
+}
 
 struct Fixture {
 	_dir: tempfile::TempDir, // keeps the temp tree alive until the fixture drops
@@ -41,6 +53,11 @@ impl Fixture {
 fn lists_requested_and_unrequested_tools() {
 	let origin_a = "https://a.example.com";
 	let origin_b = "https://b.example.com";
+	let repo_b_path = _install_path(origin_b, "owner_repo", "1.2.3");
+	let repo_a_path = _install_path(origin_a, "owner_repo", "1.2.3");
+	let other_path = _install_path(origin_a, "owner_other", "2.0.0");
+	let old_path = _install_path(origin_a, "owner_old", "9.0.0");
+	let gone_path = _install_path("", "owner_gone", "8.0.0");
 	let base = formatdoc! {r#"
 	[tools]
 	"github:owner/repo" = {{ version = "1.2.3", api_url = "{origin_a}" }}
@@ -61,7 +78,7 @@ fn lists_requested_and_unrequested_tools() {
 	lane = ""
 	requested = "1.2.3"
 	tag_name = "v1.2.3"
-	install_path = "github_owner_repo_b/1.2.3"
+	install_path = "{repo_b_path}"
 
 	[[tool]]
 	backend = "github"
@@ -70,7 +87,7 @@ fn lists_requested_and_unrequested_tools() {
 	lane = ""
 	requested = "1.2.3"
 	tag_name = "v1.2.3"
-	install_path = "github_owner_repo_a/1.2.3"
+	install_path = "{repo_a_path}"
 
 	[[tool]]
 	backend = "github"
@@ -79,7 +96,7 @@ fn lists_requested_and_unrequested_tools() {
 	lane = ""
 	requested = "2.0.0"
 	tag_name = "v2.0.0"
-	install_path = "github_owner_other/2.0.0"
+	install_path = "{other_path}"
 
 	[[tool]]
 	backend = "github"
@@ -88,7 +105,7 @@ fn lists_requested_and_unrequested_tools() {
 	lane = ""
 	requested = "9.0.0"
 	tag_name = "v9.0.0"
-	install_path = "github_owner_old/9.0.0"
+	install_path = "{old_path}"
 
 	[[tool]]
 	backend = "github"
@@ -97,13 +114,13 @@ fn lists_requested_and_unrequested_tools() {
 	lane = ""
 	requested = "8.0.0"
 	tag_name = "v8.0.0"
-	install_path = "github_owner_gone/8.0.0"
+	install_path = "{gone_path}"
 	"#};
 	let fixture = Fixture::new(&base, &lock);
 	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), &dev).unwrap();
-	fixture.install("github_owner_repo_a/1.2.3");
-	fixture.install("github_owner_repo_b/1.2.3");
-	fixture.install("github_owner_old/9.0.0");
+	fixture.install(&repo_a_path);
+	fixture.install(&repo_b_path);
+	fixture.install(&old_path);
 	let output = fixture.run(&fixture.config_dir, Some("dev"));
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
