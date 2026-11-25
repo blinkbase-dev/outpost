@@ -168,12 +168,20 @@ impl ToolResolutionGroup {
 			// 'owner/repo.js' and 'owner/repo-js' sanitize to github_owner_repo_js
 			if let Some(owners) = locked_by_install_path.get(install_path.as_path()) {
 				for &locked in owners {
-					if request_set.tool.install_prefix_matches_locked(locked) {
-						continue;
+					if !request_set.tool.install_prefix_matches_locked(locked) {
+						let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
+						let (path, incoming, existing) = (install_path.display(), request_set.tool.identity(), locked.identity());
+						return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
 					}
-					let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
-					let (path, incoming, existing) = (install_path.display(), request_set.tool.identity(), locked.identity());
-					return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
+					match (&resolution, locked) {
+						(ToolResolution::Github { tag_name, .. }, LockedTool::Github { tag_name: locked_tag, .. }) => {
+							if locked_tag.as_str() != tag_name.as_str() {
+								let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
+								let path = install_path.display();
+								return Err(format!("install path '{path}' is shared by tags '{tag_name}' and '{locked_tag}'{sources}").into());
+							}
+						}
+					}
 				}
 			}
 			if let Some(&index) = index_by_install_path.get(&install_path) {
@@ -1037,6 +1045,45 @@ mod resolution_group_tests {
 		assert!(error.to_string().contains("shared by"), "{error}");
 		assert!(error.to_string().contains("owner/repo-js"), "{error}");
 		assert!(error.to_string().contains("owner/repo.js"), "{error}");
+	}
+
+	#[test]
+	fn rejects_locked_tag_collisions() {
+		let lock = Lock {
+			version: 1,
+			tools: vec![LockedTool::Github {
+				api_url: String::new(),
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				requested: Version::parse("latest"),
+				tag_name: "v1.0.0".to_owned(),
+				install_path: PathBuf::from("github_owner_repo/1.0.0"),
+			}],
+		};
+		let request = ToolRequestSet {
+			origins: vec![PathBuf::from("/b/outpost.toml")],
+			tool: RequestedTool::Github {
+				api_url: String::new(),
+				full_name: "owner/repo".to_owned(),
+				lane: String::new(),
+				version: Version::parse("1.0.0"),
+				exposed: None,
+				rename_shims: None,
+			},
+		};
+		let error = ToolResolutionGroup::from_entries(
+			vec![(request, ToolResolution::Github {
+				tag_name: "1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+			})],
+			&lock,
+		)
+		.err()
+		.unwrap();
+		assert!(error.to_string().contains("shared by tags '1.0.0' and 'v1.0.0'"), "{error}");
+		assert!(error.to_string().contains("\n  from /b/outpost.toml"), "{error}");
 	}
 
 	#[test]

@@ -118,8 +118,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		shims_map.entry(entry.identity()).or_insert(entry);
 		tools.insert(entry.identity_key());
 	}
-	// several versions can share a name, so the first request in config
-	// precedence order wins
+	// several versions can share a name, so the first request in config precedence order wins
 	for request in &requests {
 		let identity = request.tool.identity();
 		let Some(entry) = shims_map.get(&identity) else {

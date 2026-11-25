@@ -31,6 +31,13 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 					incoming: identity.to_string(),
 				});
 			}
+			Some(existing) if existing.installed_version() != tool.installed_version() => {
+				return Err(LockError::ConflictingVersion {
+					path: install_path.clone(),
+					existing: existing.installed_version().to_owned(),
+					incoming: tool.installed_version().to_owned(),
+				});
+			}
 			Some(_) => {}
 			None => {
 				tool_by_install_path.insert(install_path.as_path(), tool);
@@ -180,6 +187,12 @@ impl LockedTool {
 		}
 	}
 
+	pub(crate) fn installed_version(&self) -> &str {
+		match self {
+			Self::Github { tag_name, .. } => tag_name,
+		}
+	}
+
 	fn install_prefix_matches(&self, other: &Self) -> bool {
 		match (self, other) {
 			(
@@ -204,6 +217,7 @@ pub(crate) enum LockError {
 	DuplicateIdentity(Identity),
 	InvalidInstallPath(PathBuf),
 	ConflictingInstallPath { path: PathBuf, existing: String, incoming: String },
+	ConflictingVersion { path: PathBuf, existing: String, incoming: String },
 }
 
 impl From<std::io::Error> for LockError {
@@ -237,6 +251,9 @@ impl fmt::Display for LockError {
 			Self::ConflictingInstallPath { path, existing, incoming } => {
 				write!(f, "install path '{}' is shared by '{existing}' and '{incoming}' in lock", path.display())
 			}
+			Self::ConflictingVersion { path, existing, incoming } => {
+				write!(f, "install path '{}' is shared by versions '{incoming}' and '{existing}' in lock", path.display())
+			}
 		}
 	}
 }
@@ -252,6 +269,7 @@ impl std::error::Error for LockError {
 			Self::DuplicateIdentity(_) => None,
 			Self::InvalidInstallPath(_) => None,
 			Self::ConflictingInstallPath { .. } => None,
+			Self::ConflictingVersion { .. } => None,
 		}
 	}
 }
@@ -406,6 +424,36 @@ install_path = "C:"
 		assert!(matches!(error, LockError::ConflictingInstallPath { .. }));
 		assert!(error.to_string().contains("github:owner/repo@1.0.0"), "{error}");
 		assert!(error.to_string().contains("github:owner/other@1.0.0"), "{error}");
+	}
+
+	#[test]
+	fn rejects_different_versions_at_one_install_path() {
+		let dir = tempfile::tempdir().unwrap();
+		let text = indoc! {r#"
+		version = 1
+
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "latest"
+		tag_name = "v1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		tag_name = "1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		"#};
+		std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
+		let error = read(dir.path()).err().unwrap();
+		assert!(matches!(error, LockError::ConflictingVersion { .. }));
+		assert!(error.to_string().contains("shared by versions '1.0.0' and 'v1.0.0'"), "{error}");
 	}
 
 	#[test]
