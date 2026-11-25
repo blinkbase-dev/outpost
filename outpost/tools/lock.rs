@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
@@ -9,6 +9,38 @@ use serde::{Deserialize, Serialize};
 use crate::tools::version::Version;
 
 pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
+	let lock = read_unverified(data_dir)?;
+	let mut identities = HashSet::new();
+	let mut tool_by_install_path: HashMap<&Path, &LockedTool> = HashMap::new();
+	for tool in &lock.tools {
+		let identity = tool.identity();
+		if !identities.insert(identity.clone()) {
+			return Err(LockError::DuplicateIdentity(identity));
+		}
+		let install_path = match tool {
+			LockedTool::Github { install_path, .. } => install_path,
+		};
+		if !valid_install_path(install_path) {
+			return Err(LockError::InvalidInstallPath(install_path.clone()));
+		}
+		match tool_by_install_path.get(install_path.as_path()) {
+			Some(existing) if !existing.install_prefix_matches(tool) => {
+				return Err(LockError::ConflictingInstallPath {
+					path: install_path.clone(),
+					existing: existing.identity().to_string(),
+					incoming: identity.to_string(),
+				});
+			}
+			Some(_) => {}
+			None => {
+				tool_by_install_path.insert(install_path.as_path(), tool);
+			}
+		}
+	}
+	Ok(lock)
+}
+
+pub(crate) fn read_unverified(data_dir: &Path) -> Result<Lock, LockError> {
 	match std::fs::read_to_string(data_dir.join("outpost.lock")) {
 		Ok(text) if text.trim().is_empty() => Ok(Lock::default()),
 		Ok(text) => {
@@ -16,19 +48,9 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 			if lock.version != 1 {
 				return Err(LockError::UnsupportedVersion(lock.version));
 			}
-			let mut identities = HashSet::new();
 			for tool in &mut lock.tools {
 				match tool {
-					LockedTool::Github { full_name, install_path, .. } => {
-						full_name.make_ascii_lowercase();
-						if !valid_install_path(install_path) {
-							return Err(LockError::InvalidPath(install_path.clone()));
-						}
-					}
-				}
-				let identity = tool.identity();
-				if !identities.insert(identity.clone()) {
-					return Err(LockError::DuplicateIdentity(identity));
+					LockedTool::Github { full_name, .. } => full_name.make_ascii_lowercase(),
 				}
 			}
 			Ok(lock)
@@ -157,6 +179,19 @@ impl LockedTool {
 			Self::Github { install_path, .. } => install_path,
 		}
 	}
+
+	fn install_prefix_matches(&self, other: &Self) -> bool {
+		match (self, other) {
+			(
+				Self::Github { api_url, full_name, .. },
+				Self::Github {
+					api_url: other_url,
+					full_name: other_name,
+					..
+				},
+			) => api_url == other_url && full_name == other_name,
+		}
+	}
 }
 
 #[derive(Debug)]
@@ -167,7 +202,8 @@ pub(crate) enum LockError {
 	Busy,
 	UnsupportedVersion(u32),
 	DuplicateIdentity(Identity),
-	InvalidPath(PathBuf),
+	InvalidInstallPath(PathBuf),
+	ConflictingInstallPath { path: PathBuf, existing: String, incoming: String },
 }
 
 impl From<std::io::Error> for LockError {
@@ -197,7 +233,10 @@ impl fmt::Display for LockError {
 			Self::Busy => write!(f, "another outpost install is already running"),
 			Self::UnsupportedVersion(version) => write!(f, "unsupported lock version {version}, expected 1"),
 			Self::DuplicateIdentity(identity) => write!(f, "duplicate tool '{identity}' in lock"),
-			Self::InvalidPath(path) => write!(f, "invalid install path '{}' in lock", path.display()),
+			Self::InvalidInstallPath(path) => write!(f, "invalid install path '{}' in lock", path.display()),
+			Self::ConflictingInstallPath { path, existing, incoming } => {
+				write!(f, "install path '{}' is shared by '{existing}' and '{incoming}' in lock", path.display())
+			}
 		}
 	}
 }
@@ -211,13 +250,16 @@ impl std::error::Error for LockError {
 			Self::Busy => None,
 			Self::UnsupportedVersion(_) => None,
 			Self::DuplicateIdentity(_) => None,
-			Self::InvalidPath(_) => None,
+			Self::InvalidInstallPath(_) => None,
+			Self::ConflictingInstallPath { .. } => None,
 		}
 	}
 }
 
 #[cfg(test)]
 mod tests {
+	use indoc::indoc;
+
 	use super::*;
 
 	#[test]
@@ -284,7 +326,7 @@ install_path = "{}"
 			let dir = tempfile::tempdir().unwrap();
 			let text = text.replace("{}", path);
 			std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
-			assert!(matches!(read(dir.path()), Err(LockError::InvalidPath(_))), "{path}");
+			assert!(matches!(read(dir.path()), Err(LockError::InvalidInstallPath(_))), "{path}");
 		}
 	}
 
@@ -304,7 +346,66 @@ tag_name = "v1.0.0"
 install_path = "C:"
 "#;
 		std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
-		assert!(matches!(read(dir.path()), Err(LockError::InvalidPath(_))));
+		assert!(matches!(read(dir.path()), Err(LockError::InvalidInstallPath(_))));
+	}
+
+	#[test]
+	fn allows_same_tool_at_one_install_path() {
+		let dir = tempfile::tempdir().unwrap();
+		let text = indoc! {r#"
+		version = 1
+
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		tag_name = "v1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "latest"
+		tag_name = "v1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		"#};
+		std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
+		assert!(read(dir.path()).is_ok());
+	}
+
+	#[test]
+	fn rejects_different_tools_at_one_install_path() {
+		let dir = tempfile::tempdir().unwrap();
+		let text = indoc! {r#"
+		version = 1
+
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		tag_name = "v1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/other"
+		lane = ""
+		requested = "1.0.0"
+		tag_name = "v1.0.0"
+		install_path = "github_owner_repo/1.0.0"
+		"#};
+		std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
+		let error = read(dir.path()).err().unwrap();
+		assert!(matches!(error, LockError::ConflictingInstallPath { .. }));
+		assert!(error.to_string().contains("github:owner/repo@1.0.0"), "{error}");
+		assert!(error.to_string().contains("github:owner/other@1.0.0"), "{error}");
 	}
 
 	#[test]
