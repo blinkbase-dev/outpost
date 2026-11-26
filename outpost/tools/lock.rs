@@ -309,46 +309,47 @@ mod tests {
 	#[test]
 	fn rejects_duplicate_identities() {
 		let dir = tempfile::tempdir().unwrap();
-		let text = r#"version = 1
+		let text = indoc! {r#"
+		version = 1
 
-[[tool]]
-backend = "github"
-api_url = ""
-full_name = "owner/repo"
-lane = ""
-requested = "1.0.0"
-tag_name = "v1.0.0"
-install_path = "github_owner_repo/1.0.0"
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		tag_name = "v1.0.0"
+		install_path = "github_owner_repo/1.0.0"
 
-[[tool]]
-backend = "github"
-api_url = ""
-full_name = "owner/repo"
-lane = ""
-requested = "1.0.0"
-tag_name = "v1.0.1"
-install_path = "github_owner_repo/1.0.1"
-"#;
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		tag_name = "v1.0.1"
+		install_path = "github_owner_repo/1.0.1"
+		"#};
 		std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
 		assert!(matches!(read(dir.path()), Err(LockError::DuplicateIdentity(_))));
 	}
 
 	#[test]
 	fn rejects_unsafe_install_paths() {
-		let text = r#"version = 1
-
-[[tool]]
-backend = "github"
-api_url = ""
-full_name = "owner/repo"
-lane = ""
-requested = "1.0.0"
-tag_name = "v1.0.0"
-install_path = "{}"
-"#;
 		for path in ["/tmp/tool", "../tool", "./tool", "", "github_a", "github_a/.", "github_a/..", "github_a/1/2"] {
 			let dir = tempfile::tempdir().unwrap();
-			let text = text.replace("{}", path);
+			let text = formatdoc! {r#"
+			version = 1
+
+			[[tool]]
+			backend = "github"
+			api_url = ""
+			full_name = "owner/repo"
+			lane = ""
+			requested = "1.0.0"
+			tag_name = "v1.0.0"
+			install_path = "{path}"
+			"#};
 			std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
 			assert!(matches!(read(dir.path()), Err(LockError::InvalidInstallPath(_))), "{path}");
 		}
@@ -358,17 +359,18 @@ install_path = "{}"
 	#[test]
 	fn rejects_windows_prefix_install_path() {
 		let dir = tempfile::tempdir().unwrap();
-		let text = r#"version = 1
+		let text = indoc! {r#"
+		version = 1
 
-[[tool]]
-backend = "github"
-api_url = ""
-full_name = "owner/repo"
-lane = ""
-requested = "1.0.0"
-tag_name = "v1.0.0"
-install_path = "C:"
-"#;
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "1.0.0"
+		tag_name = "v1.0.0"
+		install_path = "C:"
+		"#};
 		std::fs::write(dir.path().join("outpost.lock"), text).unwrap();
 		assert!(matches!(read(dir.path()), Err(LockError::InvalidInstallPath(_))));
 	}
@@ -582,17 +584,18 @@ install_path = "C:"
 		};
 		write(dir.path(), &lock).unwrap();
 		let text = std::fs::read_to_string(dir.path().join("outpost.lock")).unwrap();
-		let expected = r#"version = 1
+		let expected = indoc! {r#"
+		version = 1
 
-[[tool]]
-backend = "github"
-api_url = ""
-full_name = "owner/repo"
-lane = ""
-requested = "2.20"
-tag_name = "2.20"
-install_path = "github_owner_repo/2.20"
-"#;
+		[[tool]]
+		backend = "github"
+		api_url = ""
+		full_name = "owner/repo"
+		lane = ""
+		requested = "2.20"
+		tag_name = "2.20"
+		install_path = "github_owner_repo/2.20"
+		"#};
 		assert_eq!(text, expected);
 	}
 
