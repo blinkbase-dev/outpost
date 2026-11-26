@@ -5,6 +5,7 @@ mod install;
 mod list;
 mod shim;
 mod tools;
+mod ui;
 
 use clap::{Parser, Subcommand};
 

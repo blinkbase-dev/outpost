@@ -13,6 +13,7 @@ use crate::tools::lock::{self, GithubLock, Identity, Lock, LockedTool};
 use crate::tools::resolution_cache::ResolutionCache;
 use crate::tools::tool_request::{self, RequestedTool, ToolRequestSet};
 use crate::tools::{shims, status};
+use crate::ui::progress;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestSet, ToolResolution);
@@ -47,9 +48,9 @@ pub(crate) fn install() -> Result<(), Error> {
 	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone(), data_dir))?;
 	// group resolutions by artifact so each tool downloads once
 	let resolutions = ToolResolutionSet::from_entries(resolutions, &lock)?;
-	// progress is not rendered yet
-	let progress: archive::ProgressFn = Arc::new(|_| {});
-	let (installed, install_err) = runtime.block_on(archive::install_parallel(resolutions, http, downloads_dir, tools_dir, progress))?;
+	let (bar, sink) = _progress_bar(&resolutions);
+	let (installed, install_err) = runtime.block_on(archive::install_parallel(resolutions, http, downloads_dir, tools_dir, sink))?;
+	drop(bar);
 	drop(runtime);
 	_update_lock_entries(&mut lock, &installed);
 	lock::write(data_dir, &lock)?;
@@ -144,6 +145,31 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir:
 		eprintln!("warning: {error}");
 	}
 	Ok((resolutions, failures))
+}
+
+fn _progress_bar(resolutions: &[ToolResolutionSet]) -> (Arc<progress::ProgressBar>, archive::ProgressFn) {
+	let labels = resolutions
+		.iter()
+		.map(|group| match (&group.requests[0].tool, &group.resolution) {
+			(RequestedTool::Github(request), ToolResolution::Github { tag_name, .. }) => format!("github:{} {tag_name}", request.full_name),
+		})
+		.collect::<Vec<_>>();
+	let bar = Arc::new(progress::ProgressBar::new(labels));
+	let sink: archive::ProgressFn = {
+		let bar = Arc::clone(&bar);
+		Arc::new(move |event| {
+			bar.record(progress::ProgressEvent {
+				index: event.index,
+				stage: match event.stage {
+					archive::Stage::Download => progress::Stage::Download,
+					archive::Stage::Extract => progress::Stage::Extract,
+				},
+				done: event.done,
+				total: event.total,
+			});
+		})
+	};
+	(bar, sink)
 }
 
 fn _update_lock_entries(lock: &mut Lock, installed: &[ToolResolutionSet]) {

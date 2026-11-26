@@ -35,6 +35,7 @@ path = "_tests/shim.rs"
 
 [dependencies]
 clap.workspace = true
+console.workspace = true
 flate2.workspace = true
 globset.workspace = true
 liblzma.workspace = true
