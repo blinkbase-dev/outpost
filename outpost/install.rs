@@ -7,7 +7,7 @@ use tokio::sync::Semaphore;
 
 use crate::backend::github::{GithubBackend, GithubOptions};
 use crate::config::{loader, locate, state};
-use crate::tools::archive::{self, ToolArchive, ToolResolution, ToolResolutionSet};
+use crate::tools::archive::{self, ToolResolution, ToolResolutionSet};
 use crate::tools::catalog::Catalog;
 use crate::tools::lock::{self, GithubLock, Identity, Lock, LockedTool};
 use crate::tools::resolution_cache::ResolutionCache;
@@ -17,7 +17,6 @@ use crate::tools::{shims, status};
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestSet, ToolResolution);
 type ResolutionFailure = (ToolRequestSet, Error);
-type DownloadEntry = (ToolResolutionSet, ToolArchive);
 
 pub(crate) fn install() -> Result<(), Error> {
 	let cwd = std::env::current_dir()?;
@@ -48,16 +47,17 @@ pub(crate) fn install() -> Result<(), Error> {
 	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone(), data_dir))?;
 	// group resolutions by artifact so each tool downloads once
 	let resolutions = ToolResolutionSet::from_entries(resolutions, &lock)?;
-	let (archives, download_err) = runtime.block_on(archive::download_parallel(resolutions, http, downloads_dir))?;
+	// progress is not rendered yet
+	let progress: archive::ProgressFn = Arc::new(|_| {});
+	let (installed, install_err) = runtime.block_on(archive::install_parallel(resolutions, http, downloads_dir, tools_dir, progress))?;
 	drop(runtime);
-	let (extractions, extract_err) = archive::extract_parallel(archives, tools_dir)?;
-	let groups = _update_lock_entries(&mut lock, &extractions);
+	_update_lock_entries(&mut lock, &installed);
 	lock::write(data_dir, &lock)?;
 	// refresh binaries and shims for the newly installed tools
 	state::register_config(&mut state, &paths.system, &paths.project);
 	let catalog = Catalog::new(&lock, &requests);
 	let installations = catalog.installations_by_path();
-	shims::index_installed_binaries(&mut state, tools_dir, installations, &groups)?;
+	shims::index_installed_binaries(&mut state, tools_dir, installations, &installed)?;
 	let index_err = shims::index_shims(&mut state, installations).err();
 	state::write(data_dir, &state, text.as_deref())?;
 	let generate_err: Option<Error> = paths
@@ -67,7 +67,7 @@ pub(crate) fn install() -> Result<(), Error> {
 		.and_then(|dir| shims::generate(&state, dir).map_err(Error::from))
 		.err();
 	// representative rows are appended after duplicate rows
-	for tool in &lock.tools[lock.tools.len() - groups.len()..] {
+	for tool in &lock.tools[lock.tools.len() - installed.len()..] {
 		match tool {
 			LockedTool::Github(lock) => println!("{} {} {}", lock.full_name, lock.tag_name, tools_dir.join(&lock.install_path).display()),
 		}
@@ -75,8 +75,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	let failures = resolve_err
 		.into_iter()
 		.map(|(request, error)| (vec![request], error))
-		.chain(download_err.into_iter().map(|(group, error)| (group.requests, error)))
-		.chain(extract_err.into_iter().map(|(group, error)| (group.requests, error)))
+		.chain(install_err.into_iter().map(|(group, error)| (group.requests, error)))
 		.collect::<Vec<_>>();
 	for (requests, error) in &failures {
 		for request in requests {
@@ -147,8 +146,7 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir:
 	Ok((resolutions, failures))
 }
 
-fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> Vec<&'a ToolResolutionSet> {
-	let groups: Vec<&ToolResolutionSet> = installed.iter().map(|(group, _)| group).collect();
+fn _update_lock_entries(lock: &mut Lock, installed: &[ToolResolutionSet]) {
 	let row = |group: &ToolResolutionSet, request: &ToolRequestSet| match (&request.tool, &group.resolution) {
 		(RequestedTool::Github(req), ToolResolution::Github { tag_name, .. }) => LockedTool::Github(GithubLock {
 			api_url: req.api_url.clone(),
@@ -161,12 +159,12 @@ fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> 
 	};
 	let mut rows = Vec::new();
 	// duplicate rows are appended before representative rows
-	for group in &groups {
+	for group in installed {
 		for request in group.requests.iter().skip(1) {
 			rows.push(row(group, request));
 		}
 	}
-	for group in &groups {
+	for group in installed {
 		if let Some(request) = group.requests.first() {
 			rows.push(row(group, request));
 		}
@@ -176,7 +174,6 @@ fn _update_lock_entries<'a>(lock: &mut Lock, installed: &'a [DownloadEntry]) -> 
 	// drop entries replaced by a new install before appending
 	lock.tools.retain(|existing| !incoming.contains(&existing.identity()));
 	lock.tools.extend(rows);
-	groups
 }
 
 #[cfg(test)]
@@ -208,17 +205,9 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		})];
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
-		let installed: Vec<DownloadEntry> = resolutions
-			.into_iter()
-			.map(|group| {
-				(group, ToolArchive::Github {
-					path: PathBuf::from("tool.tar.gz"),
-				})
-			})
-			.collect();
 		let mut lock = Lock::default();
-		let groups = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(groups.len(), 1);
+		_update_lock_entries(&mut lock, &resolutions);
+		assert_eq!(resolutions.len(), 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github(GithubLock {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
@@ -258,16 +247,8 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		})];
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
-		let installed: Vec<DownloadEntry> = resolutions
-			.into_iter()
-			.map(|group| {
-				(group, ToolArchive::Github {
-					path: PathBuf::from("tool.tar.gz"),
-				})
-			})
-			.collect();
-		let groups = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(groups.len(), 1);
+		_update_lock_entries(&mut lock, &resolutions);
+		assert_eq!(resolutions.len(), 1);
 		assert_eq!(lock.tools, vec![LockedTool::Github(GithubLock {
 			api_url: String::new(),
 			full_name: "owner/repo".to_owned(),
@@ -307,16 +288,8 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		})];
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
-		let installed: Vec<DownloadEntry> = resolutions
-			.into_iter()
-			.map(|group| {
-				(group, ToolArchive::Github {
-					path: PathBuf::from("tool.tar.gz"),
-				})
-			})
-			.collect();
-		let groups = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(groups.len(), 1);
+		_update_lock_entries(&mut lock, &resolutions);
+		assert_eq!(resolutions.len(), 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github(GithubLock {
 				api_url: String::new(),
@@ -369,16 +342,8 @@ mod tests {
 			format: ArchiveFormat::TarGz,
 		})];
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
-		let installed: Vec<DownloadEntry> = resolutions
-			.into_iter()
-			.map(|group| {
-				(group, ToolArchive::Github {
-					path: PathBuf::from("tool.tar.gz"),
-				})
-			})
-			.collect();
-		let groups = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(groups.len(), 1);
+		_update_lock_entries(&mut lock, &resolutions);
+		assert_eq!(resolutions.len(), 1);
 		assert_eq!(lock.tools, vec![
 			other,
 			LockedTool::Github(GithubLock {
@@ -429,17 +394,9 @@ mod tests {
 			})
 			.collect();
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
-		let installed: Vec<DownloadEntry> = resolutions
-			.into_iter()
-			.map(|group| {
-				(group, ToolArchive::Github {
-					path: PathBuf::from("tool.tar.gz"),
-				})
-			})
-			.collect();
 		let mut lock = Lock::default();
-		let groups = _update_lock_entries(&mut lock, &installed);
-		assert_eq!(groups.len(), 1);
+		_update_lock_entries(&mut lock, &resolutions);
+		assert_eq!(resolutions.len(), 1);
 		assert_eq!(lock.tools, vec![
 			LockedTool::Github(GithubLock {
 				api_url: String::new(),

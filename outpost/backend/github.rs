@@ -894,6 +894,11 @@ mod install_path_tests {
 	use super::*;
 
 	#[test]
+	fn maps_lane_tags_to_safe_install_paths() {
+		assert_eq!(install_path("", "google/magika", "cli/v1.0.0"), PathBuf::from("github_google_magika/cli_v1.0.0"));
+	}
+
+	#[test]
 	fn maps_dot_tags_to_safe_install_paths() {
 		for (tag, path) in [(".", "github_owner_repo/_"), ("..", "github_owner_repo/__"), ("", "github_owner_repo/_")] {
 			assert_eq!(install_path("", "owner/repo", tag), PathBuf::from(path), "{tag}");
