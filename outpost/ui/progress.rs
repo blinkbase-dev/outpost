@@ -39,8 +39,8 @@ impl ProgressBar {
 		if inner.last_draw.elapsed() < DRAW_INTERVAL {
 			return;
 		}
-		let (_, columns) = term.size();
-		let lines = draw(&inner.state, columns as usize);
+		let (height, columns) = term.size();
+		let lines = draw(&inner.state, columns as usize, height as usize);
 		inner.drawn_lines = Self::_write(term, &lines, inner.drawn_lines);
 		inner.last_draw = Instant::now();
 	}
@@ -67,9 +67,19 @@ impl Drop for ProgressBar {
 	}
 }
 
-fn draw(state: &State, width: usize) -> Vec<String> {
+fn draw(state: &State, width: usize, height: usize) -> Vec<String> {
 	let mut lines = vec![draw_header(&state.header())];
 	lines.extend(state.rows().map(|row| draw_row(row, width)));
+	// reserve one line so the final newline does not scroll the frame
+	let budget = height.saturating_sub(1);
+	if lines.len() > budget {
+		// reserve one line for the hidden row count
+		let visible = budget.saturating_sub(1);
+		// exclude the header line
+		let hidden = lines.len() - 1 - visible.saturating_sub(1);
+		lines.truncate(visible);
+		lines.push(format!("+{hidden} more"));
+	}
 	lines
 }
 
@@ -331,7 +341,7 @@ mod draw_tests {
 		// start tools 0 and 2 and leave tool 1 inactive
 		state.update(_event(0, Stage::Download, 0, total), t0);
 		state.update(_event(2, Stage::Download, 0, total), t0);
-		let lines = draw(&state, 80);
+		let lines = draw(&state, 80, 24);
 		assert_eq!(lines.len(), 3);
 		assert_eq!(lines[0], "0/3");
 		assert!(lines[1].starts_with("github:owner/zero v1"));
@@ -339,11 +349,31 @@ mod draw_tests {
 		assert!(lines.iter().all(|line| !line.contains("github:owner/one v1")));
 		// extraction completion removes tool 0 and increments done
 		state.update(_event(0, Stage::Extract, total, total), t0 + Duration::from_secs(1));
-		let lines = draw(&state, 80);
+		let lines = draw(&state, 80, 24);
 		assert_eq!(lines.len(), 2);
 		assert_eq!(lines[0], "1/3");
 		assert!(lines[1].starts_with("github:owner/two v1"));
 		assert!(lines.iter().all(|line| !line.contains("github:owner/zero v1")));
+	}
+
+	#[test]
+	fn draws_capped_rows_and_hidden_count() {
+		let mut state = State::new((0..5).map(|index| format!("github:owner/{index} v1")).collect());
+		let total = 1000;
+		let t0 = Instant::now();
+		// start all five tools
+		for index in 0..5 {
+			state.update(_event(index, Stage::Download, 0, total), t0);
+		}
+		// a height of five draws four lines: the header, two rows, and the count
+		let lines = draw(&state, 80, 5);
+		assert_eq!(lines.len(), 4);
+		assert_eq!(lines[0], "0/5");
+		assert!(lines[1].starts_with("github:owner/0 v1"));
+		assert!(lines[2].starts_with("github:owner/1 v1"));
+		assert_eq!(lines[3], "+3 more");
+		// three lines fit only the header and the hidden row count
+		assert_eq!(draw(&state, 80, 3), ["0/5", "+5 more"]);
 	}
 }
 
