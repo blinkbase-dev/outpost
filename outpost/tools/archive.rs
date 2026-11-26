@@ -357,6 +357,15 @@ mod install_parallel_tests {
 		}
 	}
 
+	fn _progress_events() -> (ProgressFn, Arc<Mutex<Vec<Progress>>>) {
+		let events = Arc::new(Mutex::new(Vec::new()));
+		let progress: ProgressFn = {
+			let events = Arc::clone(&events);
+			Arc::new(move |event| events.lock().unwrap().push(event))
+		};
+		(progress, events)
+	}
+
 	#[tokio::test]
 	async fn extracts_before_all_downloads_finish() {
 		let server = MockServer::start().await;
@@ -385,11 +394,7 @@ mod install_parallel_tests {
 		let tools = dir.path().join("tools");
 		std::fs::create_dir_all(&downloads).unwrap();
 		std::fs::create_dir_all(&tools).unwrap();
-		let events = Arc::new(Mutex::new(Vec::new()));
-		let progress: ProgressFn = {
-			let events = Arc::clone(&events);
-			Arc::new(move |event| events.lock().unwrap().push(event))
-		};
+		let (progress, events) = _progress_events();
 		let (installed, failures) = install_parallel(groups, http(), &downloads, &tools, progress).await.unwrap();
 		assert!(failures.is_empty());
 		assert_eq!(installed.len(), 2);
@@ -497,6 +502,71 @@ mod install_parallel_tests {
 		let failed: Vec<&Path> = failures.iter().map(|(group, _)| group.install_path.as_path()).collect();
 		assert!(failed.contains(&Path::new("github_owner_missing/1.0.0")));
 		assert!(failed.contains(&Path::new("github_owner_corrupt/1.0.0")));
+	}
+
+	#[tokio::test]
+	async fn reports_progress_per_tool() {
+		let server = MockServer::start().await;
+		let body = tar_gz(&[("tool", b"binary")]);
+		let first_url = format!("{}/first.tar.gz", server.uri());
+		let second_url = format!("{}/second.tar.gz", server.uri());
+		Mock::given(method("GET"))
+			.and(path("/first.tar.gz"))
+			.respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+			.mount(&server)
+			.await;
+		Mock::given(method("GET"))
+			.and(path("/second.tar.gz"))
+			.respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+			.mount(&server)
+			.await;
+		#[rustfmt::skip]
+		let entries = vec![
+			(_request("owner/first", "1.0.0"), _resolution("v1.0.0", first_url, body.len() as u64, ArchiveFormat::TarGz)),
+			(_request("owner/second", "1.0.0"), _resolution("v1.0.0", second_url, body.len() as u64, ArchiveFormat::TarGz)),
+		];
+		let groups = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
+		let dir = tempfile::tempdir().unwrap();
+		let downloads = dir.path().join("downloads");
+		let tools = dir.path().join("tools");
+		std::fs::create_dir_all(&downloads).unwrap();
+		std::fs::create_dir_all(&tools).unwrap();
+		let (progress, events) = _progress_events();
+		let (installed, failures) = install_parallel(groups, http(), &downloads, &tools, progress).await.unwrap();
+		assert!(failures.is_empty());
+		assert_eq!(installed.len(), 2);
+		assert_eq!(std::fs::read(tools.join("github_owner_first/1.0.0/tool")).unwrap(), b"binary");
+		assert_eq!(std::fs::read(tools.join("github_owner_second/1.0.0/tool")).unwrap(), b"binary");
+		let events = events.lock().unwrap();
+		for index in 0..2 {
+			let download: Vec<_> = events
+				.iter()
+				.filter(|event| event.index == index && matches!(&event.stage, Stage::Download))
+				.collect();
+			let extract: Vec<_> = events
+				.iter()
+				.filter(|event| event.index == index && matches!(&event.stage, Stage::Extract))
+				.collect();
+			let total = download.first().expect("missing download event").total;
+			assert!(total > 0);
+			assert!(download.iter().any(|event| event.done == 0), "tool {index} has no download start");
+			assert!(download.iter().any(|event| event.done == total), "tool {index} has no download finish");
+			assert!(extract.iter().any(|event| event.done == 0), "tool {index} has no extraction start");
+			assert!(extract.iter().any(|event| event.done == total), "tool {index} has no extraction finish");
+			#[rustfmt::skip]
+			assert!(download.windows(2).all(|pair| pair[0].done <= pair[1].done), "tool {index} download progress went backward");
+			#[rustfmt::skip]
+			assert!(extract.windows(2).all(|pair| pair[0].done <= pair[1].done), "tool {index} extraction progress went backward");
+			let last_download = events
+				.iter()
+				.rposition(|event| event.index == index && matches!(&event.stage, Stage::Download))
+				.unwrap();
+			let first_extract = events
+				.iter()
+				.position(|event| event.index == index && matches!(&event.stage, Stage::Extract))
+				.unwrap();
+			assert!(last_download < first_extract, "tool {index} extracted before its download finished");
+		}
 	}
 }
 
