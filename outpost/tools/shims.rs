@@ -28,7 +28,7 @@ use unix_import::*;
 use windows_import::*;
 
 pub(crate) fn index_installed_binaries(
-	state: &mut State, tools_dir: &Path, installations: &Installations<'_>, groups: &[&ToolResolutionSet],
+	state: &mut State, tools_dir: &Path, installations: &Installations<'_>, groups: &[ToolResolutionSet],
 ) -> Result<(), ShimError> {
 	let mut indexed = candidates::find_binaries_by_tool(tools_dir, groups.iter().map(|group| group.install_path.as_path()))?;
 	for (install_path, binaries) in &mut indexed {
