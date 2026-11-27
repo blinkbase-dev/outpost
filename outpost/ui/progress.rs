@@ -193,7 +193,7 @@ struct Header {
 //
 // 108+ columns: label, stage, 20 cell bar, done/total, speed, eta, 80 fixed cells
 //  96+ columns: label, stage, 10 cell bar, done/total, speed, eta, 70 fixed cells
-//  84+ columns: label, stage, done/total, speed, eta, 57 fixed cells
+//  80+ columns: label, stage, done/total, speed, eta, 57 fixed cells
 //  60+ columns: label, stage, done/total, 36 fixed cells
 //  60< columns: label, stage, 13 fixed cells
 fn draw_row(row: &Row, width: usize) -> String {
@@ -212,7 +212,7 @@ fn draw_row(row: &Row, width: usize) -> String {
 	let eta = _format_eta(row.total.saturating_sub(row.done) as f64 / row.rate);
 	let tail = if width >= 96 {
 		format!("  {stage:<11}  {bar} {amount:>21}  {speed:>12}  {eta:>5}")
-	} else if width >= 84 {
+	} else if width >= 80 {
 		format!("  {stage:<11}  {amount:>21}  {speed:>12}  {eta:>5}")
 	} else if width >= 60 {
 		format!("  {stage:<11}  {amount:>21}")
@@ -262,7 +262,7 @@ fn _format_eta(seconds: f64) -> String {
 	format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
-fn _truncate(value: &str, width: usize) -> String {
+pub(super) fn _truncate(value: &str, width: usize) -> String {
 	if value.chars().count() <= width {
 		return value.to_owned();
 	}
@@ -315,8 +315,8 @@ mod draw_tests {
 			(107, "github:owner/repo v1.2.3"),
 			(96, "github:owner/repo v1.2.3"),
 			(95, "github:owner/repo v1.2.3"),
-			(84, "github:owner/repo v1.2.3"),
-			(83, "github:owner/repo v1.2.3"),
+			(80, "github:owner/repo v1.2…"),
+			(79, "github:owner/repo v1.2.3"),
 			(60, "github:owner/repo v1.2.3"),
 			(59, "github:owner/repo v1.2.3"),
 			(36, "github:owner/repo v1.2…"),

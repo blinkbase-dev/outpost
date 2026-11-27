@@ -10,10 +10,10 @@ use crate::config::{loader, locate, state};
 use crate::tools::archive::{self, ToolResolution, ToolResolutionSet};
 use crate::tools::catalog::Catalog;
 use crate::tools::lock::{self, GithubLock, Identity, Lock, LockedTool};
-use crate::tools::resolution_cache::ResolutionCache;
+use crate::tools::resolution_cache::{ResolutionCache, ResolutionCacheError};
 use crate::tools::tool_request::{self, RequestedTool, ToolRequestSet};
 use crate::tools::{shims, status};
-use crate::ui::progress;
+use crate::ui::{progress, progress_list};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type ResolutionEntry = (ToolRequestSet, ToolResolution);
@@ -45,7 +45,13 @@ pub(crate) fn install() -> Result<(), Error> {
 	}
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 	let http = Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build()?;
-	let (resolutions, resolve_err) = runtime.block_on(resolve_parallel(missing, http.clone(), data_dir))?;
+	let (list, sink) = _progress_list(&missing);
+	let (resolutions, resolve_err, flush_err) = runtime.block_on(resolve_parallel(missing, http.clone(), data_dir, sink))?;
+	drop(list);
+	// print after the progress clears so a redraw cannot erase the warning
+	if let Some(error) = flush_err {
+		eprintln!("warning: {error}");
+	}
 	// group resolutions by artifact so each tool downloads once
 	let resolutions = ToolResolutionSet::from_entries(resolutions, &lock)?;
 	let (bar, sink) = _progress_bar(&resolutions);
@@ -103,22 +109,43 @@ pub(crate) fn install() -> Result<(), Error> {
 	message.map_or(Ok(()), |message| Err(message.into()))
 }
 
-async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir: &Path) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>), Error> {
+async fn resolve_parallel(
+	requests: Vec<ToolRequestSet>, http: Client, data_dir: &Path, progress: ResolveProgressFn,
+) -> Result<(Vec<ResolutionEntry>, Vec<ResolutionFailure>, Option<ResolutionCacheError>), Error> {
 	let mut resolutions = Vec::with_capacity(requests.len());
 	let mut cache = ResolutionCache::load(data_dir, &requests);
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(requests.len());
 	let github_options = Arc::new(GithubOptions::from_process());
-	for request in requests {
+	for (index, request) in requests.into_iter().enumerate() {
 		if let Some(resolution) = cache.get(&request.tool) {
+			// a cache hit starts and finishes at once
+			progress(ResolveProgress {
+				index,
+				stage: ResolveStage::Resolve,
+				done: false,
+			});
+			progress(ResolveProgress {
+				index,
+				stage: ResolveStage::Resolve,
+				done: true,
+			});
 			resolutions.push((request, resolution));
 			continue;
 		}
 		let semaphore = Arc::clone(&semaphore);
 		let http = http.clone();
 		let github_options = Arc::clone(&github_options);
+		let progress = Arc::clone(&progress);
 		handles.push(tokio::spawn(async move {
-			let result = match semaphore.acquire_owned().await {
+			let permit = semaphore.acquire_owned().await;
+			// start on either outcome so every finish has a start
+			progress(ResolveProgress {
+				index,
+				stage: ResolveStage::Resolve,
+				done: false,
+			});
+			let result = match permit {
 				Ok(_permit) => match &request.tool {
 					RequestedTool::Github(req) => {
 						let backend = GithubBackend::new(http, github_options.as_ref().clone().with_api_url(&req.api_url));
@@ -127,6 +154,11 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir:
 				},
 				Err(error) => Err(error.into()),
 			};
+			progress(ResolveProgress {
+				index,
+				stage: ResolveStage::Resolve,
+				done: true,
+			});
 			(request, result)
 		}));
 	}
@@ -141,10 +173,42 @@ async fn resolve_parallel(requests: Vec<ToolRequestSet>, http: Client, data_dir:
 			Err(error) => failures.push((request, error)),
 		}
 	}
-	if let Err(error) = cache.flush() {
-		eprintln!("warning: {error}");
-	}
-	Ok((resolutions, failures))
+	Ok((resolutions, failures, cache.flush().err()))
+}
+
+pub(crate) type ResolveProgressFn = Arc<dyn Fn(ResolveProgress) + Send + Sync>;
+
+pub(crate) struct ResolveProgress {
+	pub(crate) index: usize,
+	pub(crate) stage: ResolveStage,
+	pub(crate) done: bool,
+}
+
+pub(crate) enum ResolveStage {
+	Resolve,
+}
+
+fn _progress_list(requests: &[ToolRequestSet]) -> (Arc<progress_list::ProgressList>, ResolveProgressFn) {
+	let labels = requests
+		.iter()
+		.map(|request| match &request.tool {
+			RequestedTool::Github(request) => format!("github:{} {}{}", request.full_name, request.lane, request.version),
+		})
+		.collect::<Vec<_>>();
+	let list = Arc::new(progress_list::ProgressList::new(labels));
+	let sink: ResolveProgressFn = {
+		let list = Arc::clone(&list);
+		Arc::new(move |event| {
+			list.record(progress_list::ProgressEvent {
+				index: event.index,
+				stage: match event.stage {
+					ResolveStage::Resolve => progress_list::Stage::Resolve,
+				},
+				done: event.done,
+			});
+		})
+	};
+	(list, sink)
 }
 
 fn _progress_bar(resolutions: &[ToolResolutionSet]) -> (Arc<progress::ProgressBar>, archive::ProgressFn) {
@@ -200,6 +264,98 @@ fn _update_lock_entries(lock: &mut Lock, installed: &[ToolResolutionSet]) {
 	// drop entries replaced by a new install before appending
 	lock.tools.retain(|existing| !incoming.contains(&existing.identity()));
 	lock.tools.extend(rows);
+}
+
+#[cfg(test)]
+mod resolve_tests {
+	use std::sync::Mutex;
+
+	use serde_json::json;
+	use wiremock::matchers::{method, path};
+	use wiremock::{Mock, MockServer, ResponseTemplate};
+
+	use super::*;
+	use crate::backend::_backend::ArchiveFormat;
+	use crate::tools::tool_request::GithubRequest;
+	use crate::tools::version::Version;
+
+	fn http() -> Client {
+		Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build().unwrap()
+	}
+
+	fn _request(api_url: &str, full_name: &str) -> ToolRequestSet {
+		ToolRequestSet {
+			origins: Vec::new(),
+			tool: RequestedTool::Github(GithubRequest {
+				api_url: api_url.to_owned(),
+				full_name: full_name.to_owned(),
+				lane: String::new(),
+				version: Version::parse("latest"),
+				exposed: None,
+				rename_shims: None,
+			}),
+		}
+	}
+
+	fn _progress_events() -> (ResolveProgressFn, Arc<Mutex<Vec<ResolveProgress>>>) {
+		let events = Arc::new(Mutex::new(Vec::new()));
+		let progress: ResolveProgressFn = {
+			let events = Arc::clone(&events);
+			Arc::new(move |event| events.lock().unwrap().push(event))
+		};
+		(progress, events)
+	}
+
+	#[tokio::test]
+	async fn reports_start_then_finish_for_every_request() {
+		let server = MockServer::start().await;
+		let api_url = server.uri();
+		let libc = if cfg!(windows) { "msvc" } else { "gnu" };
+		let asset = format!("tool-{}-{}-{libc}.tar.gz", std::env::consts::OS, std::env::consts::ARCH);
+		Mock::given(method("GET"))
+			.and(path("/repos/owner/fresh/releases/latest"))
+			.respond_with(ResponseTemplate::new(200).set_body_json(json!({
+				"tag_name": "v1.0.0",
+				"draft": false,
+				"prerelease": false,
+				"assets": [{
+					"name": asset,
+					"browser_download_url": format!("{api_url}/download/{asset}"),
+					"size": 1,
+				}],
+			})))
+			.mount(&server)
+			.await;
+		// owner/missing has no mock, so the server answers 404
+		let requests = vec![
+			_request(&api_url, "owner/cached"),
+			_request(&api_url, "owner/fresh"),
+			_request(&api_url, "owner/missing"),
+		];
+		let data_dir = tempfile::tempdir().unwrap();
+		// seed the cache so owner/cached never reaches the server
+		let mut cache = ResolutionCache::load(data_dir.path(), &requests[..1]);
+		cache.put(&requests[0].tool, &ToolResolution::Github {
+			tag_name: "v1.0.0".to_owned(),
+			url: String::new(),
+			size: 0,
+			format: ArchiveFormat::TarGz,
+		});
+		cache.flush().unwrap();
+		let (progress, events) = _progress_events();
+		let (resolutions, failures, flush_err) = resolve_parallel(requests, http(), data_dir.path(), progress).await.unwrap();
+		assert_eq!(resolutions.len(), 2);
+		assert_eq!(failures.len(), 1);
+		assert!(flush_err.is_none());
+		let events = events.lock().unwrap().iter().map(|event| (event.index, event.done)).collect::<Vec<_>>();
+		// the cache hit reports before any task is spawned
+		assert_eq!(events[..2], [(0, false), (0, true)]);
+		// every request, including the failed one, starts once and then finishes once
+		for index in 0..3 {
+			let own = events.iter().filter(|(event_index, _)| *event_index == index).copied().collect::<Vec<_>>();
+			assert_eq!(own, [(index, false), (index, true)], "index {index}");
+		}
+	}
 }
 
 #[cfg(test)]
