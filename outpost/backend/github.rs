@@ -10,8 +10,8 @@ use sha2::{Digest, Sha256};
 
 use super::_asset_selection::select;
 use super::_backend::{ArchiveFormat, PATH_SEGMENT};
-use crate::tools::archive::ToolResolution;
-use crate::tools::tool_request::RequestedTool;
+use crate::tools::archive::{GithubResolution, ToolResolution};
+use crate::tools::tool_request::GithubRequest;
 use crate::tools::version::{Prefix, Version, split_lane, tag_version};
 
 pub(crate) struct GithubBackend {
@@ -25,16 +25,16 @@ impl GithubBackend {
 		}
 	}
 
-	pub(crate) async fn resolve(&self, request: &RequestedTool) -> Result<ToolResolution, GithubError> {
-		let RequestedTool::Github(req) = request;
+	pub(crate) async fn resolve(&self, req: &GithubRequest) -> Result<ToolResolution, GithubError> {
 		let release = self._select_release(&req.full_name, &req.lane, &req.version).await?;
-		let (url, size, format) = self._select_asset(&req.full_name, &release)?;
-		Ok(ToolResolution::Github {
+		let (url, size, format, sha256) = self._select_asset(&req.full_name, &release)?;
+		Ok(ToolResolution::Github(GithubResolution {
 			tag_name: release.tag_name,
 			url,
 			size,
 			format,
-		})
+			sha256,
+		}))
 	}
 
 	async fn _select_release(&self, full_name: &str, lane: &str, version: &Version) -> Result<Release, GithubError> {
@@ -120,14 +120,21 @@ impl GithubBackend {
 		}
 	}
 
-	fn _select_asset(&self, full_name: &str, release: &Release) -> Result<(String, u64, ArchiveFormat), GithubError> {
+	fn _select_asset(&self, full_name: &str, release: &Release) -> Result<(String, u64, ArchiveFormat, String), GithubError> {
 		let (asset, format) = select(release.assets.iter().map(|asset| asset.name.as_str()))
 			.and_then(|(index, _, format)| release.assets.get(index).map(|asset| (asset, format)))
 			.ok_or_else(|| GithubError::NoAsset {
 				full_name: full_name.to_owned(),
 				tag: release.tag_name.clone(),
 			})?;
-		Ok((asset.browser_download_url.clone(), asset.size, format))
+		// older github servers omit the digest and newer ones write 'sha256:<hex>'
+		let digest = asset
+			.digest
+			.as_deref()
+			.and_then(|value| value.strip_prefix("sha256:"))
+			.unwrap_or_default()
+			.to_owned();
+		Ok((asset.browser_download_url.clone(), asset.size, format, digest))
 	}
 }
 
@@ -182,7 +189,7 @@ pub(crate) fn install_path(api_url: &str, full_name: &str, tag_name: &str) -> Pa
 		format!("_{hash}")
 	};
 	let full_name = full_name.to_ascii_lowercase();
-	PathBuf::from(format!("github_{}{}/{}", full_name.replace(['.', '/', '-'], "_"), suffix, _tag_component(tag_name)))
+	PathBuf::from(format!("github_{}{}/{}", full_name.replace(['.', '/', '-'], "_"), suffix, tag_component(tag_name)))
 }
 
 pub(crate) fn resolution_cache_path(data_dir: &Path, api_url: &str, full_name: &str) -> PathBuf {
@@ -191,7 +198,7 @@ pub(crate) fn resolution_cache_path(data_dir: &Path, api_url: &str, full_name: &
 	data_dir.join("resolutions").join(prefix).with_extension("toml")
 }
 
-fn _tag_component(tag_name: &str) -> String {
+pub(crate) fn tag_component(tag_name: &str) -> String {
 	let tag = tag_name.strip_prefix('v').filter(|rest| !rest.is_empty()).unwrap_or(tag_name).to_lowercase();
 	let tag = regex!(r"[^a-z0-9_.]").replace_all(&tag, "_").into_owned();
 	// '.' and '..' would resolve outside the version directory
@@ -217,6 +224,7 @@ struct Asset {
 	name: String,
 	browser_download_url: String,
 	size: u64,
+	digest: Option<String>,
 }
 
 #[derive(Clone)]

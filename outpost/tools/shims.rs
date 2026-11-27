@@ -9,7 +9,7 @@ use super::archive::ToolResolutionSet;
 use super::catalog::{InstallationItem, Installations};
 use super::lock::LockedTool;
 use super::tool_request::{RequestedTool, ToolRequest};
-use crate::config::state::{ShimEntry, State, StateError};
+use crate::config::state::{GithubShim, NodeShim, ShimEntry, State, StateError};
 use crate::tools::candidates;
 
 #[cfg(windows)]
@@ -67,6 +67,7 @@ fn _exposed_patterns<'a>(requests: impl IntoIterator<Item = &'a ToolRequest>) ->
 				specified = true;
 				patterns.extend(exposed.iter().map(|pattern| (request, pattern.as_str())));
 			}
+			RequestedTool::Node(_) => {}
 		}
 	}
 	specified.then_some(patterns)
@@ -250,14 +251,21 @@ fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<Shim
 			for item in items {
 				match item.locked {
 					LockedTool::Github(lock) => {
-						shims.entry(name.clone()).or_default().push(ShimEntry::Github {
+						shims.entry(name.clone()).or_default().push(ShimEntry::Github(GithubShim {
 							api_url: lock.api_url.clone(),
 							full_name: lock.full_name.clone(),
 							lane: lock.lane.clone(),
 							requested: lock.requested.clone(),
 							install_path: install_path.to_path_buf(),
 							binary: binary.to_path_buf(),
-						});
+						}));
+					}
+					LockedTool::Node(lock) => {
+						shims.entry(name.clone()).or_default().push(ShimEntry::Node(NodeShim {
+							requested: lock.requested.clone(),
+							install_path: install_path.to_path_buf(),
+							binary: binary.to_path_buf(),
+						}));
 					}
 				}
 			}
@@ -272,9 +280,10 @@ fn _index_shims(state: &State, installations: &Installations<'_>) -> Result<Shim
 			tools.insert(entry.identity_key());
 		}
 		if tools.len() > 1 || conflicts.contains_key(name) {
-			conflicts.entry(name.clone()).or_default().extend(entries.iter().map(|entry| match entry {
-				ShimEntry::Github { install_path, binary, .. } => install_path.join(binary),
-			}));
+			conflicts
+				.entry(name.clone())
+				.or_default()
+				.extend(entries.iter().map(|entry| entry.install_path().join(entry.binary())));
 		}
 	}
 	let conflicts: Vec<ShimConflict> = conflicts.into_iter().map(|(name, paths)| ShimConflict { name, paths }).collect();
@@ -292,6 +301,7 @@ fn _compile_rename_shims(items: &[InstallationItem<'_>]) -> Result<Option<(GlobS
 		for request in &item.requests {
 			let rename_shims = match &request.tool {
 				RequestedTool::Github(req) => req.rename_shims.as_ref(),
+				RequestedTool::Node(_) => None,
 			};
 			let Some(rename_shims) = rename_shims else {
 				continue;

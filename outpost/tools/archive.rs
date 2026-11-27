@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
+use sha2::digest::DynDigest;
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
@@ -32,9 +34,7 @@ pub(crate) async fn install_parallel(
 		let downloads_dir = downloads_dir.to_path_buf();
 		let tools_dir = tools_dir.to_path_buf();
 		handles.push(tokio::spawn(async move {
-			let total = match &res.resolution {
-				ToolResolution::Github { size, .. } => *size,
-			};
+			let total = res.resolution.size();
 			let download_progress = Arc::clone(&progress);
 			let on_download = move |written: u64| {
 				download_progress(Progress {
@@ -45,13 +45,27 @@ pub(crate) async fn install_parallel(
 				});
 			};
 			// download on the async runtime
+			let name = res.install_path.to_string_lossy().replace(['/', '\\'], "_");
 			let path = match semaphore.acquire_owned().await {
-				Ok(_permit) => match &res.resolution {
-					ToolResolution::Github { url, size, .. } => {
-						let name = res.install_path.to_string_lossy().replace(['/', '\\'], "_");
-						download(&http, url, &downloads_dir, &name, *size, &on_download).await
+				Ok(_permit) => {
+					let (url, size, checksum) = (res.resolution.url(), res.resolution.size(), res.resolution.checksum());
+					if checksum.is_empty() {
+						download(&http, url, &downloads_dir, &name, size, None, &on_download).await
+					} else {
+						let mut hasher = Sha256::new();
+						match download(&http, url, &downloads_dir, &name, size, Some(&mut hasher), &on_download).await {
+							Ok(path) => {
+								let digest: String = hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
+								if digest.eq_ignore_ascii_case(checksum) {
+									Ok(path)
+								} else {
+									Err(format!("sha256 mismatch for {}: expected {checksum}, got {digest}", path.display()).into())
+								}
+							}
+							Err(error) => Err(error),
+						}
 					}
-				},
+				}
 				Err(error) => Err(error.into()),
 			};
 			// the download slot is free before extraction starts
@@ -61,9 +75,7 @@ pub(crate) async fn install_parallel(
 			};
 			// extract on the thread pool
 			let (sender, receiver) = tokio::sync::oneshot::channel();
-			let (format, install_path) = match &res.resolution {
-				ToolResolution::Github { format, .. } => (format.clone(), res.install_path.clone()),
-			};
+			let (format, install_path) = (res.resolution.format().clone(), res.install_path.clone());
 			let on_extract = move |read: u64| {
 				progress(Progress {
 					index,
@@ -99,7 +111,9 @@ pub(crate) async fn install_parallel(
 	Ok((installed, failures))
 }
 
-async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64, progress: &(dyn Fn(u64) + Sync)) -> Result<PathBuf, Error> {
+async fn download(
+	http: &Client, url: &str, dir: &Path, name: &str, size: u64, mut hasher: Option<&mut (dyn DynDigest + Send)>, progress: &(dyn Fn(u64) + Sync),
+) -> Result<PathBuf, Error> {
 	let path = dir.join(name);
 	let part = dir.join(format!("{name}.part"));
 	let mut response = http.get(url).send().await?.error_for_status()?;
@@ -109,6 +123,9 @@ async fn download(http: &Client, url: &str, dir: &Path, name: &str, size: u64, p
 	while let Some(chunk) = response.chunk().await? {
 		written += chunk.len() as u64;
 		file.write_all(&chunk).await?;
+		if let Some(hasher) = &mut hasher {
+			hasher.update(&chunk);
+		}
 		if last.elapsed() >= PROGRESS_INTERVAL {
 			progress(written);
 			last = Instant::now();
@@ -217,12 +234,61 @@ impl<R: Seek> Seek for ProgressReader<'_, R> {
 }
 
 pub(crate) enum ToolResolution {
-	Github {
-		tag_name: String,
-		url: String,
-		size: u64,
-		format: ArchiveFormat,
-	},
+	Github(GithubResolution),
+	Node(NodeResolution),
+}
+
+impl ToolResolution {
+	pub(crate) fn version(&self) -> &str {
+		match self {
+			Self::Github(resolution) => &resolution.tag_name,
+			Self::Node(resolution) => &resolution.version,
+		}
+	}
+
+	pub(crate) fn url(&self) -> &str {
+		match self {
+			Self::Github(resolution) => &resolution.url,
+			Self::Node(resolution) => &resolution.url,
+		}
+	}
+
+	pub(crate) fn size(&self) -> u64 {
+		match self {
+			Self::Github(resolution) => resolution.size,
+			Self::Node(resolution) => resolution.size,
+		}
+	}
+
+	pub(crate) fn format(&self) -> &ArchiveFormat {
+		match self {
+			Self::Github(resolution) => &resolution.format,
+			Self::Node(resolution) => &resolution.format,
+		}
+	}
+
+	pub(crate) fn checksum(&self) -> &str {
+		match self {
+			Self::Github(resolution) => &resolution.sha256,
+			Self::Node(resolution) => &resolution.sha256,
+		}
+	}
+}
+
+pub(crate) struct GithubResolution {
+	pub(crate) tag_name: String,
+	pub(crate) url: String,
+	pub(crate) size: u64,
+	pub(crate) format: ArchiveFormat,
+	pub(crate) sha256: String, // empty when the server published no digest
+}
+
+pub(crate) struct NodeResolution {
+	pub(crate) version: String,
+	pub(crate) url: String,
+	pub(crate) size: u64,
+	pub(crate) format: ArchiveFormat,
+	pub(crate) sha256: String,
 }
 
 pub(crate) struct ToolResolutionSet {
@@ -240,9 +306,7 @@ impl ToolResolutionSet {
 			locked_by_install_path.entry(locked.install_path()).or_default().push(locked);
 		}
 		for (request_set, resolution) in entries {
-			let install_path = match &resolution {
-				ToolResolution::Github { tag_name, .. } => request_set.tool.install_path(tag_name),
-			};
+			let install_path = request_set.tool.install_path(resolution.version());
 			// reject paths owned by another tool from an earlier batch
 			// 'owner/repo.js' and 'owner/repo-js' sanitize to github_owner_repo_js
 			if let Some(owners) = locked_by_install_path.get(install_path.as_path()) {
@@ -252,14 +316,11 @@ impl ToolResolutionSet {
 						let (path, incoming, existing) = (install_path.display(), request_set.tool.identity(), locked.identity());
 						return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
 					}
-					match (&resolution, locked) {
-						(ToolResolution::Github { tag_name, .. }, LockedTool::Github(lock)) => {
-							if lock.tag_name.as_str() != tag_name.as_str() {
-								let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
-								let path = install_path.display();
-								return Err(format!("install path '{path}' is shared by tags '{tag_name}' and '{}'{sources}", lock.tag_name).into());
-							}
-						}
+					let (tag_name, locked_tag) = (resolution.version(), locked.version());
+					if locked_tag != tag_name {
+						let sources: String = request_set.origins.iter().map(|origin| format!("\n  from {}", origin.display())).collect();
+						let path = install_path.display();
+						return Err(format!("install path '{path}' is shared by tags '{tag_name}' and '{locked_tag}'{sources}").into());
 					}
 				}
 			}
@@ -272,14 +333,11 @@ impl ToolResolutionSet {
 					return Err(format!("install path '{path}' is shared by '{existing}' and '{incoming}'{sources}").into());
 				}
 				// reject different tags that normalize to the same install path
-				match (&resolution, &groups[index].resolution) {
-					(ToolResolution::Github { tag_name, .. }, ToolResolution::Github { tag_name: installed_tag, .. }) => {
-						if installed_tag.as_str() != tag_name.as_str() {
-							let sources = groups[index]._sources(&request_set);
-							let path = install_path.display();
-							return Err(format!("install path '{path}' is shared by tags '{tag_name}' and '{installed_tag}'{sources}").into());
-						}
-					}
+				let (tag_name, installed_tag) = (resolution.version(), groups[index].resolution.version());
+				if installed_tag != tag_name {
+					let sources = groups[index]._sources(&request_set);
+					let path = install_path.display();
+					return Err(format!("install path '{path}' is shared by tags '{tag_name}' and '{installed_tag}'{sources}").into());
 				}
 				// another request for this tool that resolved to the same tag
 				groups[index].requests.push(request_set);
@@ -354,12 +412,13 @@ mod install_parallel_tests {
 	}
 
 	fn _resolution(tag_name: &str, url: String, size: u64, format: ArchiveFormat) -> ToolResolution {
-		ToolResolution::Github {
+		ToolResolution::Github(GithubResolution {
 			tag_name: tag_name.to_owned(),
 			url,
 			size,
 			format,
-		}
+			sha256: String::new(),
+		})
 	}
 
 	fn _progress_events() -> (ProgressFn, Arc<Mutex<Vec<Progress>>>) {
@@ -603,7 +662,7 @@ mod download_tests {
 	async fn downloads_and_renames_part_file() {
 		let server = serve(b"payload".to_vec(), 200).await;
 		let dir = tempfile::tempdir().unwrap();
-		let path = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 7, &|_| {})
+		let path = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 7, None, &|_| {})
 			.await
 			.unwrap();
 		assert_eq!(std::fs::read(&path).unwrap(), b"payload");
@@ -616,7 +675,7 @@ mod download_tests {
 		let size = body.len() as u64;
 		let server = serve(body, 200).await;
 		let dir = tempfile::tempdir().unwrap();
-		let path = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", size, &|_| {})
+		let path = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", size, None, &|_| {})
 			.await
 			.unwrap();
 		assert_eq!(std::fs::read(&path).unwrap().len() as u64, size);
@@ -626,7 +685,7 @@ mod download_tests {
 	async fn rejects_size_mismatch() {
 		let server = serve(b"payload".to_vec(), 200).await;
 		let dir = tempfile::tempdir().unwrap();
-		let error = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 1, &|_| {})
+		let error = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 1, None, &|_| {})
 			.await
 			.unwrap_err();
 		assert!(error.to_string().contains("size mismatch"), "{error}");
@@ -638,7 +697,7 @@ mod download_tests {
 	async fn propagates_http_status() {
 		let server = serve(Vec::new(), 404).await;
 		let dir = tempfile::tempdir().unwrap();
-		let error = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 7, &|_| {})
+		let error = download(&http(), &format!("{}/asset.tar.gz", server.uri()), dir.path(), "asset.tar.gz", 7, None, &|_| {})
 			.await
 			.is_err();
 		assert!(error);
@@ -826,18 +885,26 @@ mod resolution_group_tests {
 		};
 		let groups = ToolResolutionSet::from_entries(
 			vec![
-				(latest, ToolResolution::Github {
-					tag_name: "v1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-				}),
-				(exact, ToolResolution::Github {
-					tag_name: "v1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-				}),
+				(
+					latest,
+					ToolResolution::Github(GithubResolution {
+						tag_name: "v1.0.0".to_owned(),
+						url: String::new(),
+						size: 0,
+						format: ArchiveFormat::TarGz,
+						sha256: String::new(),
+					}),
+				),
+				(
+					exact,
+					ToolResolution::Github(GithubResolution {
+						tag_name: "v1.0.0".to_owned(),
+						url: String::new(),
+						size: 0,
+						format: ArchiveFormat::TarGz,
+						sha256: String::new(),
+					}),
+				),
 			],
 			&Lock::default(),
 		)
@@ -872,12 +939,16 @@ mod resolution_group_tests {
 			}),
 		};
 		let error = ToolResolutionSet::from_entries(
-			vec![(request, ToolResolution::Github {
-				tag_name: "v1.0.0".to_owned(),
-				url: String::new(),
-				size: 0,
-				format: ArchiveFormat::TarGz,
-			})],
+			vec![(
+				request,
+				ToolResolution::Github(GithubResolution {
+					tag_name: "v1.0.0".to_owned(),
+					url: String::new(),
+					size: 0,
+					format: ArchiveFormat::TarGz,
+					sha256: String::new(),
+				}),
+			)],
 			&lock,
 		)
 		.err()
@@ -912,12 +983,16 @@ mod resolution_group_tests {
 			}),
 		};
 		let error = ToolResolutionSet::from_entries(
-			vec![(request, ToolResolution::Github {
-				tag_name: "1.0.0".to_owned(),
-				url: String::new(),
-				size: 0,
-				format: ArchiveFormat::TarGz,
-			})],
+			vec![(
+				request,
+				ToolResolution::Github(GithubResolution {
+					tag_name: "1.0.0".to_owned(),
+					url: String::new(),
+					size: 0,
+					format: ArchiveFormat::TarGz,
+					sha256: String::new(),
+				}),
+			)],
 			&lock,
 		)
 		.err()
@@ -952,18 +1027,26 @@ mod resolution_group_tests {
 		};
 		let error = ToolResolutionSet::from_entries(
 			vec![
-				(first, ToolResolution::Github {
-					tag_name: "v1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-				}),
-				(second, ToolResolution::Github {
-					tag_name: "v1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-				}),
+				(
+					first,
+					ToolResolution::Github(GithubResolution {
+						tag_name: "v1.0.0".to_owned(),
+						url: String::new(),
+						size: 0,
+						format: ArchiveFormat::TarGz,
+						sha256: String::new(),
+					}),
+				),
+				(
+					second,
+					ToolResolution::Github(GithubResolution {
+						tag_name: "v1.0.0".to_owned(),
+						url: String::new(),
+						size: 0,
+						format: ArchiveFormat::TarGz,
+						sha256: String::new(),
+					}),
+				),
 			],
 			&Lock::default(),
 		)
@@ -1002,18 +1085,26 @@ mod resolution_group_tests {
 		};
 		let error = ToolResolutionSet::from_entries(
 			vec![
-				(first, ToolResolution::Github {
-					tag_name: "v1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-				}),
-				(second, ToolResolution::Github {
-					tag_name: "1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-				}),
+				(
+					first,
+					ToolResolution::Github(GithubResolution {
+						tag_name: "v1.0.0".to_owned(),
+						url: String::new(),
+						size: 0,
+						format: ArchiveFormat::TarGz,
+						sha256: String::new(),
+					}),
+				),
+				(
+					second,
+					ToolResolution::Github(GithubResolution {
+						tag_name: "1.0.0".to_owned(),
+						url: String::new(),
+						size: 0,
+						format: ArchiveFormat::TarGz,
+						sha256: String::new(),
+					}),
+				),
 			],
 			&Lock::default(),
 		)

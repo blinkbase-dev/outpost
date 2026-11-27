@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::backend::_asset_selection::Target;
 use crate::backend::_backend::ArchiveFormat;
 use crate::backend::github;
-use crate::tools::archive::ToolResolution;
+use crate::tools::archive::{GithubResolution, ToolResolution};
 use crate::tools::tool_request::{RequestedTool, ToolRequestSet};
 use crate::tools::version::Version;
 
@@ -48,6 +48,8 @@ impl ResolutionCache {
 					}
 					cache.github.insert(path, file);
 				}
+				// node resolutions skip the cache
+				RequestedTool::Node(_) => {}
 			}
 		}
 		cache
@@ -71,19 +73,24 @@ impl ResolutionCache {
 							&& entry.libc == target.libc
 							&& now.saturating_sub(entry.resolved_at) < RESOLUTION_TTL
 					})
-					.map(|entry| ToolResolution::Github {
-						tag_name: entry.tag_name.clone(),
-						url: entry.url.clone(),
-						size: entry.size,
-						format: entry.format.clone(),
+					.map(|entry| {
+						ToolResolution::Github(GithubResolution {
+							tag_name: entry.tag_name.clone(),
+							url: entry.url.clone(),
+							size: entry.size,
+							format: entry.format.clone(),
+							sha256: entry.sha256.clone(),
+						})
 					})
 			}
+			RequestedTool::Node(_) => None,
 		}
 	}
 
+	#[expect(clippy::single_match, reason = "more backends will add arms")]
 	pub(crate) fn put(&mut self, tool: &RequestedTool, resolution: &ToolResolution) {
 		match (tool, resolution) {
-			(RequestedTool::Github(req), ToolResolution::Github { tag_name, url, size, format }) => {
+			(RequestedTool::Github(req), ToolResolution::Github(res)) => {
 				let path = github::resolution_cache_path(&self.data_dir, &req.api_url, &req.full_name);
 				let invalid = self
 					.github
@@ -100,17 +107,18 @@ impl ResolutionCache {
 					resolution: Vec::new(),
 				});
 				let target = Target::current();
-				let incoming = GithubResolution {
+				let incoming = GithubResolutionRecord {
 					lane: req.lane.clone(),
 					requested: req.version.clone(),
 					os: target.os.to_owned(),
 					arch: target.arch.to_owned(),
 					libc: target.libc.to_owned(),
 					resolved_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
-					tag_name: tag_name.clone(),
-					url: url.clone(),
-					size: *size,
-					format: format.clone(),
+					tag_name: res.tag_name.clone(),
+					url: res.url.clone(),
+					size: res.size,
+					format: res.format.clone(),
+					sha256: res.sha256.clone(),
 				};
 				let existing = file.resolution.iter_mut().find(|existing| {
 					existing.lane == incoming.lane
@@ -126,6 +134,7 @@ impl ResolutionCache {
 				}
 				self.github_dirty.insert(path);
 			}
+			_ => {}
 		}
 	}
 
@@ -169,12 +178,12 @@ struct GithubCacheFile {
 	backend: String,
 	api_url: String,
 	full_name: String,
-	resolution: Vec<GithubResolution>,
+	resolution: Vec<GithubResolutionRecord>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct GithubResolution {
+struct GithubResolutionRecord {
 	lane: String,
 	requested: Version,
 	os: String,
@@ -185,6 +194,7 @@ struct GithubResolution {
 	url: String,
 	size: u64,
 	format: ArchiveFormat,
+	sha256: String, // empty when the server published no digest
 }
 
 #[derive(Debug)]

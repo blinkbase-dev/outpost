@@ -36,6 +36,9 @@ fn score(name: &str, format: &ArchiveFormat, target: &Target) -> Option<i32> {
 	}
 	if libc_matches(&name, target.libc) {
 		score += 4;
+	} else if ["gnu", "musl", "msvc"].into_iter().any(|libc| libc_matches(&name, libc)) {
+		// a name for another libc ranks below one that names none
+		score -= 4;
 	}
 	score += match format {
 		ArchiveFormat::TarXz => 3,
@@ -80,7 +83,7 @@ fn os_matches(name: &str, os: &str) -> bool {
 	match os {
 		"linux" => regex!(r"(?:\b|_)linux"),
 		"macos" => regex!(r"(?:\b|_)(?:macos|darwin|osx)"),
-		"windows" => regex!(r"(?:\b|_)(?:windows|win32|win64)"),
+		"windows" => regex!(r"(?:\b|_)(?:windows|win32|win64|win(?:\b|_))"),
 		_ => return false,
 	}
 	.is_match(name)
@@ -135,48 +138,35 @@ fn libc_matches(name: &str, libc: &str) -> bool {
 mod tests {
 	use super::*;
 
+	fn _target(os: &'static str, arch: &'static str, libc: &'static str) -> Target {
+		Target { os, arch, libc }
+	}
+
 	#[test]
 	fn selects_os_arch() {
 		let targets = [
-			Target {
-				os: "linux",
-				arch: "aarch64",
-				libc: "musl",
-			},
-			Target {
-				os: "linux",
-				arch: "x86_64",
-				libc: "gnu",
-			},
-			Target {
-				os: "macos",
-				arch: "aarch64",
-				libc: "",
-			},
-			Target {
-				os: "windows",
-				arch: "x86",
-				libc: "msvc",
-			},
-			Target {
-				os: "windows",
-				arch: "x86_64",
-				libc: "msvc",
-			},
+			_target("linux", "aarch64", "musl"),
+			_target("linux", "x86_64", "gnu"),
+			_target("macos", "aarch64", ""),
+			_target("windows", "x86", "msvc"),
+			_target("windows", "x86_64", "msvc"),
+			_target("windows", "aarch64", "msvc"),
 		];
 		let names = [
 			"tool-linux-arm64.tar.gz",
 			"tool-linux-amd64.tar.gz",
 			"tool-darwin-arm64.tar.gz",
 			"tool-windows-i686.zip",
-			"tool-windows-x86_64.zip",
+			"tool-win-x64.zip",
+			"tool-win_arm64.zip",
 		];
 		let expected = [
 			(0, "tool-linux-arm64.tar.gz", ArchiveFormat::TarGz),
 			(1, "tool-linux-amd64.tar.gz", ArchiveFormat::TarGz),
 			(2, "tool-darwin-arm64.tar.gz", ArchiveFormat::TarGz),
 			(3, "tool-windows-i686.zip", ArchiveFormat::Zip),
-			(4, "tool-windows-x86_64.zip", ArchiveFormat::Zip),
+			(4, "tool-win-x64.zip", ArchiveFormat::Zip),
+			(5, "tool-win_arm64.zip", ArchiveFormat::Zip),
 		];
 		for (target, (index, name, format)) in targets.into_iter().zip(expected) {
 			assert_eq!(select_with(names, &target), Some((index, name, format)), "{target:?}");
@@ -186,37 +176,20 @@ mod tests {
 	#[test]
 	fn selects_os_arch_matching_libc() {
 		let targets = [
-			Target {
-				os: "linux",
-				arch: "aarch64",
-				libc: "musl",
-			},
-			Target {
-				os: "linux",
-				arch: "x86_64",
-				libc: "gnu",
-			},
-			Target {
-				os: "macos",
-				arch: "aarch64",
-				libc: "",
-			},
-			Target {
-				os: "windows",
-				arch: "x86",
-				libc: "msvc",
-			},
-			Target {
-				os: "windows",
-				arch: "x86_64",
-				libc: "msvc",
-			},
+			_target("linux", "aarch64", "musl"),
+			_target("linux", "x86_64", "gnu"),
+			_target("linux", "x86", "gnu"),
+			_target("macos", "aarch64", ""),
+			_target("windows", "x86", "msvc"),
+			_target("windows", "x86_64", "msvc"),
 		];
 		let names = [
 			"tool-linux-arm64-gnu.tar.gz",
 			"tool-linux-arm64-musl.tar.gz",
 			"tool-linux-amd64-gnu.tar.gz",
 			"tool-linux-amd64-musl.tar.gz",
+			"tool-linux-i686-musl.tar.gz",
+			"tool-linux-i686.tar.gz",
 			"tool-darwin-arm64.tar.gz",
 			"tool-windows-i686-msvc.zip",
 			"tool-windows-i686-gnu.zip",
@@ -226,9 +199,10 @@ mod tests {
 		let expected = [
 			(1, "tool-linux-arm64-musl.tar.gz", ArchiveFormat::TarGz),
 			(2, "tool-linux-amd64-gnu.tar.gz", ArchiveFormat::TarGz),
-			(4, "tool-darwin-arm64.tar.gz", ArchiveFormat::TarGz),
-			(5, "tool-windows-i686-msvc.zip", ArchiveFormat::Zip),
-			(7, "tool-windows-x86_64-msvc.zip", ArchiveFormat::Zip),
+			(5, "tool-linux-i686.tar.gz", ArchiveFormat::TarGz),
+			(6, "tool-darwin-arm64.tar.gz", ArchiveFormat::TarGz),
+			(7, "tool-windows-i686-msvc.zip", ArchiveFormat::Zip),
+			(9, "tool-windows-x86_64-msvc.zip", ArchiveFormat::Zip),
 		];
 		for (target, (index, name, format)) in targets.into_iter().zip(expected) {
 			assert_eq!(select_with(names, &target), Some((index, name, format)), "{target:?}");
@@ -238,26 +212,10 @@ mod tests {
 	#[test]
 	fn selects_libc_only() {
 		let targets = [
-			Target {
-				os: "linux",
-				arch: "aarch64",
-				libc: "musl",
-			},
-			Target {
-				os: "linux",
-				arch: "x86_64",
-				libc: "gnu",
-			},
-			Target {
-				os: "windows",
-				arch: "x86",
-				libc: "msvc",
-			},
-			Target {
-				os: "windows",
-				arch: "x86_64",
-				libc: "msvc",
-			},
+			_target("linux", "aarch64", "musl"),
+			_target("linux", "x86_64", "gnu"),
+			_target("windows", "x86", "msvc"),
+			_target("windows", "x86_64", "msvc"),
 		];
 		let names = [
 			"tool-musl.tar.gz", //
@@ -280,31 +238,11 @@ mod tests {
 	#[test]
 	fn selects_libc_windows_unnamed() {
 		let targets = [
-			Target {
-				os: "linux",
-				arch: "aarch64",
-				libc: "musl",
-			},
-			Target {
-				os: "linux",
-				arch: "x86_64",
-				libc: "gnu",
-			},
-			Target {
-				os: "macos",
-				arch: "aarch64",
-				libc: "",
-			},
-			Target {
-				os: "windows",
-				arch: "x86",
-				libc: "msvc",
-			},
-			Target {
-				os: "windows",
-				arch: "x86_64",
-				libc: "msvc",
-			},
+			_target("linux", "aarch64", "musl"),
+			_target("linux", "x86_64", "gnu"),
+			_target("macos", "aarch64", ""),
+			_target("windows", "x86", "msvc"),
+			_target("windows", "x86_64", "msvc"),
 		];
 		let names = [
 			"tool-linux-arm64.tar.gz",
@@ -329,11 +267,7 @@ mod tests {
 
 	#[test]
 	fn selects_first_on_tie() {
-		let target = Target {
-			os: "linux",
-			arch: "x86_64",
-			libc: "gnu",
-		};
+		let target = _target("linux", "x86_64", "gnu");
 		let names = ["tool-linux-amd64-b.tar.gz", "tool-linux-amd64-a.tar.gz"];
 		assert_eq!(select_with(names, &target), Some((1, "tool-linux-amd64-a.tar.gz", ArchiveFormat::TarGz)));
 	}
@@ -341,21 +275,9 @@ mod tests {
 	#[test]
 	fn rejects_unsupported_formats() {
 		let targets = [
-			Target {
-				os: "linux",
-				arch: "x86_64",
-				libc: "gnu",
-			},
-			Target {
-				os: "macos",
-				arch: "aarch64",
-				libc: "",
-			},
-			Target {
-				os: "windows",
-				arch: "x86_64",
-				libc: "msvc",
-			},
+			_target("linux", "x86_64", "gnu"),
+			_target("macos", "aarch64", ""),
+			_target("windows", "x86_64", "msvc"),
 		];
 		let names = [
 			"tool-linux-amd64.deb",
@@ -371,11 +293,7 @@ mod tests {
 
 	#[test]
 	fn rejects_excluded_assets() {
-		let target = Target {
-			os: "linux",
-			arch: "x86_64",
-			libc: "gnu",
-		};
+		let target = _target("linux", "x86_64", "gnu");
 		let excluded = [
 			"tool-linux-amd64.tar.gz.sha256",
 			"tool-linux-amd64.tar.gz.sha512",
@@ -385,7 +303,7 @@ mod tests {
 			"tool-linux-amd64.tar.gz.pem",
 		];
 		assert_eq!(select_with(excluded, &target), None);
-
+		// an archive among them is still selected
 		let mut names = excluded.to_vec();
 		names.push("tool-linux-amd64.tar.gz");
 		assert_eq!(select_with(names, &target), Some((6, "tool-linux-amd64.tar.gz", ArchiveFormat::TarGz)));
@@ -393,38 +311,22 @@ mod tests {
 
 	#[test]
 	fn rejects_unmatched_os() {
-		let target = Target {
-			os: "linux",
-			arch: "x86_64",
-			libc: "gnu",
-		};
+		let target = _target("linux", "x86_64", "gnu");
 		let names = ["tool-darwin-arm64.tar.gz", "tool-windows-x86_64.zip", "tool-msvc64.zip"];
 		assert_eq!(select_with(names, &target), None);
 	}
 
 	#[test]
 	fn rejects_foreign_os_with_libc_hint() {
-		let target = Target {
-			os: "linux",
-			arch: "x86_64",
-			libc: "gnu",
-		};
+		let target = _target("linux", "x86_64", "gnu");
 		let names = ["tool-windows-gnu.zip", "tool-darwin-gnu.zip"];
 		assert_eq!(select_with(names, &target), None);
 	}
 
 	#[test]
 	fn rejects_win64_in_darwin64() {
-		let windows = Target {
-			os: "windows",
-			arch: "x86_64",
-			libc: "msvc",
-		};
-		let macos = Target {
-			os: "macos",
-			arch: "aarch64",
-			libc: "",
-		};
+		let windows = _target("windows", "x86_64", "msvc");
+		let macos = _target("macos", "aarch64", "");
 		let names = ["tool-darwin64-arm64.zip", "tool-darwin32-x86.zip"];
 		assert_eq!(select_with(names, &windows), None);
 		assert_eq!(select_with(names, &macos), Some((0, "tool-darwin64-arm64.zip", ArchiveFormat::Zip)));
@@ -432,36 +334,19 @@ mod tests {
 
 	#[test]
 	fn rejects_foreign_arch() {
-		let linux_x86_64 = Target {
-			os: "linux",
-			arch: "x86_64",
-			libc: "gnu",
-		};
+		// a name for another arch is rejected but a name without an arch is kept
+		let linux_x86_64 = _target("linux", "x86_64", "gnu");
 		let names = ["tool-linux-arm64.tar.gz", "tool-linux-x86.tar.gz"];
 		assert_eq!(select_with(names, &linux_x86_64), None);
-		assert_eq!(
-			select_with(["tool-linux.tar.gz"], &linux_x86_64),
-			Some((0, "tool-linux.tar.gz", ArchiveFormat::TarGz))
-		);
-
-		let linux_x86 = Target {
-			os: "linux",
-			arch: "x86",
-			libc: "gnu",
-		};
-		assert_eq!(
-			select_with(["tool-linux-x86_64.tar.gz", "tool-linux-x86.tar.gz"], &linux_x86),
-			Some((1, "tool-linux-x86.tar.gz", ArchiveFormat::TarGz))
-		);
-
-		let windows_x86 = Target {
-			os: "windows",
-			arch: "x86",
-			libc: "msvc",
-		};
-		assert_eq!(
-			select_with(["tool-win32-x64.zip", "tool-win32.zip"], &windows_x86),
-			Some((1, "tool-win32.zip", ArchiveFormat::Zip))
-		);
+		let names = ["tool-linux.tar.gz"];
+		assert_eq!(select_with(names, &linux_x86_64), Some((0, "tool-linux.tar.gz", ArchiveFormat::TarGz)));
+		// x86_64 is not read as x86
+		let linux_x86 = _target("linux", "x86", "gnu");
+		let names = ["tool-linux-x86_64.tar.gz", "tool-linux-x86.tar.gz"];
+		assert_eq!(select_with(names, &linux_x86), Some((1, "tool-linux-x86.tar.gz", ArchiveFormat::TarGz)));
+		// win32 names the os so x64 decides the arch
+		let windows_x86 = _target("windows", "x86", "msvc");
+		let names = ["tool-win32-x64.zip", "tool-win32.zip"];
+		assert_eq!(select_with(names, &windows_x86), Some((1, "tool-win32.zip", ArchiveFormat::Zip)));
 	}
 }

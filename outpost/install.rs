@@ -6,10 +6,11 @@ use reqwest::Client;
 use tokio::sync::Semaphore;
 
 use crate::backend::github::{GithubBackend, GithubOptions};
+use crate::backend::node::{NodeBackend, NodeOptions};
 use crate::config::{loader, locate, state};
 use crate::tools::archive::{self, ToolResolution, ToolResolutionSet};
 use crate::tools::catalog::Catalog;
-use crate::tools::lock::{self, GithubLock, Identity, Lock, LockedTool};
+use crate::tools::lock::{self, GithubLock, Identity, Lock, LockedTool, NodeLock};
 use crate::tools::resolution_cache::{ResolutionCache, ResolutionCacheError};
 use crate::tools::tool_request::{self, RequestedTool, ToolRequestSet};
 use crate::tools::{shims, status};
@@ -77,6 +78,7 @@ pub(crate) fn install() -> Result<(), Error> {
 	for tool in &lock.tools[lock.tools.len() - installed.len()..] {
 		match tool {
 			LockedTool::Github(lock) => println!("{} {} {}", lock.full_name, lock.tag_name, tools_dir.join(&lock.install_path).display()),
+			LockedTool::Node(lock) => println!("node {} {}", lock.version, tools_dir.join(&lock.install_path).display()),
 		}
 	}
 	let failures = resolve_err
@@ -89,6 +91,9 @@ pub(crate) fn install() -> Result<(), Error> {
 			match &request.tool {
 				RequestedTool::Github(req) => {
 					eprintln!("{} {}{}: {error}", req.full_name, req.lane, req.version);
+				}
+				RequestedTool::Node(req) => {
+					eprintln!("node {}: {error}", req.version);
 				}
 			}
 			for origin in &request.origins {
@@ -149,7 +154,11 @@ async fn resolve_parallel(
 				Ok(_permit) => match &request.tool {
 					RequestedTool::Github(req) => {
 						let backend = GithubBackend::new(http, github_options.as_ref().clone().with_api_url(&req.api_url));
-						backend.resolve(&request.tool).await.map_err(Error::from)
+						backend.resolve(req).await.map_err(Error::from)
+					}
+					RequestedTool::Node(req) => {
+						let backend = NodeBackend::new(http, NodeOptions::default());
+						backend.resolve(req).await.map_err(Error::from)
 					}
 				},
 				Err(error) => Err(error.into()),
@@ -193,6 +202,7 @@ fn _progress_list(requests: &[ToolRequestSet]) -> (Arc<progress_list::ProgressLi
 		.iter()
 		.map(|request| match &request.tool {
 			RequestedTool::Github(request) => format!("github:{} {}{}", request.full_name, request.lane, request.version),
+			RequestedTool::Node(request) => format!("core:node {}", request.version),
 		})
 		.collect::<Vec<_>>();
 	let list = Arc::new(progress_list::ProgressList::new(labels));
@@ -214,8 +224,9 @@ fn _progress_list(requests: &[ToolRequestSet]) -> (Arc<progress_list::ProgressLi
 fn _progress_bar(resolutions: &[ToolResolutionSet]) -> (Arc<progress::ProgressBar>, archive::ProgressFn) {
 	let labels = resolutions
 		.iter()
-		.map(|group| match (&group.requests[0].tool, &group.resolution) {
-			(RequestedTool::Github(request), ToolResolution::Github { tag_name, .. }) => format!("github:{} {tag_name}", request.full_name),
+		.map(|group| match &group.requests[0].tool {
+			RequestedTool::Github(request) => format!("github:{} {}", request.full_name, group.resolution.version()),
+			RequestedTool::Node(_) => format!("core:node {}", group.resolution.version()),
 		})
 		.collect::<Vec<_>>();
 	let bar = Arc::new(progress::ProgressBar::new(labels));
@@ -237,14 +248,19 @@ fn _progress_bar(resolutions: &[ToolResolutionSet]) -> (Arc<progress::ProgressBa
 }
 
 fn _update_lock_entries(lock: &mut Lock, installed: &[ToolResolutionSet]) {
-	let row = |group: &ToolResolutionSet, request: &ToolRequestSet| match (&request.tool, &group.resolution) {
-		(RequestedTool::Github(req), ToolResolution::Github { tag_name, .. }) => LockedTool::Github(GithubLock {
+	let row = |res: &ToolResolutionSet, req: &ToolRequestSet| match &req.tool {
+		RequestedTool::Github(req) => LockedTool::Github(GithubLock {
 			api_url: req.api_url.clone(),
 			full_name: req.full_name.clone(),
 			lane: req.lane.clone(),
 			requested: req.version.clone(),
-			tag_name: tag_name.clone(),
-			install_path: group.install_path.clone(),
+			tag_name: res.resolution.version().to_owned(),
+			install_path: res.install_path.clone(),
+		}),
+		RequestedTool::Node(req) => LockedTool::Node(NodeLock {
+			requested: req.version.clone(),
+			version: res.resolution.version().to_owned(),
+			install_path: res.install_path.clone(),
 		}),
 	};
 	let mut rows = Vec::new();
@@ -276,6 +292,7 @@ mod resolve_tests {
 
 	use super::*;
 	use crate::backend::_backend::ArchiveFormat;
+	use crate::tools::archive::GithubResolution;
 	use crate::tools::tool_request::GithubRequest;
 	use crate::tools::version::Version;
 
@@ -335,12 +352,16 @@ mod resolve_tests {
 		let data_dir = tempfile::tempdir().unwrap();
 		// seed the cache so owner/cached never reaches the server
 		let mut cache = ResolutionCache::load(data_dir.path(), &requests[..1]);
-		cache.put(&requests[0].tool, &ToolResolution::Github {
-			tag_name: "v1.0.0".to_owned(),
-			url: String::new(),
-			size: 0,
-			format: ArchiveFormat::TarGz,
-		});
+		cache.put(
+			&requests[0].tool,
+			&ToolResolution::Github(GithubResolution {
+				tag_name: "v1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+				sha256: String::new(),
+			}),
+		);
 		cache.flush().unwrap();
 		let (progress, events) = _progress_events();
 		let (resolutions, failures, flush_err) = resolve_parallel(requests, http(), data_dir.path(), progress).await.unwrap();
@@ -364,6 +385,7 @@ mod tests {
 
 	use super::*;
 	use crate::backend::_backend::ArchiveFormat;
+	use crate::tools::archive::GithubResolution;
 	use crate::tools::tool_request::GithubRequest;
 	use crate::tools::version::Version;
 
@@ -380,12 +402,16 @@ mod tests {
 				rename_shims: None,
 			}),
 		};
-		let entries = vec![(request, ToolResolution::Github {
-			tag_name: "v1.2.3".to_owned(),
-			url: String::new(),
-			size: 0,
-			format: ArchiveFormat::TarGz,
-		})];
+		let entries = vec![(
+			request,
+			ToolResolution::Github(GithubResolution {
+				tag_name: "v1.2.3".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+				sha256: String::new(),
+			}),
+		)];
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let mut lock = Lock::default();
 		_update_lock_entries(&mut lock, &resolutions);
@@ -422,12 +448,16 @@ mod tests {
 				rename_shims: None,
 			}),
 		};
-		let entries = vec![(request, ToolResolution::Github {
-			tag_name: "v2.0.0".to_owned(),
-			url: String::new(),
-			size: 0,
-			format: ArchiveFormat::TarGz,
-		})];
+		let entries = vec![(
+			request,
+			ToolResolution::Github(GithubResolution {
+				tag_name: "v2.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+				sha256: String::new(),
+			}),
+		)];
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		_update_lock_entries(&mut lock, &resolutions);
 		assert_eq!(resolutions.len(), 1);
@@ -463,12 +493,16 @@ mod tests {
 				rename_shims: None,
 			}),
 		};
-		let entries = vec![(request, ToolResolution::Github {
-			tag_name: "v1.0.0".to_owned(),
-			url: String::new(),
-			size: 0,
-			format: ArchiveFormat::TarGz,
-		})];
+		let entries = vec![(
+			request,
+			ToolResolution::Github(GithubResolution {
+				tag_name: "v1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+				sha256: String::new(),
+			}),
+		)];
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		_update_lock_entries(&mut lock, &resolutions);
 		assert_eq!(resolutions.len(), 1);
@@ -517,12 +551,16 @@ mod tests {
 				rename_shims: None,
 			}),
 		};
-		let entries = vec![(request, ToolResolution::Github {
-			tag_name: "v1.0.0".to_owned(),
-			url: String::new(),
-			size: 0,
-			format: ArchiveFormat::TarGz,
-		})];
+		let entries = vec![(
+			request,
+			ToolResolution::Github(GithubResolution {
+				tag_name: "v1.0.0".to_owned(),
+				url: String::new(),
+				size: 0,
+				format: ArchiveFormat::TarGz,
+				sha256: String::new(),
+			}),
+		)];
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		_update_lock_entries(&mut lock, &resolutions);
 		assert_eq!(resolutions.len(), 1);
@@ -567,12 +605,16 @@ mod tests {
 		let entries = requests
 			.into_iter()
 			.map(|request| {
-				(request, ToolResolution::Github {
-					tag_name: "v1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-				})
+				(
+					request,
+					ToolResolution::Github(GithubResolution {
+						tag_name: "v1.0.0".to_owned(),
+						url: String::new(),
+						size: 0,
+						format: ArchiveFormat::TarGz,
+						sha256: String::new(),
+					}),
+				)
 			})
 			.collect();
 		let resolutions = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();

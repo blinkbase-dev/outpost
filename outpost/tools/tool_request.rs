@@ -6,7 +6,7 @@ use regex::regex;
 
 use super::lock::{Identity, LockedTool};
 use super::version::{Version, split_lane};
-use crate::backend::github;
+use crate::backend::{github, node};
 use crate::config::loader::{ConfigFile, ToolOptions};
 
 pub(crate) fn requests(files: &[ConfigFile]) -> Result<Vec<ToolRequest>, ToolRequestError> {
@@ -31,6 +31,7 @@ pub(crate) struct ToolRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum RequestedTool {
 	Github(GithubRequest),
+	Node(NodeRequest),
 }
 
 impl RequestedTool {
@@ -42,48 +43,55 @@ impl RequestedTool {
 				lane: req.lane.clone(),
 				version: req.version.clone(),
 			},
+			Self::Node(req) => Identity::Node { version: req.version.clone() },
 		}
 	}
 
 	pub(crate) fn identity_key(&self) -> String {
 		match self {
 			Self::Github(req) => format!("github:{}:{}@{}", req.api_url, req.full_name, req.lane),
+			Self::Node(_) => "core:node".to_owned(),
 		}
 	}
 
 	pub(crate) fn install_path(&self, version: &str) -> PathBuf {
 		match self {
 			Self::Github(req) => github::install_path(&req.api_url, &req.full_name, version),
+			Self::Node(_) => node::install_path(version),
 		}
 	}
 
 	pub(crate) fn install_prefix_matches(&self, other: &Self) -> bool {
 		match (self, other) {
 			(Self::Github(req), Self::Github(other)) => req.api_url == other.api_url && req.full_name == other.full_name,
+			(Self::Node(_), Self::Node(_)) => true,
+			_ => false,
 		}
 	}
 
 	pub(crate) fn install_prefix_matches_locked(&self, locked: &LockedTool) -> bool {
 		match (self, locked) {
 			(Self::Github(req), LockedTool::Github(lock)) => req.api_url == lock.api_url && req.full_name == lock.full_name,
+			(Self::Node(_), LockedTool::Node(_)) => true,
+			_ => false,
 		}
 	}
 
 	fn parse(path: &Path, key: &str, options: &ToolOptions) -> Result<Self, ToolRequestError> {
-		let Some((_, full_name)) = key.split_once(':') else {
-			return Err(ToolRequestError::InvalidFullName {
-				path: path.to_path_buf(),
-				key: key.to_owned(),
-			});
-		};
-		if regex!(r"^(?:\.{1,2})?$|[^a-zA-Z0-9_./-]").is_match(full_name) {
-			return Err(ToolRequestError::InvalidFullName {
-				path: path.to_path_buf(),
-				key: key.to_owned(),
-			});
-		}
 		match options {
 			ToolOptions::Github(table) => {
+				let Some((_, full_name)) = key.split_once(':') else {
+					return Err(ToolRequestError::InvalidFullName {
+						path: path.to_path_buf(),
+						key: key.to_owned(),
+					});
+				};
+				if regex!(r"^(?:\.{1,2})?$|[^a-zA-Z0-9_./-]").is_match(full_name) {
+					return Err(ToolRequestError::InvalidFullName {
+						path: path.to_path_buf(),
+						key: key.to_owned(),
+					});
+				}
 				let (lane, value) = split_lane(table.version.trim());
 				if value.is_empty() {
 					return Err(ToolRequestError::EmptyVersion {
@@ -100,6 +108,18 @@ impl RequestedTool {
 					rename_shims: table.rename_shims.clone(),
 				}))
 			}
+			ToolOptions::Node(table) => {
+				let version = table.version.trim();
+				if version.is_empty() {
+					return Err(ToolRequestError::EmptyVersion {
+						path: path.to_path_buf(),
+						key: key.to_owned(),
+					});
+				}
+				Ok(Self::Node(NodeRequest {
+					version: Version::parse(version),
+				}))
+			}
 		}
 	}
 }
@@ -112,6 +132,11 @@ pub(crate) struct GithubRequest {
 	pub(crate) version: Version,
 	pub(crate) exposed: Option<Vec<String>>,
 	pub(crate) rename_shims: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NodeRequest {
+	pub(crate) version: Version,
 }
 
 #[derive(Clone)]
@@ -244,7 +269,9 @@ mod tests {
 		"#};
 		let config = _config("outpost.toml", body);
 		let mut other = _request("owner/other", "", Version::Exact("0.26.0".to_owned()));
-		let RequestedTool::Github(req) = &mut other.tool;
+		let RequestedTool::Github(req) = &mut other.tool else {
+			panic!("expected a github request");
+		};
 		req.api_url = "http://127.0.0.1:8080".to_owned();
 		req.exposed = Some(vec!["tool".to_owned(), "bin/*".to_owned()]);
 		req.rename_shims = Some(BTreeMap::from([("tool_*".to_owned(), "tool".to_owned())]));

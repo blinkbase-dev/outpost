@@ -317,6 +317,7 @@ mod tests {
 			.iter()
 			.map(|entry| match &entry.tool {
 				RequestedTool::Github(req) => req.full_name.as_str(),
+				RequestedTool::Node(_) => "core:node",
 			})
 			.collect();
 		assert_eq!(names, vec!["o/inner", "o/outer", "o/dev", "o/prod", "o/base"]);

@@ -8,6 +8,7 @@ use super::version::{Version, split_lane};
 #[derive(Debug, PartialEq)]
 pub(crate) enum ToolSpec {
 	Github(GithubSpec),
+	Node(NodeSpec),
 }
 
 impl ToolSpec {
@@ -38,6 +39,21 @@ impl ToolSpec {
 					version,
 				}))
 			}
+			"core" => {
+				let (name, version) = match rest.split_once('@') {
+					Some((name, version)) => (name, Some(version.trim())),
+					None => (rest, None),
+				};
+				if name != "node" {
+					return Err(ToolSpecError::InvalidFullName(name.to_owned()));
+				}
+				if version.is_some_and(str::is_empty) {
+					return Err(ToolSpecError::EmptyVersion(spec.to_owned()));
+				}
+				Ok(Self::Node(NodeSpec {
+					version: version.map(Version::parse),
+				}))
+			}
 			_ => Err(ToolSpecError::UnsupportedBackend(backend.to_owned())),
 		}
 	}
@@ -49,6 +65,8 @@ impl ToolSpec {
 					&& (spec.lane == req.lane || (spec.lane.is_empty() && spec.version.is_none()))
 					&& spec.version.as_ref().is_none_or(|version| version == &req.version)
 			}
+			(Self::Node(spec), RequestedTool::Node(req)) => spec.version.as_ref().is_none_or(|version| version == &req.version),
+			_ => false,
 		}
 	}
 }
@@ -57,6 +75,11 @@ impl ToolSpec {
 pub(crate) struct GithubSpec {
 	full_name: String,
 	lane: String,
+	version: Option<Version>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct NodeSpec {
 	version: Option<Version>,
 }
 

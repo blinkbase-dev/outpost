@@ -40,6 +40,11 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 			let matches = lock.api_url == req.api_url && lock.full_name == req.full_name && lock.lane == req.lane && lock.requested == req.version;
 			matches.then_some((&lock.install_path, &lock.tag_name))
 		}
+		(RequestedTool::Node(req), lock::LockedTool::Node(lock)) => {
+			let matches = lock.requested == req.version;
+			matches.then_some((&lock.install_path, &lock.version))
+		}
+		_ => None,
 	}) else {
 		return Err(
 			format!(
@@ -119,7 +124,7 @@ pub(crate) fn resolve_shim(shim: &OsStr) -> Result<PathBuf, Error> {
 			}
 			continue;
 		};
-		let ShimEntry::Github { install_path, binary, .. } = entry;
+		let (install_path, binary) = (entry.install_path(), entry.binary());
 		if !install_path.components().all(|component| matches!(component, Component::Normal(_))) {
 			return Err(format!("'{name}' has an invalid shim target\nrun 'op shim' to rebuild it").into());
 		}
@@ -135,9 +140,8 @@ pub(crate) fn resolve_shim(shim: &OsStr) -> Result<PathBuf, Error> {
 	let mut message = format!("'{name}' is provided by tools that the current config does not request:");
 	for entry in shims {
 		message.push_str(&match entry {
-			ShimEntry::Github {
-				full_name, lane, requested, ..
-			} => format!("\n  github:{full_name} {lane}{requested}"),
+			ShimEntry::Github(shim) => format!("\n  github:{} {}{}", shim.full_name, shim.lane, shim.requested),
+			ShimEntry::Node(shim) => format!("\n  core:node {}", shim.requested),
 		});
 	}
 	Err(message.into())

@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::backend::github;
+use crate::backend::{github, node};
 use crate::tools::version::Version;
 
 pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
@@ -36,11 +36,11 @@ pub(crate) fn read(data_dir: &Path) -> Result<Lock, LockError> {
 					incoming: identity.to_string(),
 				});
 			}
-			Some(existing) if existing.installed_version() != tool.installed_version() => {
+			Some(existing) if existing.version() != tool.version() => {
 				return Err(LockError::ConflictingVersion {
 					path: install_path.to_path_buf(),
-					existing: existing.installed_version().to_owned(),
-					incoming: tool.installed_version().to_owned(),
+					existing: existing.version().to_owned(),
+					incoming: tool.version().to_owned(),
 				});
 			}
 			Some(_) => {}
@@ -63,6 +63,7 @@ pub(crate) fn read_unverified(data_dir: &Path) -> Result<Lock, LockError> {
 			for tool in &mut lock.tools {
 				match tool {
 					LockedTool::Github(lock) => lock.full_name.make_ascii_lowercase(),
+					LockedTool::Node(_) => {}
 				}
 			}
 			Ok(lock)
@@ -133,6 +134,9 @@ pub(crate) enum Identity {
 		lane: String,
 		version: Version,
 	},
+	Node {
+		version: Version,
+	},
 }
 
 impl fmt::Display for Identity {
@@ -150,6 +154,7 @@ impl fmt::Display for Identity {
 				}
 				Ok(())
 			}
+			Self::Node { version } => write!(f, "core:node@{version}"),
 		}
 	}
 }
@@ -158,6 +163,7 @@ impl fmt::Display for Identity {
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub(crate) enum LockedTool {
 	Github(GithubLock),
+	Node(NodeLock),
 }
 
 impl LockedTool {
@@ -169,30 +175,38 @@ impl LockedTool {
 				lane: lock.lane.clone(),
 				version: lock.requested.clone(),
 			},
+			Self::Node(lock) => Identity::Node {
+				version: lock.requested.clone(),
+			},
 		}
 	}
 
 	pub(crate) fn install_path(&self) -> &Path {
 		match self {
 			Self::Github(lock) => &lock.install_path,
+			Self::Node(lock) => &lock.install_path,
 		}
 	}
 
-	pub(crate) fn installed_version(&self) -> &str {
+	pub(crate) fn version(&self) -> &str {
 		match self {
 			Self::Github(lock) => &lock.tag_name,
+			Self::Node(lock) => &lock.version,
 		}
 	}
 
 	pub(crate) fn expected_install_path(&self) -> PathBuf {
 		match self {
 			Self::Github(lock) => github::install_path(&lock.api_url, &lock.full_name, &lock.tag_name),
+			Self::Node(lock) => node::install_path(&lock.version),
 		}
 	}
 
 	fn install_prefix_matches(&self, other: &Self) -> bool {
 		match (self, other) {
 			(Self::Github(lock), Self::Github(other)) => lock.api_url == other.api_url && lock.full_name == other.full_name,
+			(Self::Node(_), Self::Node(_)) => true,
+			_ => false,
 		}
 	}
 }
@@ -205,6 +219,13 @@ pub(crate) struct GithubLock {
 	pub(crate) lane: String,
 	pub(crate) requested: Version,
 	pub(crate) tag_name: String,
+	pub(crate) install_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub(crate) struct NodeLock {
+	pub(crate) requested: Version,
+	pub(crate) version: String,
 	pub(crate) install_path: PathBuf,
 }
 
