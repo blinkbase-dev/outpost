@@ -33,6 +33,10 @@ impl Fixture {
 		if let Some(value) = std::env::var_os("SystemRoot") {
 			command.env("SystemRoot", value);
 		}
+		// coverage runs write profiles to the path this names
+		if let Some(value) = std::env::var_os("LLVM_PROFILE_FILE") {
+			command.env("LLVM_PROFILE_FILE", value);
+		}
 		command
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
 			.env("OUTPOST_DATA_DIR", &self.config_dir)
