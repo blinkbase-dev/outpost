@@ -374,33 +374,15 @@ impl std::error::Error for GithubError {
 
 #[cfg(test)]
 mod tests {
-	use std::fs;
-
 	use tokio::sync::OnceCell;
 	use wiremock::matchers::{method, path, query_param};
 	use wiremock::{Mock, MockServer, ResponseTemplate};
 
 	use super::*;
+	use crate::backend::_fixtures::read_or_record;
 
 	fn http() -> Client {
 		Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build().unwrap()
-	}
-
-	async fn read_or_record<F, Fut>(name: &str, fetch: F) -> String
-	where
-		F: FnOnce() -> Fut,
-		Fut: std::future::Future<Output = Result<String, GithubError>>,
-	{
-		let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("backend/__fixtures").join(name);
-		match fs::read_to_string(&file) {
-			Ok(body) => body,
-			Err(_) => {
-				let body = fetch().await.unwrap();
-				fs::create_dir_all(file.parent().unwrap()).unwrap();
-				fs::write(&file, &body).unwrap();
-				body
-			}
-		}
 	}
 
 	static MAGIKA_RELEASES: OnceCell<String> = OnceCell::const_new();
@@ -411,7 +393,7 @@ mod tests {
 				read_or_record("github_google_magika_releases_1.json", || async {
 					let client = GithubClient::new(http(), GithubOptions::from_process());
 					let (body, _) = client.releases("google/magika", 1).await?;
-					Ok(body)
+					Ok::<_, GithubError>(body)
 				})
 				.await
 			})
@@ -497,13 +479,13 @@ mod tests {
 		let first = read_or_record("github_cli_cli_releases_1.json", || async {
 			let client = GithubClient::new(http(), GithubOptions::from_process());
 			let (body, _) = client.releases("cli/cli", 1).await?;
-			Ok(body)
+			Ok::<_, GithubError>(body)
 		})
 		.await;
 		let second = read_or_record("github_cli_cli_releases_2.json", || async {
 			let client = GithubClient::new(http(), GithubOptions::from_process());
 			let (body, _) = client.releases("cli/cli", 2).await?;
-			Ok(body)
+			Ok::<_, GithubError>(body)
 		})
 		.await;
 		let server = MockServer::start().await;
@@ -585,11 +567,9 @@ mod tests {
 	#[tokio::test]
 	async fn resolves_exact_version_from_snapshot() {
 		let body = read_or_record("github_cli_cli_v2.102.1.json", || async {
-			let body = GithubClient::new(http(), GithubOptions::from_process())
+			GithubClient::new(http(), GithubOptions::from_process())
 				.release_by_tag("cli/cli", "v2.102.1")
 				.await
-				.unwrap();
-			Ok(body)
 		})
 		.await;
 		let server = MockServer::start().await;

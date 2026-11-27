@@ -6,7 +6,7 @@ use reqwest::{Client, StatusCode};
 use semver::Version as Semver;
 use serde::Deserialize;
 
-use super::_asset_selection::{self, Target};
+use super::_asset_selection::{Target, select_with};
 use super::github::tag_component;
 use crate::tools::archive::{NodeResolution, ToolResolution};
 use crate::tools::tool_request::NodeRequest;
@@ -35,8 +35,8 @@ impl NodeBackend {
 				Some((parts.next()?, parts.next()?))
 			})
 			.collect();
-		let Some((index, name, format)) = _asset_selection::select(entries.iter().map(|(_, name)| *name)) else {
-			let target = Target::current();
+		let target = &self.client.options.target;
+		let Some((index, name, format)) = select_with(entries.iter().map(|(_, name)| *name), target) else {
 			return Err(NodeError::UnsupportedPlatform {
 				version: release.version,
 				os: target.os.to_owned(),
@@ -97,12 +97,14 @@ pub(crate) struct Release {
 #[derive(Clone)]
 pub(crate) struct NodeOptions {
 	dist_url: String,
+	target: Target,
 }
 
 impl Default for NodeOptions {
 	fn default() -> Self {
 		Self {
 			dist_url: "https://nodejs.org/dist".to_owned(),
+			target: Target::current(),
 		}
 	}
 }
@@ -212,5 +214,115 @@ impl std::error::Error for NodeError {
 			Self::UnsupportedPlatform { .. } => None,
 			Self::MissingSize(_) => None,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use wiremock::matchers::{method, path};
+	use wiremock::{Mock, MockServer, ResponseTemplate};
+
+	use super::*;
+	use crate::backend::_backend::ArchiveFormat;
+	use crate::backend::_fixtures::read_or_record;
+
+	fn http() -> Client {
+		Client::builder().user_agent(concat!("outpost/", env!("CARGO_PKG_VERSION"))).build().unwrap()
+	}
+
+	fn _target(os: &'static str, arch: &'static str, libc: &'static str) -> Target {
+		Target { os, arch, libc }
+	}
+
+	#[tokio::test]
+	async fn resolves_archive_from_snapshot() {
+		let index = read_or_record("node_index.json", || async { NodeClient::new(http(), NodeOptions::default()).index().await }).await;
+		let shasums = read_or_record("node_v26.13.1_shasums256.txt", || async {
+			NodeClient::new(http(), NodeOptions::default()).shasums("v26.13.1").await
+		})
+		.await;
+		let server = MockServer::start().await;
+		Mock::given(method("GET"))
+			.and(path(NodeClient::index_path()))
+			.respond_with(ResponseTemplate::new(200).set_body_string(index))
+			.mount(&server)
+			.await;
+		Mock::given(method("GET"))
+			.and(path(NodeClient::shasums_path("v26.13.1")))
+			.respond_with(ResponseTemplate::new(200).set_body_string(shasums.clone()))
+			.mount(&server)
+			.await;
+		let request = NodeRequest {
+			version: Version::parse("26.13.1"),
+		};
+		let targets = [
+			_target("linux", "x86_64", "gnu"),
+			_target("linux", "x86_64", "musl"),
+			_target("linux", "aarch64", "gnu"),
+			_target("macos", "x86_64", ""),
+			_target("macos", "aarch64", ""),
+			_target("windows", "x86_64", "msvc"),
+			_target("windows", "aarch64", "msvc"),
+		];
+		let expected = [
+			("node-v26.13.1-linux-x64.tar.xz", ArchiveFormat::TarXz),
+			("node-v26.13.1-linux-x64-musl.tar.xz", ArchiveFormat::TarXz),
+			("node-v26.13.1-linux-arm64.tar.xz", ArchiveFormat::TarXz),
+			("node-v26.13.1-darwin-x64.tar.xz", ArchiveFormat::TarXz),
+			("node-v26.13.1-darwin-arm64.tar.xz", ArchiveFormat::TarXz),
+			("node-v26.13.1-win-x64.zip", ArchiveFormat::Zip),
+			("node-v26.13.1-win-arm64.zip", ArchiveFormat::Zip),
+		];
+		for (target, (name, format)) in targets.into_iter().zip(expected) {
+			// the size request must reach the selected archive
+			Mock::given(method("HEAD"))
+				.and(path(NodeClient::archive_path("v26.13.1", name)))
+				.respond_with(ResponseTemplate::new(200).insert_header("content-length", "1234"))
+				.mount(&server)
+				.await;
+			let backend = NodeBackend::new(http(), NodeOptions {
+				dist_url: server.uri(),
+				target: target.clone(),
+			});
+			let res = backend.resolve(&request).await.unwrap();
+			// the checksum comes from the line that names the selected archive
+			let checksum = shasums.lines().find_map(|line| {
+				let mut parts = line.split_whitespace();
+				let checksum = parts.next()?;
+				(parts.next()? == name).then_some(checksum)
+			});
+			assert_eq!(res.version(), "v26.13.1", "{target:?}");
+			assert_eq!(res.url(), format!("{}/v26.13.1/{name}", server.uri()), "{target:?}");
+			assert_eq!(res.size(), 1234, "{target:?}");
+			assert_eq!(res.format(), &format, "{target:?}");
+			assert_eq!(Some(res.checksum()), checksum, "{target:?}");
+		}
+		// node publishes no 32-bit windows archive
+		let backend = NodeBackend::new(http(), NodeOptions {
+			dist_url: server.uri(),
+			target: _target("windows", "x86", "msvc"),
+		});
+		let error = backend.resolve(&request).await.err().unwrap();
+		assert!(matches!(error, NodeError::UnsupportedPlatform { .. }), "{error}");
+	}
+
+	#[tokio::test]
+	async fn picks_release_from_snapshot() {
+		let index = read_or_record("node_index.json", || async { NodeClient::new(http(), NodeOptions::default()).index().await }).await;
+		let pick = |version: &str| {
+			let releases: Vec<Release> = serde_json::from_str(&index).unwrap();
+			_pick_release(releases, &Version::parse(version)).map(|release| release.version)
+		};
+		// latest and prefixes skip the v27 prereleases and pick the highest stable
+		assert_eq!(pick("latest").as_deref(), Some("v26.13.1"));
+		assert_eq!(pick("26").as_deref(), Some("v26.13.1"));
+		assert_eq!(pick("26.12").as_deref(), Some("v26.12.1"));
+		// an exact version matches with or without the v
+		assert_eq!(pick("v26.12.0").as_deref(), Some("v26.12.0"));
+		assert_eq!(pick("26.12.0").as_deref(), Some("v26.12.0"));
+		// a prerelease installs only by exact version
+		assert_eq!(pick("v27.0.0-alpha.0.1.0").as_deref(), Some("v27.0.0-alpha.0.1.0"));
+		// a version missing from the index picks nothing
+		assert_eq!(pick("99"), None);
 	}
 }
