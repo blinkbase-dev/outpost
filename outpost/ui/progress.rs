@@ -4,10 +4,13 @@ use std::time::{Duration, Instant};
 
 use console::Term;
 
+use super::_screen::Screen;
+
 const DRAW_INTERVAL: Duration = Duration::from_millis(100);
 
-pub(crate) struct ProgressBar {
-	term: Option<Term>,
+pub(crate) struct ProgressBar<S: Screen = Term> {
+	screen: Option<S>,
+	draw_interval: Duration,
 	inner: Mutex<Inner>,
 }
 
@@ -19,50 +22,59 @@ struct Inner {
 
 impl ProgressBar {
 	pub(crate) fn new(labels: Vec<String>) -> Self {
-		let term = std::io::stderr().is_terminal().then(Term::stderr);
+		let screen = std::io::stderr().is_terminal().then(Term::stderr);
+		Self::with_screen(labels, screen, DRAW_INTERVAL)
+	}
+}
+
+impl<S: Screen> ProgressBar<S> {
+	// skip events without a screen
+	fn with_screen(labels: Vec<String>, screen: Option<S>, draw_interval: Duration) -> Self {
 		Self {
-			term,
+			screen,
+			draw_interval,
 			inner: Mutex::new(Inner {
 				state: State::new(labels),
 				drawn_lines: 0,
-				last_draw: Instant::now(),
+				// backdate the last draw so the first record draws
+				last_draw: Instant::now().checked_sub(draw_interval).unwrap_or_else(Instant::now),
 			}),
 		}
 	}
 
 	pub(crate) fn record(&self, event: ProgressEvent) {
-		let Some(term) = &self.term else {
+		let Some(screen) = &self.screen else {
 			return;
 		};
 		let mut inner = self.inner.lock().unwrap();
 		inner.state.update(event, Instant::now());
-		if inner.last_draw.elapsed() < DRAW_INTERVAL {
+		if inner.last_draw.elapsed() < self.draw_interval {
 			return;
 		}
-		let (height, columns) = term.size();
+		let (height, columns) = screen.size();
 		let lines = draw(&inner.state, columns as usize, height as usize);
-		inner.drawn_lines = Self::_write(term, &lines, inner.drawn_lines);
+		inner.drawn_lines = Self::_write(screen, &lines, inner.drawn_lines);
 		inner.last_draw = Instant::now();
 	}
 
-	fn _write(term: &Term, lines: &[String], drawn_lines: usize) -> usize {
-		let _ = term.clear_last_lines(drawn_lines);
+	fn _write(screen: &S, lines: &[String], drawn_lines: usize) -> usize {
+		screen.clear_last_lines(drawn_lines);
 		for line in lines {
-			let _ = term.write_line(line);
+			screen.write_line(line);
 		}
-		let _ = term.flush();
+		screen.flush();
 		lines.len()
 	}
 }
 
-impl Drop for ProgressBar {
+impl<S: Screen> Drop for ProgressBar<S> {
 	fn drop(&mut self) {
-		let Some(term) = &self.term else {
+		let Some(screen) = &self.screen else {
 			return;
 		};
 		if let Ok(inner) = self.inner.lock() {
-			let _ = term.clear_last_lines(inner.drawn_lines);
-			let _ = term.flush();
+			screen.clear_last_lines(inner.drawn_lines);
+			screen.flush();
 		}
 	}
 }
@@ -193,7 +205,7 @@ struct Header {
 //
 // 108+ columns: label, stage, 20 cell bar, done/total, speed, eta, 80 fixed cells
 //  96+ columns: label, stage, 10 cell bar, done/total, speed, eta, 70 fixed cells
-//  84+ columns: label, stage, done/total, speed, eta, 57 fixed cells
+//  80+ columns: label, stage, done/total, speed, eta, 57 fixed cells
 //  60+ columns: label, stage, done/total, 36 fixed cells
 //  60< columns: label, stage, 13 fixed cells
 fn draw_row(row: &Row, width: usize) -> String {
@@ -212,7 +224,7 @@ fn draw_row(row: &Row, width: usize) -> String {
 	let eta = _format_eta(row.total.saturating_sub(row.done) as f64 / row.rate);
 	let tail = if width >= 96 {
 		format!("  {stage:<11}  {bar} {amount:>21}  {speed:>12}  {eta:>5}")
-	} else if width >= 84 {
+	} else if width >= 80 {
 		format!("  {stage:<11}  {amount:>21}  {speed:>12}  {eta:>5}")
 	} else if width >= 60 {
 		format!("  {stage:<11}  {amount:>21}")
@@ -262,7 +274,7 @@ fn _format_eta(seconds: f64) -> String {
 	format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
-fn _truncate(value: &str, width: usize) -> String {
+pub(super) fn _truncate(value: &str, width: usize) -> String {
 	if value.chars().count() <= width {
 		return value.to_owned();
 	}
@@ -272,6 +284,70 @@ fn _truncate(value: &str, width: usize) -> String {
 	let mut text: String = value.chars().take(width - 1).collect();
 	text.push('…');
 	text
+}
+
+#[cfg(test)]
+mod screen_tests {
+	use std::time::Duration;
+
+	use super::*;
+	use crate::ui::_screen::FakeScreen;
+
+	fn _event(index: usize, stage: Stage, done: u64, total: u64) -> ProgressEvent {
+		ProgressEvent { index, stage, done, total }
+	}
+
+	fn _assert_downloading(line: &str, label: &str) {
+		assert!(line.starts_with(label), "expected {label}, got {line:?}");
+		assert!(line.contains("downloading"), "expected downloading, got {line:?}");
+	}
+
+	#[test]
+	fn redraws_each_record_in_place() {
+		let screen = FakeScreen::new(24, 80);
+		let labels = vec!["github:owner/zero v1".to_owned(), "github:owner/one v1".to_owned()];
+		let bar = ProgressBar::with_screen(labels, Some(screen.clone()), Duration::ZERO);
+		let total = 1000;
+		// start both downloads and finish extracting tool 0
+		bar.record(_event(0, Stage::Download, 0, total));
+		bar.record(_event(1, Stage::Download, 0, total));
+		bar.record(_event(0, Stage::Extract, total, total));
+		let frames = screen.frames();
+		assert_eq!(frames.len(), 3);
+		// starting tool 0 draws the header and its row
+		assert_eq!(frames[0].len(), 2);
+		assert_eq!(frames[0][0], "0/2");
+		_assert_downloading(&frames[0][1], "github:owner/zero v1");
+		// starting tool 1 adds its row below tool 0
+		assert_eq!(frames[1].len(), 3);
+		assert_eq!(frames[1][0], "0/2");
+		_assert_downloading(&frames[1][1], "github:owner/zero v1");
+		_assert_downloading(&frames[1][2], "github:owner/one v1");
+		// finishing tool 0 shrinks the frame so a stale row means the clear count was wrong
+		assert_eq!(frames[2].len(), 2);
+		assert_eq!(frames[2][0], "1/2");
+		_assert_downloading(&frames[2][1], "github:owner/one v1");
+		// drop clears the last frame
+		drop(bar);
+		assert!(screen.lines().is_empty(), "screen not cleared: {:?}", screen.lines());
+		assert_eq!(screen.frames().last(), Some(&Vec::new()));
+	}
+
+	#[test]
+	fn skips_records_within_draw_interval() {
+		let screen = FakeScreen::new(24, 80);
+		let labels = vec!["github:owner/zero v1".to_owned()];
+		let bar = ProgressBar::with_screen(labels, Some(screen.clone()), Duration::MAX);
+		let total = 1000;
+		// carry tool 0 through both stages
+		bar.record(_event(0, Stage::Download, 0, total));
+		bar.record(_event(0, Stage::Download, total, total));
+		bar.record(_event(0, Stage::Extract, total, total));
+		assert!(screen.frames().is_empty(), "drew {:?}", screen.frames());
+		// drop clears no lines and flushes once
+		drop(bar);
+		assert_eq!(screen.frames(), [Vec::<String>::new()]);
+	}
 }
 
 #[cfg(test)]
@@ -315,8 +391,8 @@ mod draw_tests {
 			(107, "github:owner/repo v1.2.3"),
 			(96, "github:owner/repo v1.2.3"),
 			(95, "github:owner/repo v1.2.3"),
-			(84, "github:owner/repo v1.2.3"),
-			(83, "github:owner/repo v1.2.3"),
+			(80, "github:owner/repo v1.2…"),
+			(79, "github:owner/repo v1.2.3"),
 			(60, "github:owner/repo v1.2.3"),
 			(59, "github:owner/repo v1.2.3"),
 			(36, "github:owner/repo v1.2…"),
