@@ -5,13 +5,14 @@ use std::time::{Duration, Instant};
 
 use console::Term;
 
+use super::_screen::Screen;
 use super::progress::_truncate;
 
 // resolve fires only start and finish events, so the ticker redraws to advance elapsed times
 const TICK_INTERVAL: Duration = Duration::from_millis(250);
 
-pub(crate) struct ProgressList {
-	term: Option<Term>,
+pub(crate) struct ProgressList<S: Screen = Term> {
+	screen: Option<S>,
 	inner: Arc<Mutex<Inner>>,
 	ticker: Option<JoinHandle<()>>,
 }
@@ -24,31 +25,44 @@ struct Inner {
 
 impl ProgressList {
 	pub(crate) fn new(labels: Vec<String>) -> Self {
-		let term = std::io::stderr().is_terminal().then(Term::stderr);
+		let screen = std::io::stderr().is_terminal().then(Term::stderr);
+		Self::with_screen(labels, screen, TICK_INTERVAL)
+	}
+}
+
+impl<S: Screen + Clone + 'static> ProgressList<S> {
+	// skip the ticker and events without a screen
+	fn with_screen(labels: Vec<String>, screen: Option<S>, tick_interval: Duration) -> Self {
 		let now = Instant::now();
 		let inner = Arc::new(Mutex::new(Inner {
 			state: State::new(labels, now),
 			drawn_lines: 0,
 			stopped: false,
 		}));
-		let ticker = term.clone().map(|term| {
+		let ticker = screen.clone().map(|screen| {
 			let inner = Arc::clone(&inner);
-			thread::spawn(move || Self::_tick(&term, &inner))
+			thread::spawn(move || Self::_tick(&screen, &inner, tick_interval))
 		});
-		Self { term, inner, ticker }
+		Self { screen, inner, ticker }
 	}
+}
 
-	// the ticker draws the change on its next tick
+impl<S: Screen> ProgressList<S> {
 	pub(crate) fn record(&self, event: ProgressEvent) {
-		if self.term.is_none() {
+		if self.screen.is_none() {
 			return;
 		}
 		self.inner.lock().unwrap().state.update(event, Instant::now());
+		// wake the ticker so the change draws now
+		if let Some(ticker) = &self.ticker {
+			ticker.thread().unpark();
+		}
 	}
 
-	fn _tick(term: &Term, inner: &Mutex<Inner>) {
+	fn _tick(screen: &S, inner: &Mutex<Inner>, tick_interval: Duration) {
 		loop {
-			thread::park_timeout(TICK_INTERVAL);
+			// unparks from record merge into one pending wake so bursts draw once
+			thread::park_timeout(tick_interval);
 			let Ok(mut inner) = inner.lock() else {
 				return;
 			};
@@ -56,31 +70,31 @@ impl ProgressList {
 			if inner.stopped {
 				return;
 			}
-			let (height, columns) = term.size();
+			let (height, columns) = screen.size();
 			let lines = draw(&inner.state, Instant::now(), columns as usize, height as usize);
-			inner.drawn_lines = Self::_write(term, &lines, inner.drawn_lines);
+			inner.drawn_lines = Self::_write(screen, &lines, inner.drawn_lines);
 		}
 	}
 
-	fn _write(term: &Term, lines: &[String], drawn_lines: usize) -> usize {
-		let _ = term.clear_last_lines(drawn_lines);
+	fn _write(screen: &S, lines: &[String], drawn_lines: usize) -> usize {
+		screen.clear_last_lines(drawn_lines);
 		for line in lines {
-			let _ = term.write_line(line);
+			screen.write_line(line);
 		}
-		let _ = term.flush();
+		screen.flush();
 		lines.len()
 	}
 }
 
-impl Drop for ProgressList {
+impl<S: Screen> Drop for ProgressList<S> {
 	fn drop(&mut self) {
-		let Some(term) = &self.term else {
+		let Some(screen) = &self.screen else {
 			return;
 		};
 		if let Ok(mut inner) = self.inner.lock() {
 			inner.stopped = true;
-			let _ = term.clear_last_lines(inner.drawn_lines);
-			let _ = term.flush();
+			screen.clear_last_lines(inner.drawn_lines);
+			screen.flush();
 		}
 		if let Some(ticker) = self.ticker.take() {
 			// wake the ticker so it sees stopped without waiting out the interval
@@ -208,10 +222,81 @@ fn _format_elapsed(elapsed: Duration) -> String {
 }
 
 #[cfg(test)]
+mod screen_tests {
+	use std::thread;
+	use std::time::{Duration, Instant};
+
+	use super::*;
+	use crate::ui::_screen::FakeScreen;
+
+	fn _event(index: usize, done: bool) -> ProgressEvent {
+		ProgressEvent {
+			index,
+			stage: Stage::Resolve,
+			done,
+		}
+	}
+
+	// the ticker draws on its own schedule, so poll until the screen matches or a second passes
+	fn _wait_for(screen: &FakeScreen, expected: impl Fn(&[String]) -> bool) {
+		let deadline = Instant::now() + Duration::from_secs(1);
+		while !expected(&screen.lines()) {
+			assert!(Instant::now() < deadline, "screen never matched: {:?}", screen.lines());
+			thread::sleep(Duration::from_millis(1));
+		}
+	}
+
+	#[test]
+	fn redraws_each_tick_in_place() {
+		let screen = FakeScreen::new(24, 80);
+		let labels = vec!["github:owner/zero latest".to_owned(), "github:owner/one latest".to_owned()];
+		let list = ProgressList::with_screen(labels, Some(screen.clone()), Duration::from_millis(1));
+		// start both tools
+		list.record(_event(0, false));
+		list.record(_event(1, false));
+		_wait_for(&screen, |lines| {
+			lines.len() == 3 && lines[0].starts_with("0/2") && lines[1].starts_with("github:owner/zero latest") && lines[2].starts_with("github:owner/one latest")
+		});
+		// finishing tool 0 shrinks the frame so a stale row means the clear count was wrong
+		list.record(_event(0, true));
+		_wait_for(&screen, |lines| {
+			lines.len() == 2 && lines[0].starts_with("1/2") && lines[1].starts_with("github:owner/one latest")
+		});
+	}
+
+	#[test]
+	fn wakes_ticker_and_clears_screen_on_drop() {
+		let screen = FakeScreen::new(24, 80);
+		let labels = vec!["github:owner/zero latest".to_owned()];
+		let list = ProgressList::with_screen(labels, Some(screen.clone()), Duration::from_secs(60));
+		// record wakes the ticker so the row draws without waiting out the interval
+		list.record(_event(0, false));
+		_wait_for(&screen, |lines| {
+			lines.len() == 2 && lines[0].starts_with("0/1") && lines[1].starts_with("github:owner/zero latest")
+		});
+		let started = Instant::now();
+		drop(list);
+		// drop unparks the ticker so joining it skips the tick interval
+		assert!(started.elapsed() < Duration::from_secs(1), "drop took {:?}", started.elapsed());
+		assert!(screen.lines().is_empty(), "screen not cleared: {:?}", screen.lines());
+		// drop flushes the cleared screen last, so the ticker drew nothing after it
+		assert_eq!(screen.frames().last(), Some(&Vec::new()));
+	}
+}
+
+#[cfg(test)]
 mod draw_tests {
 	use std::time::{Duration, Instant};
 
 	use super::*;
+
+	fn _event(index: usize, done: bool) -> ProgressEvent {
+		ProgressEvent {
+			index,
+			stage: Stage::Resolve,
+			done,
+		}
+	}
 
 	#[test]
 	fn draws_at_exact_width_boundaries() {
@@ -228,6 +313,25 @@ mod draw_tests {
 			assert_eq!(line, format!("{label}  resolving  00:03"), "width {width}");
 			assert_eq!(line.chars().count(), width, "line width {width}");
 		}
+	}
+
+	#[test]
+	fn draws_capped_rows_and_hidden_count() {
+		let t0 = Instant::now();
+		let mut state = State::new((0..5).map(|index| format!("github:owner/{index} v1")).collect(), t0);
+		// start all five tools
+		for index in 0..5 {
+			state.update(_event(index, false), t0);
+		}
+		// a height of five draws four lines: the header, two rows, and the count
+		let lines = draw(&state, t0, 80, 5);
+		assert_eq!(lines.len(), 4);
+		assert_eq!(lines[0], "0/5  00:00");
+		assert!(lines[1].starts_with("github:owner/0 v1"));
+		assert!(lines[2].starts_with("github:owner/1 v1"));
+		assert_eq!(lines[3], "+3 more");
+		// three lines fit only the header and the hidden row count
+		assert_eq!(draw(&state, t0, 80, 3), ["0/5  00:00", "+5 more"]);
 	}
 }
 
