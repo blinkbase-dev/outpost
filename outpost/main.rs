@@ -6,6 +6,7 @@ mod list;
 mod shim;
 mod tools;
 mod ui;
+mod which;
 
 use clap::{Parser, Subcommand};
 
@@ -15,6 +16,7 @@ fn main() {
 		Command::List => list::list().map(|()| 0),
 		Command::Exec(args) => exec::exec(args),
 		Command::Shim(args) => shim::shim(args).map(|()| 0),
+		Command::Which(args) => which::which(args).map(|()| 0),
 	};
 	match result {
 		Ok(code) => std::process::exit(code),
@@ -38,4 +40,5 @@ enum Command {
 	List,
 	Exec(exec::ExecArgs),
 	Shim(shim::ShimArgs),
+	Which(which::WhichArgs),
 }
