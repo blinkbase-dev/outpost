@@ -33,6 +33,10 @@ path = "_tests/exec.rs"
 name = "shim"
 path = "_tests/shim.rs"
 
+[[test]]
+name = "which"
+path = "_tests/which.rs"
+
 [dependencies]
 clap.workspace = true
 console.workspace = true

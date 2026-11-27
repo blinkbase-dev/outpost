@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use clap::Args;
 
@@ -87,6 +87,11 @@ fn exec_tool(args: ExecArgs) -> Result<i32, Error> {
 }
 
 fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
+	let path = resolve_shim(shim)?;
+	Ok(candidates::run(&path, args)?)
+}
+
+pub(crate) fn resolve_shim(shim: &OsStr) -> Result<PathBuf, Error> {
 	let cwd = std::env::current_dir()?;
 	let paths = locate::locate(&cwd)?;
 	let data_dir = paths.data_dir.as_deref().ok_or("no data directory")?;
@@ -125,7 +130,7 @@ fn exec_shim(shim: &OsStr, args: &[OsString]) -> Result<i32, Error> {
 		if !path.is_file() {
 			return Err(format!("'{name}' was not found in {}", tools_dir.join(install_path).display()).into());
 		}
-		return Ok(candidates::run(&path, args)?);
+		return Ok(path);
 	}
 	let mut message = format!("'{name}' is provided by tools that the current config does not request:");
 	for entry in shims {
