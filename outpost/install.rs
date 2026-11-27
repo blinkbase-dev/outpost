@@ -314,6 +314,16 @@ mod resolve_tests {
 		}
 	}
 
+	fn _resolution(checksum: &str) -> ToolResolution {
+		ToolResolution::Github(GithubResolution {
+			tag_name: "v1.0.0".to_owned(),
+			url: String::new(),
+			size: 0,
+			format: ArchiveFormat::TarGz,
+			sha256: checksum.to_owned(),
+		})
+	}
+
 	fn _progress_events() -> (ResolveProgressFn, Arc<Mutex<Vec<ResolveProgress>>>) {
 		let events = Arc::new(Mutex::new(Vec::new()));
 		let progress: ResolveProgressFn = {
@@ -329,6 +339,8 @@ mod resolve_tests {
 		let api_url = server.uri();
 		let libc = if cfg!(windows) { "msvc" } else { "gnu" };
 		let asset = format!("tool-{}-{}-{libc}.tar.gz", std::env::consts::OS, std::env::consts::ARCH);
+		let cached_checksum = "aa".repeat(32);
+		let fresh_checksum = "bb".repeat(32);
 		Mock::given(method("GET"))
 			.and(path("/repos/owner/fresh/releases/latest"))
 			.respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -339,6 +351,7 @@ mod resolve_tests {
 					"name": asset,
 					"browser_download_url": format!("{api_url}/download/{asset}"),
 					"size": 1,
+					"digest": format!("sha256:{fresh_checksum}"),
 				}],
 			})))
 			.mount(&server)
@@ -352,22 +365,22 @@ mod resolve_tests {
 		let data_dir = tempfile::tempdir().unwrap();
 		// seed the cache so owner/cached never reaches the server
 		let mut cache = ResolutionCache::load(data_dir.path(), &requests[..1]);
-		cache.put(
-			&requests[0].tool,
-			&ToolResolution::Github(GithubResolution {
-				tag_name: "v1.0.0".to_owned(),
-				url: String::new(),
-				size: 0,
-				format: ArchiveFormat::TarGz,
-				sha256: String::new(),
-			}),
-		);
+		cache.put(&requests[0].tool, &_resolution(&cached_checksum));
 		cache.flush().unwrap();
 		let (progress, events) = _progress_events();
 		let (resolutions, failures, flush_err) = resolve_parallel(requests, http(), data_dir.path(), progress).await.unwrap();
 		assert_eq!(resolutions.len(), 2);
 		assert_eq!(failures.len(), 1);
 		assert!(flush_err.is_none());
+		let checksum = |full_name: &str| {
+			let entry = resolutions
+				.iter()
+				.find(|(request, _)| matches!(&request.tool, RequestedTool::Github(req) if req.full_name == full_name));
+			entry.map(|(_, res)| res.checksum().to_owned())
+		};
+		// the cached checksum survives a flush and the fresh one drops the digest prefix
+		assert_eq!(checksum("owner/cached"), Some(cached_checksum));
+		assert_eq!(checksum("owner/fresh"), Some(fresh_checksum));
 		let events = events.lock().unwrap().iter().map(|event| (event.index, event.done)).collect::<Vec<_>>();
 		// the cache hit reports before any task is spawned
 		assert_eq!(events[..2], [(0, false), (0, true)]);
