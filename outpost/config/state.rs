@@ -73,31 +73,21 @@ impl Default for State {
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub(crate) enum ShimEntry {
-	Github {
-		#[serde(default)]
-		api_url: String,
-		full_name: String,
-		lane: String,
-		requested: Version,
-		install_path: PathBuf,
-		binary: PathBuf,
-	},
+	Github(GithubShim),
+	Node(NodeShim),
 }
 
 impl ShimEntry {
 	pub(crate) fn identity(&self) -> Identity {
 		match self {
-			Self::Github {
-				api_url,
-				full_name,
-				lane,
-				requested,
-				..
-			} => Identity::Github {
-				api_url: api_url.clone(),
-				full_name: full_name.clone(),
-				lane: lane.clone(),
-				version: requested.clone(),
+			Self::Github(shim) => Identity::Github {
+				api_url: shim.api_url.clone(),
+				full_name: shim.full_name.clone(),
+				lane: shim.lane.clone(),
+				version: shim.requested.clone(),
+			},
+			Self::Node(shim) => Identity::Node {
+				version: shim.requested.clone(),
 			},
 		}
 	}
@@ -106,9 +96,42 @@ impl ShimEntry {
 	// provides the same binary, and the names would collide
 	pub(crate) fn identity_key(&self) -> String {
 		match self {
-			Self::Github { api_url, full_name, lane, .. } => format!("github:{api_url}:{full_name}@{lane}"),
+			Self::Github(shim) => format!("github:{}:{}@{}", shim.api_url, shim.full_name, shim.lane),
+			Self::Node(_) => "core:node".to_owned(),
 		}
 	}
+
+	pub(crate) fn install_path(&self) -> &Path {
+		match self {
+			Self::Github(shim) => &shim.install_path,
+			Self::Node(shim) => &shim.install_path,
+		}
+	}
+
+	pub(crate) fn binary(&self) -> &Path {
+		match self {
+			Self::Github(shim) => &shim.binary,
+			Self::Node(shim) => &shim.binary,
+		}
+	}
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub(crate) struct GithubShim {
+	#[serde(default)]
+	pub(crate) api_url: String,
+	pub(crate) full_name: String,
+	pub(crate) lane: String,
+	pub(crate) requested: Version,
+	pub(crate) install_path: PathBuf,
+	pub(crate) binary: PathBuf,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub(crate) struct NodeShim {
+	pub(crate) requested: Version,
+	pub(crate) install_path: PathBuf,
+	pub(crate) binary: PathBuf,
 }
 
 #[derive(Debug)]
@@ -170,14 +193,14 @@ mod tests {
 			version: VERSION,
 			registered_paths: vec![PathBuf::from("project/outpost.toml")],
 			binaries: BTreeMap::from([(PathBuf::from("github_owner_repo/1.2.3"), vec![PathBuf::from("rg"), PathBuf::from("doc/rg")])]),
-			shims: BTreeMap::from([("rg".to_owned(), vec![ShimEntry::Github {
+			shims: BTreeMap::from([("rg".to_owned(), vec![ShimEntry::Github(GithubShim {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
 				lane: String::new(),
 				requested: Version::parse("1.2.3"),
 				install_path: PathBuf::from("github_owner_repo/1.2.3"),
 				binary: PathBuf::from("rg"),
-			}])]),
+			})])]),
 		};
 		write(dir.path(), &state, None).unwrap();
 		let (read, _) = read(dir.path()).unwrap();

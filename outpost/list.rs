@@ -21,8 +21,9 @@ pub(crate) fn list() -> Result<(), Error> {
 	for entry in &report.requested {
 		let (tool, requested, origin) = match &entry.tool {
 			RequestedTool::Github(req) => (format!("github:{}", req.full_name), format!("{}{}", req.lane, req.version), req.api_url.clone()),
+			RequestedTool::Node(req) => ("core:node".to_owned(), req.version.to_string(), String::new()),
 		};
-		let version = match &entry.installed_version {
+		let version = match &entry.version {
 			Some(version) => match entry.install_state {
 				InstallState::Installed => version.clone(),
 				InstallState::Missing => format!("{version} (missing)"),
@@ -46,6 +47,14 @@ pub(crate) fn list() -> Result<(), Error> {
 					format!("{} (missing)", lock.tag_name)
 				};
 				(format!("github:{}", lock.full_name), version, lock.api_url.clone())
+			}
+			LockedTool::Node(lock) => {
+				let version = if tools_dir.join(&lock.install_path).exists() {
+					lock.version.clone()
+				} else {
+					format!("{} (missing)", lock.version)
+				};
+				("core:node".to_owned(), version, String::new())
 			}
 		};
 		rows.push(Row {

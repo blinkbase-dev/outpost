@@ -59,10 +59,21 @@ impl TryFrom<RawConfig> for Config {
 
 // the backend in the tool name picks the options table
 fn _tool_options(key: &str, value: toml::Value) -> Result<ToolOptions, String> {
-	let Some((backend, _)) = key.split_once(':') else {
+	let Some((backend, name)) = key.split_once(':') else {
 		return Err(format!("missing backend in '{key}'"));
 	};
 	match backend {
+		"core" => {
+			if name != "node" {
+				return Err(format!("unsupported core tool '{name}' in '{key}'"));
+			}
+			let options: NodeOptionsTable = match value {
+				// shorthand form fills the same table
+				toml::Value::String(version) => NodeOptionsTable { version },
+				table => table.try_into().map_err(|error| format!("invalid options for '{key}': {error}"))?,
+			};
+			Ok(ToolOptions::Node(options))
+		}
 		"github" => {
 			let mut options: GithubOptionsTable = match value {
 				// shorthand form fills the same table
@@ -108,6 +119,7 @@ fn _is_plain_name(name: &str) -> bool {
 #[derive(Debug, PartialEq)]
 pub(crate) enum ToolOptions {
 	Github(GithubOptionsTable),
+	Node(NodeOptionsTable),
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -120,6 +132,12 @@ pub(crate) struct GithubOptionsTable {
 	pub(crate) exposed: Option<Vec<String>>,
 	#[serde(default)]
 	pub(crate) rename_shims: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NodeOptionsTable {
+	pub(crate) version: String,
 }
 
 #[derive(Debug)]
@@ -162,6 +180,7 @@ mod tests {
 	fn _version(options: &ToolOptions) -> &str {
 		match options {
 			ToolOptions::Github(table) => &table.version,
+			ToolOptions::Node(table) => &table.version,
 		}
 	}
 

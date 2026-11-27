@@ -13,21 +13,21 @@ pub(crate) fn report(catalog: &Catalog<'_>, tools_dir: &Path) -> Report {
 	for request in requests {
 		let identity = request.tool.identity();
 		requested_identities.insert(identity.clone());
-		let (install_state, installed_version) = match catalog.lock_for(&identity) {
-			Some(LockedTool::Github(lock)) => {
-				let install_state = if _installed_cached(&mut checked, tools_dir, lock.install_path.as_path()) {
+		let (install_state, version) = match catalog.lock_for(&identity) {
+			Some(locked) => {
+				let install_state = if _installed_cached(&mut checked, tools_dir, locked.install_path()) {
 					InstallState::Installed
 				} else {
 					InstallState::Missing
 				};
-				(install_state, Some(lock.tag_name.clone()))
+				(install_state, Some(locked.version().to_owned()))
 			}
 			None => (InstallState::Missing, None),
 		};
 		requested.push(ToolStatus {
 			origin: request.origin.clone(),
 			install_state,
-			installed_version,
+			version,
 			tool: request.tool.clone(),
 		});
 	}
@@ -49,7 +49,7 @@ pub(crate) struct Report {
 pub(crate) struct ToolStatus {
 	pub(crate) origin: PathBuf,
 	pub(crate) install_state: InstallState,
-	pub(crate) installed_version: Option<String>,
+	pub(crate) version: Option<String>,
 	pub(crate) tool: RequestedTool,
 }
 
@@ -126,7 +126,7 @@ mod tests {
 			ToolStatus {
 				origin: PathBuf::from("outpost.toml"),
 				install_state: InstallState::Installed,
-				installed_version: Some("v1.2.3".to_owned()),
+				version: Some("v1.2.3".to_owned()),
 				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
@@ -139,7 +139,7 @@ mod tests {
 			ToolStatus {
 				origin: PathBuf::from("outpost.toml"),
 				install_state: InstallState::Missing,
-				installed_version: None,
+				version: None,
 				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/other".to_owned(),
@@ -184,7 +184,7 @@ mod tests {
 		assert_eq!(report.requested, vec![ToolStatus {
 			origin: PathBuf::from("outpost.toml"),
 			install_state: InstallState::Missing,
-			installed_version: Some("v1.2.3".to_owned()),
+			version: Some("v1.2.3".to_owned()),
 			tool: RequestedTool::Github(GithubRequest {
 				api_url: String::new(),
 				full_name: "owner/repo".to_owned(),
@@ -262,7 +262,7 @@ mod tests {
 			ToolStatus {
 				origin: PathBuf::from("system/outpost.toml"),
 				install_state: InstallState::Installed,
-				installed_version: Some("v1.2.3".to_owned()),
+				version: Some("v1.2.3".to_owned()),
 				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
@@ -275,7 +275,7 @@ mod tests {
 			ToolStatus {
 				origin: PathBuf::from("project/outpost.toml"),
 				install_state: InstallState::Installed,
-				installed_version: Some("v1.2.3".to_owned()),
+				version: Some("v1.2.3".to_owned()),
 				tool: RequestedTool::Github(GithubRequest {
 					api_url: String::new(),
 					full_name: "owner/repo".to_owned(),
@@ -342,7 +342,7 @@ mod tests {
 		assert_eq!(report.requested.len(), 2);
 		for status in &report.requested {
 			assert_eq!(status.install_state, InstallState::Installed);
-			assert_eq!(status.installed_version.as_deref(), Some("v1.0.0"));
+			assert_eq!(status.version.as_deref(), Some("v1.0.0"));
 		}
 		assert!(report.unrequested.is_empty());
 	}
