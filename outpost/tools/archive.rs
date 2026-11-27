@@ -411,13 +411,13 @@ mod install_parallel_tests {
 		}
 	}
 
-	fn _resolution(tag_name: &str, url: String, size: u64, format: ArchiveFormat) -> ToolResolution {
+	fn _resolution(tag_name: &str, url: String, size: u64, format: ArchiveFormat, checksum: &str) -> ToolResolution {
 		ToolResolution::Github(GithubResolution {
 			tag_name: tag_name.to_owned(),
 			url,
 			size,
 			format,
-			sha256: String::new(),
+			sha256: checksum.to_owned(),
 		})
 	}
 
@@ -449,8 +449,8 @@ mod install_parallel_tests {
 			.await;
 		#[rustfmt::skip]
 		let entries = vec![
-			(_request("owner/fast", "1.0.0"), _resolution("v1.0.0", fast_url, fast.len() as u64, ArchiveFormat::TarGz)),
-			(_request("owner/slow", "1.0.0"), _resolution("v1.0.0", slow_url, slow.len() as u64, ArchiveFormat::TarGz)),
+			(_request("owner/fast", "1.0.0"), _resolution("v1.0.0", fast_url, fast.len() as u64, ArchiveFormat::TarGz, "")),
+			(_request("owner/slow", "1.0.0"), _resolution("v1.0.0", slow_url, slow.len() as u64, ArchiveFormat::TarGz, "")),
 		];
 		let groups = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let dir = tempfile::tempdir().unwrap();
@@ -502,9 +502,9 @@ mod install_parallel_tests {
 			.await;
 		#[rustfmt::skip]
 		let entries = vec![
-			(_request("owner/tar-gz", "1.0.0"), _resolution("v1.0.0", tar_gz_url, tar_gz_body.len() as u64, ArchiveFormat::TarGz)),
-			(_request("owner/tar-xz", "1.0.0"), _resolution("v1.0.0", tar_xz_url, tar_xz_body.len() as u64, ArchiveFormat::TarXz)),
-			(_request("owner/zip", "1.0.0"), _resolution("v1.0.0", zip_url, zip_body.len() as u64, ArchiveFormat::Zip)),
+			(_request("owner/tar-gz", "1.0.0"), _resolution("v1.0.0", tar_gz_url, tar_gz_body.len() as u64, ArchiveFormat::TarGz, "")),
+			(_request("owner/tar-xz", "1.0.0"), _resolution("v1.0.0", tar_xz_url, tar_xz_body.len() as u64, ArchiveFormat::TarXz, "")),
+			(_request("owner/zip", "1.0.0"), _resolution("v1.0.0", zip_url, zip_body.len() as u64, ArchiveFormat::Zip, "")),
 		];
 		let groups = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let dir = tempfile::tempdir().unwrap();
@@ -525,6 +525,7 @@ mod install_parallel_tests {
 	async fn isolates_download_and_extraction_failures() {
 		let server = MockServer::start().await;
 		let good = tar_gz(&[("tool", b"good")]);
+		let good_checksum: String = Sha256::digest(&good).iter().map(|byte| format!("{byte:02x}")).collect();
 		let corrupt = b"not an archive".to_vec();
 		let good_url = format!("{}/good.tar.gz", server.uri());
 		let missing_url = format!("{}/missing.tar.gz", server.uri());
@@ -546,9 +547,10 @@ mod install_parallel_tests {
 			.await;
 		#[rustfmt::skip]
 		let entries = vec![
-			(_request("owner/good", "1.0.0"), _resolution("v1.0.0", good_url, good.len() as u64, ArchiveFormat::TarGz)),
-			(_request("owner/missing", "1.0.0"), _resolution("v1.0.0", missing_url, 4, ArchiveFormat::TarGz)),
-			(_request("owner/corrupt", "1.0.0"), _resolution("v1.0.0", corrupt_url, corrupt.len() as u64, ArchiveFormat::TarGz)),
+			(_request("owner/good", "1.0.0"), _resolution("v1.0.0", good_url.clone(), good.len() as u64, ArchiveFormat::TarGz, &good_checksum)),
+			(_request("owner/tampered", "1.0.0"), _resolution("v1.0.0", good_url, good.len() as u64, ArchiveFormat::TarGz, &"0".repeat(64))),
+			(_request("owner/missing", "1.0.0"), _resolution("v1.0.0", missing_url, 4, ArchiveFormat::TarGz, "")),
+			(_request("owner/corrupt", "1.0.0"), _resolution("v1.0.0", corrupt_url, corrupt.len() as u64, ArchiveFormat::TarGz, "")),
 		];
 		let groups = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let dir = tempfile::tempdir().unwrap();
@@ -559,16 +561,24 @@ mod install_parallel_tests {
 		let progress: ProgressFn = Arc::new(|_| {});
 		let (installed, failures) = install_parallel(groups, http(), &downloads, &tools, progress).await.unwrap();
 		assert_eq!(installed.len(), 1);
-		assert_eq!(failures.len(), 2);
+		assert_eq!(failures.len(), 3);
 		assert_eq!(std::fs::read(tools.join("github_owner_good/1.0.0/tool")).unwrap(), b"good");
+		assert!(!tools.join("github_owner_tampered/1.0.0").exists());
 		assert!(!tools.join("github_owner_missing/1.0.0").exists());
 		assert!(!tools.join("github_owner_corrupt/1.0.0").exists());
 		// successful extractions delete their archive and failed ones keep it
 		assert!(!downloads.join("github_owner_good_1.0.0").exists());
+		assert!(downloads.join("github_owner_tampered_1.0.0").exists());
 		assert!(downloads.join("github_owner_corrupt_1.0.0").exists());
 		let failed: Vec<&Path> = failures.iter().map(|(group, _)| group.install_path.as_path()).collect();
+		assert!(failed.contains(&Path::new("github_owner_tampered/1.0.0")));
 		assert!(failed.contains(&Path::new("github_owner_missing/1.0.0")));
 		assert!(failed.contains(&Path::new("github_owner_corrupt/1.0.0")));
+		// a checksum mismatch fails before extraction
+		let tampered = failures
+			.iter()
+			.find(|(group, _)| group.install_path == Path::new("github_owner_tampered/1.0.0"));
+		assert!(tampered.unwrap().1.to_string().contains("sha256 mismatch"));
 	}
 
 	#[tokio::test]
@@ -589,8 +599,8 @@ mod install_parallel_tests {
 			.await;
 		#[rustfmt::skip]
 		let entries = vec![
-			(_request("owner/first", "1.0.0"), _resolution("v1.0.0", first_url, body.len() as u64, ArchiveFormat::TarGz)),
-			(_request("owner/second", "1.0.0"), _resolution("v1.0.0", second_url, body.len() as u64, ArchiveFormat::TarGz)),
+			(_request("owner/first", "1.0.0"), _resolution("v1.0.0", first_url, body.len() as u64, ArchiveFormat::TarGz, "")),
+			(_request("owner/second", "1.0.0"), _resolution("v1.0.0", second_url, body.len() as u64, ArchiveFormat::TarGz, "")),
 		];
 		let groups = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		let dir = tempfile::tempdir().unwrap();
