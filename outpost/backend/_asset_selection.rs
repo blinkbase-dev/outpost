@@ -6,7 +6,7 @@ pub(crate) fn select<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(us
 	select_with(names, &Target::current())
 }
 
-fn select_with<'a>(names: impl IntoIterator<Item = &'a str>, target: &Target) -> Option<(usize, &'a str, ArchiveFormat)> {
+pub(super) fn select_with<'a>(names: impl IntoIterator<Item = &'a str>, target: &Target) -> Option<(usize, &'a str, ArchiveFormat)> {
 	names
 		.into_iter()
 		.enumerate()
@@ -48,7 +48,7 @@ fn score(name: &str, format: &ArchiveFormat, target: &Target) -> Option<i32> {
 	Some(score)
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Target {
 	pub(crate) os: &'static str,
 	pub(crate) arch: &'static str,
