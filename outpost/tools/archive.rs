@@ -73,7 +73,12 @@ pub(crate) async fn install_parallel(
 				});
 			};
 			pool.spawn(move || {
-				let _ = sender.send(extract(&path, &tools_dir.join(install_path), &format, &on_extract));
+				let result = extract(&path, &tools_dir.join(install_path), &format, &on_extract);
+				// the tool is in place so the archive is no longer needed
+				if result.is_ok() {
+					let _ = std::fs::remove_file(&path);
+				}
+				let _ = sender.send(result);
 			});
 			match receiver.await {
 				Ok(Ok(())) => Ok(res),
@@ -499,6 +504,9 @@ mod install_parallel_tests {
 		assert_eq!(std::fs::read(tools.join("github_owner_good/1.0.0/tool")).unwrap(), b"good");
 		assert!(!tools.join("github_owner_missing/1.0.0").exists());
 		assert!(!tools.join("github_owner_corrupt/1.0.0").exists());
+		// successful extractions delete their archive and failed ones keep it
+		assert!(!downloads.join("github_owner_good_1.0.0").exists());
+		assert!(downloads.join("github_owner_corrupt_1.0.0").exists());
 		let failed: Vec<&Path> = failures.iter().map(|(group, _)| group.install_path.as_path()).collect();
 		assert!(failed.contains(&Path::new("github_owner_missing/1.0.0")));
 		assert!(failed.contains(&Path::new("github_owner_corrupt/1.0.0")));
