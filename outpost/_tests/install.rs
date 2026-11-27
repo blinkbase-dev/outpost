@@ -26,7 +26,7 @@ impl Fixture {
 		Self { _dir: dir, config_dir }
 	}
 
-	fn run(&self) -> Output {
+	fn run(&self, vars: Option<&[(&str, &str)]>) -> Output {
 		let mut command = Command::new(env!("CARGO_BIN_EXE_op"));
 		command.arg("install").current_dir(&self.config_dir).env_clear();
 		#[cfg(windows)]
@@ -41,6 +41,9 @@ impl Fixture {
 			.env("OUTPOST_CONFIG_DIR", &self.config_dir)
 			.env("OUTPOST_DATA_DIR", &self.config_dir)
 			.env("OUTPOST_ENV", "dev");
+		if let Some(vars) = vars {
+			command.envs(vars.iter().copied());
+		}
 		command.output().unwrap()
 	}
 }
@@ -132,9 +135,9 @@ fn skips_installed_tools() {
 	"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}" }}
 	"#};
 	let fixture = Fixture::new(&config, None);
-	let first = fixture.run();
+	let first = fixture.run(None);
 	assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
-	let second = fixture.run();
+	let second = fixture.run(None);
 	assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
 	// the lock row and installed dir make the second run a no-op
 	assert!(second.stdout.is_empty(), "{}", String::from_utf8_lossy(&second.stdout));
@@ -155,11 +158,11 @@ fn installs_github_release_asset() {
 	"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}" }}
 	"#};
 	let fixture = Fixture::new(&config, None);
-	let output = fixture.run();
+	let output = fixture.run(None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let stdout = String::from_utf8(output.stdout).unwrap();
-	assert!(stdout.contains("owner/repo v1.0.0"), "{stdout}");
+	assert!(stdout.contains("github:owner/repo v1.0.0"), "{stdout}");
 	// the binary is extracted into the origin/repo/tag directory
 	let install_path = _install_path(&api_url, "owner_repo", "1.0.0");
 	let installed = fixture.config_dir.join("tools").join(&install_path).join(binary);
@@ -236,12 +239,12 @@ fn installs_two_versions_of_same_tool() {
 	"#};
 	let fixture = Fixture::new(&one, None);
 	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
-	let output = fixture.run();
+	let output = fixture.run(None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(output.status.success(), "{stderr}");
 	let stdout = String::from_utf8(output.stdout).unwrap();
-	assert!(stdout.contains("owner/repo v1.0.0"), "{stdout}");
-	assert!(stdout.contains("owner/repo v2.0.0"), "{stdout}");
+	assert!(stdout.contains("github:owner/repo v1.0.0"), "{stdout}");
+	assert!(stdout.contains("github:owner/repo v2.0.0"), "{stdout}");
 	// each version is extracted into its own directory
 	let one_path = _install_path(&api_url, "owner_repo", "1.0.0");
 	let two_path = _install_path(&api_url, "owner_repo", "2.0.0");
@@ -299,10 +302,10 @@ fn reports_failed_install_per_origin() {
 	"#};
 	let fixture = Fixture::new(&config, None);
 	std::fs::write(fixture.config_dir.join("outpost.dev.toml"), config).unwrap();
-	let output = fixture.run();
+	let output = fixture.run(None);
 	let stderr = String::from_utf8(output.stderr).unwrap();
 	assert!(!output.status.success(), "{stderr}");
-	assert!(stderr.contains("owner/repo 1.0.0: no release found"), "{stderr}");
+	assert!(stderr.contains("github:owner/repo 1.0.0: no release found"), "{stderr}");
 	// a failed resolve names every config that requested the tool
 	let system = std::fs::canonicalize(fixture.config_dir.join("outpost.toml")).unwrap().display().to_string();
 	let dev = std::fs::canonicalize(fixture.config_dir.join("outpost.dev.toml"))
@@ -326,6 +329,105 @@ fn reports_failed_install_per_origin() {
 	let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
 	assert!(!lock.contains("[[tool]]"), "{lock}");
 	assert_eq!(std::fs::read_dir(fixture.config_dir.join("tools")).unwrap().count(), 0);
+}
+
+mod node {
+	use super::*;
+
+	#[test]
+	fn installs_node_release() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let server = runtime.block_on(MockServer::start());
+		let dist_url = server.uri();
+		// pick an archive name that the selector accepts on this host
+		let wrapper = format!("node-v26.13.1-{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+		let name = format!("{wrapper}.tar.gz");
+		// a second entry keeps the wrapper from being stripped down to bin
+		let (binary, binary_toml, extra) = if cfg!(windows) {
+			("node.exe", "\"node.exe\"", "node_modules/npm/package.json")
+		} else {
+			("bin/node", "\"bin/node\"", "lib/node_modules/npm/package.json")
+		};
+		let (binary_entry, extra_entry) = (format!("{wrapper}/{binary}"), format!("{wrapper}/{extra}"));
+		let bytes = _tarball(&[(binary_entry.as_str(), b"node 26.13.1".as_slice()), (extra_entry.as_str(), b"{}".as_slice())]);
+		let checksum: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+		let archive_path = format!("/v26.13.1/{name}");
+		runtime.block_on(async {
+			Mock::given(method("GET"))
+				.and(path("/index.json"))
+				.respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "version": "v26.13.1" }])))
+				.mount(&server)
+				.await;
+			Mock::given(method("GET"))
+				.and(path("/v26.13.1/SHASUMS256.txt"))
+				.respond_with(ResponseTemplate::new(200).set_body_string(format!("{checksum}  {name}\n")))
+				.mount(&server)
+				.await;
+			Mock::given(method("HEAD"))
+				.and(path(&archive_path))
+				.respond_with(ResponseTemplate::new(200).insert_header("content-length", bytes.len().to_string()))
+				.mount(&server)
+				.await;
+			Mock::given(method("GET"))
+				.and(path(&archive_path))
+				.respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.clone()))
+				.mount(&server)
+				.await;
+		});
+		let config = formatdoc! {r#"
+		[tools]
+		"core:node" = "26.13.1"
+		"#};
+		let fixture = Fixture::new(&config, None);
+		let output = fixture.run(Some(&[("OUTPOST_NODE_DIST_URL", dist_url.as_str())]));
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(output.status.success(), "{stderr}");
+		let stdout = String::from_utf8(output.stdout).unwrap();
+		assert!(stdout.contains("core:node v26.13.1"), "{stdout}");
+		// the wrapper directory is stripped so the binary sits under the install path
+		let installed = fixture.config_dir.join("tools/core_node/26.13.1").join(binary);
+		assert_eq!(std::fs::read(&installed).unwrap(), b"node 26.13.1".as_slice());
+		// the lock records the requested and resolved versions
+		let lock = std::fs::read_to_string(fixture.config_dir.join("outpost.lock")).unwrap();
+		let expected_lock = formatdoc! {r#"
+		version = 1
+
+		[[tool]]
+		backend = "node"
+		requested = "26.13.1"
+		version = "v26.13.1"
+		install_path = "core_node/26.13.1"
+		"#};
+		assert_eq!(lock, expected_lock);
+		// the binary is indexed and a shim is generated for it
+		let state = std::fs::read_to_string(fixture.config_dir.join("state.toml")).unwrap();
+		let expected_state = formatdoc! {r#"
+		version = 1
+		registered_paths = []
+
+		[binaries]
+		"core_node/26.13.1" = [{binary_toml}]
+
+		[[shims.node]]
+		backend = "node"
+		requested = "26.13.1"
+		install_path = "core_node/26.13.1"
+		binary = {binary_toml}
+		"#};
+		assert_eq!(state, expected_state);
+		let shim = if cfg!(windows) { "node.exe" } else { "node" };
+		assert!(fixture.config_dir.join("shims").join(shim).exists());
+		// the size is read before the download
+		let requests = runtime.block_on(server.received_requests()).unwrap();
+		let calls: Vec<String> = requests.iter().map(|request| format!("{} {}", request.method, request.url.path())).collect();
+		let expected_calls = [
+			"GET /index.json".to_owned(),
+			"GET /v26.13.1/SHASUMS256.txt".to_owned(),
+			format!("HEAD {archive_path}"),
+			format!("GET {archive_path}"),
+		];
+		assert_eq!(calls, expected_calls);
+	}
 }
 
 mod resolution_cache {
@@ -358,13 +460,13 @@ mod resolution_cache {
 			"#};
 			let fixture = Fixture::new(&config, None);
 			// the first install resolves and downloads
-			let first = fixture.run();
+			let first = fixture.run(None);
 			assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
 			let install_path = _install_path(&api_url, "owner_repo", "1.0.0");
 			let installed = fixture.config_dir.join("tools").join(&install_path);
 			std::fs::remove_dir_all(&installed).unwrap();
 			// the second install reuses the cached resolution and downloads again
-			let second = fixture.run();
+			let second = fixture.run(None);
 			assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
 			assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 			let requests = runtime.block_on(server.received_requests()).unwrap();
@@ -399,7 +501,7 @@ mod resolution_cache {
 			"#};
 			let fixture = Fixture::new(&config, None);
 			// the first install writes the cache
-			let first = fixture.run();
+			let first = fixture.run(None);
 			assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
 			let cache_path = fixture.config_dir.join("resolutions").join(_resolution_cache_path(&api_url, "owner_repo"));
 			_expire_resolution_cache(&cache_path);
@@ -407,13 +509,13 @@ mod resolution_cache {
 			let installed = fixture.config_dir.join("tools").join(_install_path(&api_url, "owner_repo", "1.0.0"));
 			std::fs::remove_dir_all(&installed).unwrap();
 			// the expired entry forces a new resolution
-			let second = fixture.run();
+			let second = fixture.run(None);
 			assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
 			assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 			assert!(!std::fs::read_to_string(&cache_path).unwrap().contains("resolved_at = 0"));
 			std::fs::remove_dir_all(&installed).unwrap();
 			// the refreshed entry serves the third install
-			let third = fixture.run();
+			let third = fixture.run(None);
 			assert!(third.status.success(), "{}", String::from_utf8_lossy(&third.stderr));
 			assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 			let requests = runtime.block_on(server.received_requests()).unwrap();
@@ -447,13 +549,13 @@ mod resolution_cache {
 		"#};
 		let fixture = Fixture::new(&one, None);
 		// the first install caches 1.0.0
-		let first = fixture.run();
+		let first = fixture.run(None);
 		assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
 		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
 		let one_installed = fixture.config_dir.join("tools").join(_install_path(&api_url, "owner_repo", "1.0.0"));
 		std::fs::remove_dir_all(&one_installed).unwrap();
 		// the second install reuses 1.0.0 and resolves 2.0.0
-		let second = fixture.run();
+		let second = fixture.run(None);
 		assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
 		let tools = fixture.config_dir.join("tools");
 		let one_installed = tools.join(_install_path(&api_url, "owner_repo", "1.0.0"));
@@ -463,7 +565,7 @@ mod resolution_cache {
 		std::fs::remove_dir_all(&one_installed).unwrap();
 		std::fs::remove_dir_all(&two_installed).unwrap();
 		// the third install reuses both entries from one cache file
-		let third = fixture.run();
+		let third = fixture.run(None);
 		assert!(third.status.success(), "{}", String::from_utf8_lossy(&third.stderr));
 		assert_eq!(std::fs::read(one_installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 		assert_eq!(std::fs::read(two_installed.join(binary)).unwrap(), b"binary 2.0.0".as_slice());
@@ -494,7 +596,7 @@ mod resolution_cache {
 		"#};
 		let fixture = Fixture::new(&config, None);
 		// the first install writes the cache for the current target
-		let first = fixture.run();
+		let first = fixture.run(None);
 		assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
 		let cache_path = fixture.config_dir.join("resolutions").join(_resolution_cache_path(&api_url, "owner_repo"));
 		let cache = std::fs::read_to_string(&cache_path).unwrap();
@@ -504,7 +606,7 @@ mod resolution_cache {
 		let installed = fixture.config_dir.join("tools").join(_install_path(&api_url, "owner_repo", "1.0.0"));
 		std::fs::remove_dir_all(&installed).unwrap();
 		// the modified target forces a new resolution and adds the current target entry
-		let second = fixture.run();
+		let second = fixture.run(None);
 		assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
 		assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 		let cache = std::fs::read_to_string(&cache_path).unwrap();
@@ -513,7 +615,7 @@ mod resolution_cache {
 		assert_eq!(cache.matches("[[resolution]]").count(), 2);
 		std::fs::remove_dir_all(&installed).unwrap();
 		// the current target entry serves the third install
-		let third = fixture.run();
+		let third = fixture.run(None);
 		assert!(third.status.success(), "{}", String::from_utf8_lossy(&third.stderr));
 		assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 		let requests = runtime.block_on(server.received_requests()).unwrap();
@@ -541,7 +643,7 @@ mod resolution_cache {
 		"#};
 		let fixture = Fixture::new(&config, None);
 		// the first install writes the cache
-		let first = fixture.run();
+		let first = fixture.run(None);
 		assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
 		let cache_path = fixture.config_dir.join("resolutions").join(_resolution_cache_path(&api_url, "owner_repo"));
 		assert!(cache_path.is_file());
@@ -549,12 +651,12 @@ mod resolution_cache {
 		let installed = fixture.config_dir.join("tools").join(_install_path(&api_url, "owner_repo", "1.0.0"));
 		std::fs::remove_dir_all(&installed).unwrap();
 		// corruption forces a new resolution and rewrites the cache
-		let second = fixture.run();
+		let second = fixture.run(None);
 		assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
 		assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 		std::fs::remove_dir_all(&installed).unwrap();
 		// the repaired cache serves the third install
-		let third = fixture.run();
+		let third = fixture.run(None);
 		assert!(third.status.success(), "{}", String::from_utf8_lossy(&third.stderr));
 		assert_eq!(std::fs::read(installed.join(binary)).unwrap(), b"binary 1.0.0".as_slice());
 		let requests = runtime.block_on(server.received_requests()).unwrap();
@@ -587,7 +689,7 @@ mod exposed {
 		"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}", exposed = ["*"] }}
 		"#};
 		let fixture = Fixture::new(&config, None);
-		let output = fixture.run();
+		let output = fixture.run(None);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
 		// `*` does not cross `/`, so the nested helper stays hidden
@@ -626,7 +728,7 @@ mod exposed {
 		"github:owner/repo" = {{ version = "1.0.0", api_url = "{api_url}", exposed = ["**/{helper}"] }}
 		"#};
 		let fixture = Fixture::new(&config, None);
-		let output = fixture.run();
+		let output = fixture.run(None);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
 		// '**' crosses '/', so the nested helper is exposed and the tool is not
@@ -675,7 +777,7 @@ mod exposed {
 		"github:owner/repo" = {{ version = "v1.0.0", api_url = "{api_url}", exposed = ["bin/{helper}"] }}
 		"#};
 		let fixture = Fixture::new(&config, Some(&env));
-		let output = fixture.run();
+		let output = fixture.run(None);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
 		// both allowlists apply to the shared artifact
@@ -759,13 +861,13 @@ mod rename_shims {
 		"#};
 		let fixture = Fixture::new(&one, None);
 		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
-		let output = fixture.run();
+		let output = fixture.run(None);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(output.status.success(), "{stderr}");
 		// origins do not merge, so both artifacts are installed
 		let stdout = String::from_utf8(output.stdout).unwrap();
 		assert_eq!(stdout.lines().count(), 2, "{stdout}");
-		assert!(stdout.contains("owner/repo v1.0.0"), "{stdout}");
+		assert!(stdout.contains("github:owner/repo v1.0.0"), "{stdout}");
 		let one_path = _install_path(&one_url, "owner_repo", "1.0.0");
 		let two_path = _install_path(&two_url, "owner_repo", "1.0.0");
 		let tools = fixture.config_dir.join("tools");
@@ -891,7 +993,7 @@ mod rename_shims {
 		"#};
 		let fixture = Fixture::new(&one, None);
 		std::fs::write(fixture.config_dir.join("outpost.dev.toml"), two).unwrap();
-		let output = fixture.run();
+		let output = fixture.run(None);
 		let stderr = String::from_utf8(output.stderr).unwrap();
 		assert!(!output.status.success(), "{stderr}");
 		assert!(stderr.contains("conflicting binaries, cannot generate shims:"), "{stderr}");

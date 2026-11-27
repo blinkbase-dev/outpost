@@ -1,5 +1,5 @@
-use std::fmt;
 use std::path::PathBuf;
+use std::{env, fmt};
 
 use reqwest::header::CONTENT_LENGTH;
 use reqwest::{Client, StatusCode};
@@ -98,6 +98,19 @@ pub(crate) struct Release {
 pub(crate) struct NodeOptions {
 	dist_url: String,
 	target: Target,
+}
+
+impl NodeOptions {
+	pub(crate) fn from_process() -> Self {
+		let dist_url = env::var("OUTPOST_NODE_DIST_URL")
+			.map(|url| url.trim().trim_end_matches('/').to_owned())
+			.ok()
+			.filter(|url| !url.is_empty());
+		match dist_url {
+			Some(dist_url) => Self { dist_url, ..Self::default() },
+			None => Self::default(),
+		}
+	}
 }
 
 impl Default for NodeOptions {

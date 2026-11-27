@@ -77,8 +77,8 @@ pub(crate) fn install() -> Result<(), Error> {
 	// representative rows are appended after duplicate rows
 	for tool in &lock.tools[lock.tools.len() - installed.len()..] {
 		match tool {
-			LockedTool::Github(lock) => println!("{} {} {}", lock.full_name, lock.tag_name, tools_dir.join(&lock.install_path).display()),
-			LockedTool::Node(lock) => println!("node {} {}", lock.version, tools_dir.join(&lock.install_path).display()),
+			LockedTool::Github(lock) => println!("github:{} {} {}", lock.full_name, lock.tag_name, tools_dir.join(&lock.install_path).display()),
+			LockedTool::Node(lock) => println!("core:node {} {}", lock.version, tools_dir.join(&lock.install_path).display()),
 		}
 	}
 	let failures = resolve_err
@@ -90,10 +90,10 @@ pub(crate) fn install() -> Result<(), Error> {
 		for request in requests {
 			match &request.tool {
 				RequestedTool::Github(req) => {
-					eprintln!("{} {}{}: {error}", req.full_name, req.lane, req.version);
+					eprintln!("github:{} {}{}: {error}", req.full_name, req.lane, req.version);
 				}
 				RequestedTool::Node(req) => {
-					eprintln!("node {}: {error}", req.version);
+					eprintln!("core:node {}: {error}", req.version);
 				}
 			}
 			for origin in &request.origins {
@@ -122,6 +122,7 @@ async fn resolve_parallel(
 	let semaphore = Arc::new(Semaphore::new(8));
 	let mut handles = Vec::with_capacity(requests.len());
 	let github_options = Arc::new(GithubOptions::from_process());
+	let node_options = Arc::new(NodeOptions::from_process());
 	for (index, request) in requests.into_iter().enumerate() {
 		if let Some(resolution) = cache.get(&request.tool) {
 			// a cache hit starts and finishes at once
@@ -141,6 +142,7 @@ async fn resolve_parallel(
 		let semaphore = Arc::clone(&semaphore);
 		let http = http.clone();
 		let github_options = Arc::clone(&github_options);
+		let node_options = Arc::clone(&node_options);
 		let progress = Arc::clone(&progress);
 		handles.push(tokio::spawn(async move {
 			let permit = semaphore.acquire_owned().await;
@@ -157,7 +159,7 @@ async fn resolve_parallel(
 						backend.resolve(req).await.map_err(Error::from)
 					}
 					RequestedTool::Node(req) => {
-						let backend = NodeBackend::new(http, NodeOptions::default());
+						let backend = NodeBackend::new(http, node_options.as_ref().clone());
 						backend.resolve(req).await.map_err(Error::from)
 					}
 				},
