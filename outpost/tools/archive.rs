@@ -859,56 +859,51 @@ mod resolution_group_tests {
 	use crate::tools::tool_request::{GithubRequest, RequestedTool};
 	use crate::tools::version::Version;
 
+	fn _request(origin: &str, full_name: &str, version: &str) -> ToolRequestSet {
+		ToolRequestSet {
+			origins: vec![PathBuf::from(origin)],
+			tool: RequestedTool::Github(GithubRequest {
+				api_url: String::new(),
+				full_name: full_name.to_owned(),
+				lane: String::new(),
+				version: Version::parse(version),
+				exposed: None,
+				rename_shims: None,
+			}),
+		}
+	}
+
+	fn _resolution(tag_name: &str) -> ToolResolution {
+		ToolResolution::Github(GithubResolution {
+			tag_name: tag_name.to_owned(),
+			url: String::new(),
+			size: 0,
+			format: ArchiveFormat::TarGz,
+			sha256: String::new(),
+		})
+	}
+
+	fn _lock(full_name: &str, requested: &str, tag_name: &str, install_path: &str) -> Lock {
+		Lock {
+			version: 1,
+			tools: vec![LockedTool::Github(GithubLock {
+				api_url: String::new(),
+				full_name: full_name.to_owned(),
+				lane: String::new(),
+				requested: Version::parse(requested),
+				tag_name: tag_name.to_owned(),
+				install_path: PathBuf::from(install_path),
+			})],
+		}
+	}
+
 	#[test]
 	fn groups_requests_by_install_path() {
-		let latest = ToolRequestSet {
-			origins: vec![PathBuf::from("/a/outpost.toml")],
-			tool: RequestedTool::Github(GithubRequest {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::parse("latest"),
-				exposed: None,
-				rename_shims: None,
-			}),
-		};
-		let exact = ToolRequestSet {
-			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github(GithubRequest {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::parse("1.0.0"),
-				exposed: None,
-				rename_shims: None,
-			}),
-		};
-		let groups = ToolResolutionSet::from_entries(
-			vec![
-				(
-					latest,
-					ToolResolution::Github(GithubResolution {
-						tag_name: "v1.0.0".to_owned(),
-						url: String::new(),
-						size: 0,
-						format: ArchiveFormat::TarGz,
-						sha256: String::new(),
-					}),
-				),
-				(
-					exact,
-					ToolResolution::Github(GithubResolution {
-						tag_name: "v1.0.0".to_owned(),
-						url: String::new(),
-						size: 0,
-						format: ArchiveFormat::TarGz,
-						sha256: String::new(),
-					}),
-				),
-			],
-			&Lock::default(),
-		)
-		.unwrap();
+		let entries = vec![
+			(_request("/a/outpost.toml", "owner/repo", "latest"), _resolution("v1.0.0")),
+			(_request("/b/outpost.toml", "owner/repo", "1.0.0"), _resolution("v1.0.0")),
+		];
+		let groups = ToolResolutionSet::from_entries(entries, &Lock::default()).unwrap();
 		assert_eq!(groups.len(), 1);
 		assert_eq!(groups[0].install_path, PathBuf::from("github_owner_repo/1.0.0"));
 		assert_eq!(groups[0].requests.len(), 2);
@@ -916,43 +911,9 @@ mod resolution_group_tests {
 
 	#[test]
 	fn rejects_locked_install_path_collisions() {
-		let lock = Lock {
-			version: 1,
-			tools: vec![LockedTool::Github(GithubLock {
-				api_url: String::new(),
-				full_name: "owner/repo.js".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("1.0.0"),
-				tag_name: "v1.0.0".to_owned(),
-				install_path: PathBuf::from("github_owner_repo_js/1.0.0"),
-			})],
-		};
-		let request = ToolRequestSet {
-			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github(GithubRequest {
-				api_url: String::new(),
-				full_name: "owner/repo-js".to_owned(),
-				lane: String::new(),
-				version: Version::parse("1.0.0"),
-				exposed: None,
-				rename_shims: None,
-			}),
-		};
-		let error = ToolResolutionSet::from_entries(
-			vec![(
-				request,
-				ToolResolution::Github(GithubResolution {
-					tag_name: "v1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-					sha256: String::new(),
-				}),
-			)],
-			&lock,
-		)
-		.err()
-		.unwrap();
+		let lock = _lock("owner/repo.js", "1.0.0", "v1.0.0", "github_owner_repo_js/1.0.0");
+		let entries = vec![(_request("/b/outpost.toml", "owner/repo-js", "1.0.0"), _resolution("v1.0.0"))];
+		let error = ToolResolutionSet::from_entries(entries, &lock).err().unwrap();
 		assert!(error.to_string().contains("shared by"), "{error}");
 		assert!(error.to_string().contains("owner/repo-js"), "{error}");
 		assert!(error.to_string().contains("owner/repo.js"), "{error}");
@@ -960,98 +921,20 @@ mod resolution_group_tests {
 
 	#[test]
 	fn rejects_locked_tag_collisions() {
-		let lock = Lock {
-			version: 1,
-			tools: vec![LockedTool::Github(GithubLock {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				requested: Version::parse("latest"),
-				tag_name: "v1.0.0".to_owned(),
-				install_path: PathBuf::from("github_owner_repo/1.0.0"),
-			})],
-		};
-		let request = ToolRequestSet {
-			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github(GithubRequest {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::parse("1.0.0"),
-				exposed: None,
-				rename_shims: None,
-			}),
-		};
-		let error = ToolResolutionSet::from_entries(
-			vec![(
-				request,
-				ToolResolution::Github(GithubResolution {
-					tag_name: "1.0.0".to_owned(),
-					url: String::new(),
-					size: 0,
-					format: ArchiveFormat::TarGz,
-					sha256: String::new(),
-				}),
-			)],
-			&lock,
-		)
-		.err()
-		.unwrap();
+		let lock = _lock("owner/repo", "latest", "v1.0.0", "github_owner_repo/1.0.0");
+		let entries = vec![(_request("/b/outpost.toml", "owner/repo", "1.0.0"), _resolution("1.0.0"))];
+		let error = ToolResolutionSet::from_entries(entries, &lock).err().unwrap();
 		assert!(error.to_string().contains("shared by tags '1.0.0' and 'v1.0.0'"), "{error}");
 		assert!(error.to_string().contains("\n  from /b/outpost.toml"), "{error}");
 	}
 
 	#[test]
 	fn rejects_install_path_collisions() {
-		let first = ToolRequestSet {
-			origins: vec![PathBuf::from("/a/outpost.toml")],
-			tool: RequestedTool::Github(GithubRequest {
-				api_url: String::new(),
-				full_name: "owner/repo.js".to_owned(),
-				lane: String::new(),
-				version: Version::parse("1.0.0"),
-				exposed: None,
-				rename_shims: None,
-			}),
-		};
-		let second = ToolRequestSet {
-			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github(GithubRequest {
-				api_url: String::new(),
-				full_name: "owner/repo-js".to_owned(),
-				lane: String::new(),
-				version: Version::parse("1.0.0"),
-				exposed: None,
-				rename_shims: None,
-			}),
-		};
-		let error = ToolResolutionSet::from_entries(
-			vec![
-				(
-					first,
-					ToolResolution::Github(GithubResolution {
-						tag_name: "v1.0.0".to_owned(),
-						url: String::new(),
-						size: 0,
-						format: ArchiveFormat::TarGz,
-						sha256: String::new(),
-					}),
-				),
-				(
-					second,
-					ToolResolution::Github(GithubResolution {
-						tag_name: "v1.0.0".to_owned(),
-						url: String::new(),
-						size: 0,
-						format: ArchiveFormat::TarGz,
-						sha256: String::new(),
-					}),
-				),
-			],
-			&Lock::default(),
-		)
-		.err()
-		.unwrap();
+		let entries = vec![
+			(_request("/a/outpost.toml", "owner/repo.js", "1.0.0"), _resolution("v1.0.0")),
+			(_request("/b/outpost.toml", "owner/repo-js", "1.0.0"), _resolution("v1.0.0")),
+		];
+		let error = ToolResolutionSet::from_entries(entries, &Lock::default()).err().unwrap();
 		assert!(error.to_string().contains("shared by"), "{error}");
 		assert!(error.to_string().contains("owner/repo.js"), "{error}");
 		assert!(error.to_string().contains("owner/repo-js"), "{error}");
@@ -1061,55 +944,11 @@ mod resolution_group_tests {
 
 	#[test]
 	fn rejects_tag_collisions() {
-		let first = ToolRequestSet {
-			origins: vec![PathBuf::from("/a/outpost.toml")],
-			tool: RequestedTool::Github(GithubRequest {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::parse("1.0.0"),
-				exposed: None,
-				rename_shims: None,
-			}),
-		};
-		let second = ToolRequestSet {
-			origins: vec![PathBuf::from("/b/outpost.toml")],
-			tool: RequestedTool::Github(GithubRequest {
-				api_url: String::new(),
-				full_name: "owner/repo".to_owned(),
-				lane: String::new(),
-				version: Version::parse("1.0.0"),
-				exposed: None,
-				rename_shims: None,
-			}),
-		};
-		let error = ToolResolutionSet::from_entries(
-			vec![
-				(
-					first,
-					ToolResolution::Github(GithubResolution {
-						tag_name: "v1.0.0".to_owned(),
-						url: String::new(),
-						size: 0,
-						format: ArchiveFormat::TarGz,
-						sha256: String::new(),
-					}),
-				),
-				(
-					second,
-					ToolResolution::Github(GithubResolution {
-						tag_name: "1.0.0".to_owned(),
-						url: String::new(),
-						size: 0,
-						format: ArchiveFormat::TarGz,
-						sha256: String::new(),
-					}),
-				),
-			],
-			&Lock::default(),
-		)
-		.err()
-		.unwrap();
+		let entries = vec![
+			(_request("/a/outpost.toml", "owner/repo", "1.0.0"), _resolution("v1.0.0")),
+			(_request("/b/outpost.toml", "owner/repo", "1.0.0"), _resolution("1.0.0")),
+		];
+		let error = ToolResolutionSet::from_entries(entries, &Lock::default()).err().unwrap();
 		assert!(error.to_string().contains("shared by tags"), "{error}");
 		assert!(error.to_string().contains("\n  from /a/outpost.toml"), "{error}");
 		assert!(error.to_string().contains("\n  from /b/outpost.toml"), "{error}");
